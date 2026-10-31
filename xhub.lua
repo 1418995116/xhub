@@ -3,7 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v5.0"
+local VERSION = "v5.1"
+local BUILD   = "2026-11-01 01:45"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -2148,7 +2149,7 @@ addButton(pMisc, "卸载并恢复全部", function()
 end)
 addSection(pMisc, "信息")
 rowOrder = rowOrder + 1
-mk("TextLabel", { Text = ("版本: %s   执行器: %s"):format(VERSION,
+mk("TextLabel", { Text = ("版本: %s (%s)   执行器: %s"):format(VERSION, BUILD,
     (identifyexecutor and identifyexecutor()) or "unknown"),
     BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 20), Font = Enum.Font.Code,
     TextSize = 11, TextColor3 = Color3.fromRGB(160, 200, 180), LayoutOrder = rowOrder }, pMisc)
@@ -2197,5 +2198,5 @@ end)
 if S.noclip then
     task.delay(0.6, function() pcall(function() setNoclip(true) end) end)
 end
-print(("[XHub] %s loaded · 5 页 · 菜单键 %s · 档位=%s (PlaceId=%d)"):format(
-    VERSION, CONFIG.MenuKeys[1].Name, currentProfileKey, game.PlaceId))
+print(("[XHub] %s (build %s) loaded · 6 页 · 菜单键 %s · 档位=%s (PlaceId=%d)"):format(
+    VERSION, BUILD, CONFIG.MenuKeys[1].Name, currentProfileKey, game.PlaceId))
