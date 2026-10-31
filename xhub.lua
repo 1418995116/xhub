@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v6.6"
-local BUILD   = "2026-11-01 06:05"
+local VERSION = "v6.7"
+local BUILD   = "2026-11-01 06:15"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -1795,8 +1795,8 @@ local function ensureItem(v)
     if not o then o = {}; itemStore[v] = o end
     if not (o.hl and o.hl.Parent) then
         o.hl = mk("Highlight", { Name = "XHubItem",
-            FillColor = Color3.fromRGB(80, 220, 255), FillTransparency = 0.5,
-            OutlineColor = Color3.fromRGB(180, 245, 255), OutlineTransparency = 0,
+            FillColor = Color3.fromRGB(140, 255, 60), FillTransparency = 0.35,
+            OutlineColor = Color3.fromRGB(235, 255, 150), OutlineTransparency = 0,
             DepthMode = Enum.HighlightDepthMode.AlwaysOnTop }, v)
     end
     o.hl.Parent = v
@@ -1807,10 +1807,10 @@ local function ensureItem(v)
             AlwaysOnTop = true, Adornee = part, StudsOffset = Vector3.new(0, 1.8, 0) }, part)
         o.lbl = mk("TextLabel", { Text = v.Name, BackgroundTransparency = 1,
             Size = UDim2.new(1, 0, 0, 15), Font = Enum.Font.GothamBold, TextSize = 12,
-            TextColor3 = Color3.fromRGB(170, 240, 255), TextStrokeTransparency = 0.35 }, o.tag)
+            TextColor3 = Color3.fromRGB(215, 255, 120), TextStrokeTransparency = 0.25 }, o.tag)
         o.dlbl = mk("TextLabel", { Text = "", BackgroundTransparency = 1,
             Position = UDim2.new(0, 0, 0, 13), Size = UDim2.new(1, 0, 0, 13),
-            Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = Color3.fromRGB(220, 250, 255),
+            Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = Color3.fromRGB(245, 255, 200),
             TextStrokeTransparency = 0.5 }, o.tag)
     end
     o.tag.Adornee = part
