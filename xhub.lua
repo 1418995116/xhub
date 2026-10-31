@@ -3,7 +3,7 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v4.1"
+local VERSION = "v4.2"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -33,6 +33,7 @@ local S = {
     espTeam = false, espOccluded = true, espRainbow = false,
     aim = false, aimHold = true, aimSmooth = 12, aimFov = 140,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
+    aimOnFire = true, vehicleSafe = true,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -77,10 +78,25 @@ end
 rp.IgnoreWater = true
 local function canSee(part)
     if not S.aimWall then return true end
-    local o = cam.CFrame.Position
+    -- 连续射线: 跳过透明/无碰撞的挡板(很多游戏用隐形墙挡视线,会让自瞄永远找不到目标)
+    local origin = cam.CFrame.Position
+    local target = part.Position
     rp.FilterDescendantsInstances = { lp.Character, part.Parent }
-    local hit = workspace:Raycast(o, part.Position - o, rp)
-    return hit == nil or hit.Instance:IsDescendantOf(part.Parent)
+    for _ = 1, 5 do
+        local dir = target - origin
+        if dir.Magnitude < 0.1 then return true end
+        local hit = workspace:Raycast(origin, dir, rp)
+        if not hit then return true end
+        local inst = hit.Instance
+        if inst:IsDescendantOf(part.Parent) then return true end
+        local solid = true
+        pcall(function()
+            if inst.Transparency >= 0.95 or inst.CanCollide == false then solid = false end
+        end)
+        if solid then return false end
+        origin = hit.Position + dir.Unit * 0.1
+    end
+    return true
 end
 
 --==================== 界面骨架 ====================
@@ -497,12 +513,21 @@ local function findTarget()
     end
     return best
 end
-pcall(function() RS:UnbindFromRenderStep("XHubAim") end)
-RS:BindToRenderStep("XHubAim", Enum.RenderPriority.Camera.Value + 1, function(dt)
-    local want = false
-    if S.aim then
-        if S.aimHold then want = UIS:IsKeyDown(CONFIG.AimKey) else want = true end
+local aimInfo
+local aimWant, aimGoal = false, nil
+
+local function aimTick(dt)
+    aimWant = false
+    if S.aim and not main.Visible then
+        if S.aimOnFire and UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+            aimWant = true
+        elseif S.aimHold and UIS:IsKeyDown(CONFIG.AimKey) then
+            aimWant = true
+        elseif not S.aimOnFire and not S.aimHold then
+            aimWant = true
+        end
     end
+
     if fovGui then
         fovGui.Visible = (S.aim and S.showFov)
         if fovGui.Visible then
@@ -516,13 +541,43 @@ RS:BindToRenderStep("XHubAim", Enum.RenderPriority.Camera.Value + 1, function(dt
             end
         end
     end
-    if not want then return end
-    local t = findTarget(); if not t then return end
+
+    if not aimWant then
+        aimGoal = nil
+        if aimInfo then aimInfo.Text = "自瞄: 待触发（按住左键 / Q）" end
+        return
+    end
+
+    local t = findTarget()
+    if not t then
+        aimGoal = nil
+        if aimInfo then aimInfo.Text = "自瞄: FOV 内无目标" end
+        return
+    end
+
     if cam.CameraType ~= Enum.CameraType.Custom then cam.CameraType = Enum.CameraType.Custom end
     local cur = cam.CFrame
     local goal = CFrame.lookAt(cur.Position, t.Position)
+    aimGoal = goal
     local alpha = 1 - math.exp(-math.max(S.aimSmooth, 0.5) * dt)
     cam.CFrame = cur:Lerp(goal, math.clamp(alpha, 0.02, 1))
+
+    if aimInfo then
+        local vp = cam.ViewportSize
+        local sp = cam:WorldToViewportPoint(t.Position)
+        local err = (Vector2.new(sp.X, sp.Y) - Vector2.new(vp.X / 2, vp.Y / 2)).Magnitude
+        aimInfo.Text = ("自瞄: 目标 %.0fm · 残余误差 %.0fpx"):format(
+            (t.Position - cam.CFrame.Position).Magnitude, err)
+    end
+end
+
+pcall(function() RS:UnbindFromRenderStep("XHubAim") end)
+RS:BindToRenderStep("XHubAim", Enum.RenderPriority.Camera.Value + 1, aimTick)
+
+-- 双保险: 有些游戏在 RenderStepped 里覆写相机,同帧再补一次
+RS.RenderStepped:Connect(function()
+    if not (S.aim and aimWant and aimGoal) then return end
+    cam.CFrame = cam.CFrame:Lerp(aimGoal, 0.45)
 end)
 
 --==================== 可回滚记录 + 输入修复 ====================
@@ -552,10 +607,9 @@ local function repairInput(showNotif)
     end
     local c = charOf(lp)
     if c then
+        -- 只清我们自己的速度物体,别动游戏角色控制器在用的 LinearVelocity/AlignPosition
         for _, v in ipairs(c:GetDescendants()) do
-            if v:IsA("BodyVelocity") or v:IsA("BodyGyro") or v:IsA("LinearVelocity") then
-                if v.Name ~= "XHubFly" or not S.fly then pcall(function() v:Destroy() end) end
-            end
+            if v.Name == "XHubFly" then pcall(function() v:Destroy() end) end
         end
     end
     if showNotif ~= false then
@@ -563,6 +617,81 @@ local function repairInput(showNotif)
     end
     return nH, nC
 end
+
+-- 只还原、不复位角色(给“车辆安全模式”用)
+local function suspendACG()
+    local nH, nC = 0, 0
+    for _, e in ipairs(FIX.hooks) do
+        if pcall(hookfunction, e.f, e.old) then nH = nH + 1 end
+    end
+    FIX.hooks = {}
+    for _, c in ipairs(FIX.conns) do
+        if pcall(function() c:Enable() end) then nC = nC + 1 end
+    end
+    FIX.conns = {}
+    return nH, nC
+end
+
+-- 下车后角色“半身入土 / 站不起来 / 会倒”的复位
+local function characterFix(silent)
+    local c = charOf(lp); if not c then return end
+    local h = c:FindFirstChildOfClass("Humanoid")
+    local hrp = c:FindFirstChild("HumanoidRootPart")
+    if h then
+        pcall(function() h.Sit = false end)
+        pcall(function() h.PlatformStand = false end)
+        pcall(function() h:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        pcall(function() if h.WalkSpeed < 1 then h.WalkSpeed = 16 end end)
+        pcall(function() if h.JumpPower < 1 then h.JumpPower = 50 end end)
+        pcall(function() h.Jump = true end)
+        pcall(function() if h.HipHeight < 0.2 then h.HipHeight = 2 end end)
+    end
+    if hrp then
+        pcall(function() if hrp.Anchored then hrp.Anchored = false end end)
+        for _, v in ipairs(c:GetDescendants()) do
+            if v:IsA("Weld") or v:IsA("WeldConstraint") then
+                local outside = false
+                pcall(function()
+                    outside = (v.Part1 ~= nil and not v.Part1:IsDescendantOf(c))
+                           or (v.Part0 ~= nil and not v.Part0:IsDescendantOf(c))
+                end)
+                if outside then pcall(function() v:Destroy() end) end
+            end
+            if (v:IsA("BodyVelocity") or v:IsA("BodyGyro")) and v.Name ~= "XHubFly" then
+                pcall(function() v:Destroy() end)
+            end
+        end
+        if h and h.FloorMaterial == Enum.Material.Air then
+            pcall(function() hrp.CFrame = hrp.CFrame + Vector3.new(0, 3, 0) end)
+        end
+    end
+    if not silent then notify("角色状态已复位（起身 / 解焊 / 抬升）", "ok", 2.5) end
+end
+
+-- 车辆安全模式: 上车自动暂停绕过,下车自动复位角色
+local __wasSeated = false
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        local h = humOf(lp)
+        local seated = false
+        if h then pcall(function() seated = h.SeatPart ~= nil end) end
+        if seated ~= __wasSeated then
+            __wasSeated = seated
+            if seated then
+                if S.vehicleSafe then
+                    local nH, nC = suspendACG()
+                    notify(("车辆安全模式: 已暂停绕过（还原 %d 闭包 / %d 连接）"):format(nH, nC), "warn", 2.6)
+                end
+            else
+                task.delay(0.7, function()
+                    if S.vehicleSafe then characterFix(true) end
+                    notify("已下车: 角色已复位（需要绕过请重开 ①②）", "info", 3)
+                end)
+            end
+        end
+    end
+end)
 
 --==================== 基础压制 ====================
 local AC = { marker = nil, guard = false }
@@ -1115,6 +1244,7 @@ addToggle(pCombat, "启用自瞄", false, function(v)
     notify("自瞄 " .. (v and "开" or "关"), v and "ok" or "info", 1.4)
 end)
 addToggle(pCombat, "按住 Q 瞄准 (关=常开)", true, function(v) S.aimHold = v end)
+addToggle(pCombat, "左键开火时自瞄", true, function(v) S.aimOnFire = v end)
 addToggle(pCombat, "瞄准队友", false, function(v) S.aimTeam = v end)
 addToggle(pCombat, "隔墙忽略", true, function(v) S.aimWall = v end)
 addToggle(pCombat, "显示 FOV", true, function(v) S.showFov = v end)
@@ -1127,6 +1257,12 @@ local setPartBtn = addButton(pCombat, "部位: Head", function()
     S.aimPart = list[(i % #list) + 1]
     setPartBtn("部位: " .. S.aimPart)
 end)
+
+rowOrder = rowOrder + 1
+aimInfo = mk("TextLabel", { Text = "自瞄: 待触发（按住左键 / Q）", BackgroundTransparency = 1,
+    Size = UDim2.new(1, 0, 0, 20), Font = Enum.Font.Code, TextSize = 11,
+    TextColor3 = Color3.fromRGB(150, 210, 180), TextXAlignment = Enum.TextXAlignment.Left,
+    LayoutOrder = rowOrder }, pCombat)
 
 addSection(pGuard, "① 基础压制")
 addToggle(pGuard, "线程 + 连接 + marker", false, function(v) if v then acRun() end end)
@@ -1186,6 +1322,12 @@ addButton(pGuard, "还原 ACG 钩子 + 输入", function()
     repairInput(true)
     notify("已还原 __namecall 与所有被改动的回调", "ok", 3)
 end)
+
+addSection(pGuard, "车辆 / 角色")
+addToggle(pGuard, "车辆安全模式（上下车暂停/恢复绕过）", true, function(v)
+    S.vehicleSafe = v
+end)
+addButton(pGuard, "角色复位（起身/解焊/抬升）", function() characterFix(false) end)
 
 addSection(pMisc, "角色")
 addButton(pMisc, "自杀 / 重生", function() suicide() end)
