@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v6.1"
-local BUILD   = "2026-11-01 04:25"
+local VERSION = "v6.2"
+local BUILD   = "2026-11-01 04:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -2122,6 +2122,93 @@ end
 
 local HIDE_KW = { "closet", "wardrobe", "bed", "locker", "hide", "柜", "床", "hiding" }
 
+local HIDE_PROMPT_KW = { "hide", "closet", "wardrobe", "bed", "locker", "hiding", "柜", "床", "躲" }
+
+local function findHidePrompt(maxDist)
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    local best, bestD, bestPart
+    bestD = maxDist or 120
+    for _, p in ipairs(scanAll(4000)) do
+        if p:IsA("ProximityPrompt") then
+            local nm = ((p.Parent and p.Parent.Name or "") .. " "
+                     .. (p.ActionText or "") .. " " .. (p.ObjectText or "")):lower()
+            local hit = false
+            for _, k in ipairs(HIDE_PROMPT_KW) do
+                if nm:find(k, 1, true) then hit = true; break end
+            end
+            if hit then
+                local part
+                local pp = p.Parent
+                if pp and pp:IsA("BasePart") then part = pp
+                elseif pp and pp:IsA("Attachment") and pp.Parent and pp.Parent:IsA("BasePart") then
+                    part = pp.Parent
+                end
+                if part then
+                    local d = (part.Position - hrp.Position).Magnitude
+                    if d < bestD then best, bestD, bestPart = p, d, part end
+                end
+            end
+        end
+    end
+    return best, bestD, bestPart
+end
+
+--==== 智能躲避：优先“柜子/床的 E 提示”（服务端认可的状态），否则高空顶住 ====
+local skyHold = nil
+
+local function hideSmart()
+    if hiding then return end
+    hiding = true
+
+    local prompt, d, part = findHidePrompt(150)
+    if prompt and part then
+        local pname = (part.Parent and part.Parent.Name) or part.Name
+        notify(("躲进 %s（%.0f m）"):format(pname, d or 0), "warn", 2.4)
+        local c = charOf(lp)
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if hrp and (d or 0) > 10 then
+            local dir = hrp.Position - part.Position
+            if dir.Magnitude < 0.1 then dir = Vector3.new(0, 0, 1) end
+            pcall(function() hrp.CFrame = CFrame.new(part.Position + dir.Unit * 3) end)
+            task.wait(0.12)
+        end
+        pcall(function() prompt.HoldDuration = 0 end)
+        pcall(function() prompt.MaxActivationDistance = 300 end)
+        pcall(function() prompt:InputHoldBegin() end)
+        task.delay(0.1, function() pcall(function() prompt:InputHoldEnd() end) end)
+        task.delay(S.skyTime, function() hiding = false end)
+        return
+    end
+
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then hiding = false; return end
+    skyHold = { cf = hrp.CFrame + Vector3.new(0, S.skyHeight, 0), exp = os.clock() + S.skyTime }
+    notify(("附近没有可用柜子 → 高空 %.0f studs / %d 秒（每帧顶住纠偏）")
+        :format(S.skyHeight, S.skyTime), "warn", 3)
+    task.delay(S.skyTime, function()
+        skyHold = nil
+        local c2 = charOf(lp)
+        local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
+        if h2 then pcall(function() h2.Anchored = false end) end
+        hiding = false
+    end)
+end
+
+pcall(function() RS:UnbindFromRenderStep("XHubSky") end)
+RS:BindToRenderStep("XHubSky", Enum.RenderPriority.Last.Value - 2, function()
+    if not skyHold then return end
+    if os.clock() > skyHold.exp then skyHold = nil; return end
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        hrp.CFrame = skyHold.cf
+        pcall(function() hrp.AssemblyLinearVelocity = Vector3.zero end)
+    end
+end)
+
 local function findHideSpot(maxDist)
     local c = charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
@@ -2237,7 +2324,7 @@ task.spawn(function()
                     if d and d < bestD then bestD, bestN = d, m.Name end
                 end
             end
-            if bestN and bestD <= S.hideDist then hideNow() end
+            if bestN and bestD <= S.hideDist then hideSmart() end
         end
     end
 end)
@@ -2257,7 +2344,7 @@ workspace.DescendantAdded:Connect(function(d)
         for _, k in ipairs(SOUND_HINT) do
             if sn:find(k, 1, true) then
                 notify(("声音线索: %s"):format(d.Name), "warn", 3)
-                if S.autoHide then pcall(hideNow) end
+                if S.autoHide then pcall(hideSmart) end
                 break
             end
         end
