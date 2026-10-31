@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v5.1"
-local BUILD   = "2026-11-01 01:45"
+local VERSION = "v5.2"
+local BUILD   = "2026-11-01 02:15"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -42,6 +42,8 @@ local S = {
     itemEsp = false, pickup = false, pickupRadius = 25, pickupInterval = 0.12,
     autoPrompt = false, promptRadius = 20,
     autoDoor = false, doorRadius = 28, autoWalk = false, pulse = false,
+    entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
+    instantPrompt = true,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -1573,6 +1575,26 @@ local function destroyEnt(o)
     for _, v in pairs(o) do if typeof(v) == "Instance" then v:Destroy() end end
 end
 
+local ENT_COLOR = {
+    rush = Color3.fromRGB(255, 60, 60), ambush = Color3.fromRGB(255, 150, 40),
+    eyes = Color3.fromRGB(230, 230, 120), screech = Color3.fromRGB(200, 120, 255),
+    figure = Color3.fromRGB(160, 60, 255), hide = Color3.fromRGB(120, 200, 255),
+    seek = Color3.fromRGB(255, 90, 200), glitch = Color3.fromRGB(120, 255, 180),
+    timothy = Color3.fromRGB(255, 200, 90), jack = Color3.fromRGB(255, 120, 120),
+    dupe = Color3.fromRGB(180, 180, 255), snare = Color3.fromRGB(255, 160, 160),
+}
+
+local function entColorFor(name)
+    if not S.entColor then return Color3.fromRGB(255, 120, 40) end
+    local low = (name or ""):lower()
+    for k, col in pairs(ENT_COLOR) do
+        if low:find(k, 1, true) then return col end
+    end
+    local h = 0
+    for i = 1, #low do h = (h * 33 + low:byte(i)) % 360 end
+    return Color3.fromHSV(h / 360, 0.75, 1)
+end
+
 local entHud
 local entSeen = {}
 
@@ -1595,6 +1617,8 @@ local function ensureEnt(m)
             DepthMode = Enum.HighlightDepthMode.AlwaysOnTop }, m)
     end
     o.hl.Parent = m
+    o.hl.FillColor = entColorFor(m.Name)
+    o.hl.OutlineColor = entColorFor(m.Name):Lerp(Color3.new(1, 1, 1), 0.55)
     local head = m:FindFirstChild("Head") or m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart", true)
     if not head then return end
     if not (o.tag and o.tag.Parent) then
@@ -1724,10 +1748,13 @@ local function rangePickup(radius)
     return n
 end
 
+local promptCool = {}
+
 local function autoPrompts(radius)
     local c = charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if not hrp then return 0 end
+    local now = os.clock()
     local n = 0
     for _, p in ipairs(workspace:GetDescendants()) do
         if p:IsA("ProximityPrompt") and p.Enabled then
@@ -1737,16 +1764,25 @@ local function autoPrompts(radius)
             elseif pp and pp:IsA("Attachment") and pp.Parent and pp.Parent:IsA("BasePart") then
                 pos = pp.Parent.Position
             end
-            if pos and (pos - hrp.Position).Magnitude <= radius then
+            if pos and (pos - hrp.Position).Magnitude <= radius
+               and (now - (promptCool[p] or 0)) > 0.7 then
+                promptCool[p] = now
+                n = n + 1
+                if S.instantPrompt then
+                    pcall(function() p.HoldDuration = 0 end)
+                end
                 pcall(function() p.MaxActivationDistance = math.max(p.MaxActivationDistance, radius + 5) end)
                 pcall(function() p:InputHoldBegin() end)
-                pcall(function() p:InputHoldEnd() end)
-                n = n + 1
+                task.delay(S.instantPrompt and 0.12 or 0.6, function()
+                    pcall(function() p:InputHoldEnd() end)
+                end)
             end
         end
     end
     return n
 end
+
+local doorState = {}
 
 local function autoDoors(radius)
     local rooms = workspace:FindFirstChild("CurrentRooms")
@@ -1754,18 +1790,37 @@ local function autoDoors(radius)
     local c = charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if not hrp then return 0 end
+    local now = os.clock()
     local n = 0
     for _, room in ipairs(rooms:GetChildren()) do
         local door = room:FindFirstChild("Door")
         if door then
             local part = door:FindFirstChildWhichIsA("BasePart", true)
             local re = door:FindFirstChild("ClientOpen", true)
-            if part and re and (part.Position - hrp.Position).Magnitude <= radius then
-                if re:IsA("RemoteEvent") then
-                    pcall(function() re:FireServer() end)
-                    n = n + 1
-                elseif re:IsA("RemoteFunction") then
-                    pcall(function() re:InvokeServer() end)
+            local st = doorState[door]
+            if not st then
+                st = { tries = 0, last = 0, pos = nil, banned = 0 }
+                doorState[door] = st
+            end
+            if part and re and st.banned <= now
+               and (part.Position - hrp.Position).Magnitude <= radius
+               and (now - st.last) > 0.8 then
+                -- 上次点完门没动 = 假门/锁门,连点两次就拉黑 45s
+                if st.pos and (part.Position - st.pos).Magnitude < 0.05 then
+                    st.tries = st.tries + 1
+                    if st.tries >= 2 then
+                        st.banned = now + 45
+                        notify(("假门/锁门已跳过: %s"):format(door.Name), "warn", 2.2)
+                    end
+                end
+                if st.banned <= now then
+                    st.pos = part.Position
+                    st.last = now
+                    if re:IsA("RemoteEvent") then
+                        pcall(function() re:FireServer() end)
+                    elseif re:IsA("RemoteFunction") then
+                        pcall(function() re:InvokeServer() end)
+                    end
                     n = n + 1
                 end
             end
@@ -1886,6 +1941,113 @@ task.spawn(function()
     end
 end)
 
+--==================== 第三人称 / 模拟移动 / 自动躲避 ====================
+local camOrig = nil
+
+local function setThirdPerson(on)
+    S.thirdPerson = on
+    local P = lp
+    if not camOrig then
+        camOrig = {
+            max = P.CameraMaxZoomDistance,
+            min = P.CameraMinZoomDistance,
+        }
+    end
+    if on then
+        pcall(function() P.CameraMode = Enum.CameraMode.Classic end)
+        pcall(function() P.CameraMaxZoomDistance = math.max(camOrig.max, 64) end)
+        pcall(function() P.CameraMinZoomDistance = math.max(camOrig.min, 8) end)
+        pcall(function() cam.CameraType = Enum.CameraType.Custom end)
+        notify("已切第三人称（游戏若锁视角可能无效）", "ok", 2.2)
+    else
+        pcall(function() P.CameraMode = Enum.CameraMode.Classic end)
+        pcall(function() P.CameraMaxZoomDistance = camOrig.max end)
+        pcall(function() P.CameraMinZoomDistance = camOrig.min end)
+        notify("已恢复默认视角距离", "info", 1.6)
+    end
+end
+
+local function simWalk(pos, timeoutSec)
+    stopWalk()
+    PF.running = true
+    PF.gen = PF.gen + 1
+    local gen = PF.gen
+    task.spawn(function()
+        local t0 = os.clock()
+        local c, h = charOf(lp), humOf(lp)
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if not (h and hrp) then PF.running = false; return end
+        while PF.running and PF.gen == gen and os.clock() - t0 < (timeoutSec or 20) do
+            if not hrp.Parent then break end
+            if (hrp.Position - pos).Magnitude < 3.5 then break end
+            h:MoveTo(pos)
+            task.wait(0.2)
+        end
+        pcall(function() h:MoveTo(hrp.Position) end)
+        PF.running = false
+    end)
+end
+
+local HIDE_KW = { "closet", "wardrobe", "bed", "locker", "hide", "柜", "床", "hiding" }
+
+local function findHideSpot(maxDist)
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil, nil end
+    local best, bestD = nil, maxDist or 80
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("Model") or v:IsA("BasePart") then
+            local nm = v.Name:lower()
+            local hit = false
+            for _, k in ipairs(HIDE_KW) do
+                if nm:find(k, 1, true) then hit = true; break end
+            end
+            if hit then
+                local part = v:IsA("BasePart") and v or v:FindFirstChildWhichIsA("BasePart", true)
+                if part then
+                    local d = (part.Position - hrp.Position).Magnitude
+                    if d < bestD then best, bestD = part, d end
+                end
+            end
+        end
+    end
+    return best, bestD
+end
+
+local hiding = false
+local function hideNow()
+    if hiding then return end
+    local spot, d = findHideSpot(90)
+    if not spot then
+        notify("附近没找到柜子/床", "warn", 2)
+        return
+    end
+    hiding = true
+    notify(("自动躲避: 冲向 %s（%.0f m）"):format(spot.Parent and spot.Parent.Name or spot.Name, d or 0), "warn", 2.6)
+    simWalk(spot.Position, 15)
+    task.delay(1.2, function()
+        pcall(autoPrompts, 9)
+        task.delay(1.4, function()
+            pcall(autoPrompts, 9)
+            hiding = false
+        end)
+    end)
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.4)
+        if S.autoHide then
+            local bestD = math.huge
+            for m in pairs(entStore) do
+                local d = distTo(m)
+                if d and d < bestD then bestD = d end
+            end
+            if bestD <= S.hideDist then hideNow() end
+        end
+    end
+end)
+
 --==================== 页面 ====================
 local pMain, pVisual = addPage("主要"), addPage("视觉")
 local pCombat, pAuto = addPage("战斗"), addPage("自动")
@@ -1959,6 +2121,15 @@ addToggle(pVisual, "屏幕顶部显示最近实体距离", true, function(v)
     S.hudNearest = v
     if not v and entHud then entHud.Visible = false end
 end)
+addToggle(pVisual, "实体上色（按名字分配颜色）", true, function(v)
+    S.entColor = v
+    for m, o in pairs(entStore) do
+        if o.hl then o.hl.FillColor = entColorFor(m.Name) end
+    end
+end)
+addSection(pVisual, "视角")
+addToggle(pVisual, "强制第三人称", false, function(v) setThirdPerson(v) end)
+addButton(pVisual, "恢复默认视角", function() setThirdPerson(false) end)
 
 addSection(pCombat, "AIMBOT")
 addToggle(pCombat, "启用自瞄", false, function(v)
@@ -1998,8 +2169,16 @@ addSlider(pAuto, "拾取间隔 ×0.01s（12 = 0.12s）", 5, 50, 12, function(v) 
 addSection(pAuto, "交互")
 addToggle(pAuto, "自动交互（ProximityPrompt）", false, function(v) S.autoPrompt = v end)
 addSlider(pAuto, "交互半径", 5, 40, S.promptRadius, function(v) S.promptRadius = v end)
+addToggle(pAuto, "瞬间交互（去掉长按）", true, function(v) S.instantPrompt = v end)
 addToggle(pAuto, "自动开门（Door.ClientOpen）", false, function(v) S.autoDoor = v end)
 addSlider(pAuto, "开门半径", 5, 50, S.doorRadius, function(v) S.doorRadius = v end)
+
+addSection(pAuto, "躲避")
+addToggle(pAuto, "遇到实体自动躲柜子/床", false, function(v)
+    S.autoHide = v
+    notify(v and "自动躲避已开启（实体进入半径就冲向最近柜子）" or "自动躲避已关闭", "info", 2.4)
+end)
+addSlider(pAuto, "触发距离", 30, 200, S.hideDist, function(v) S.hideDist = v end)
 
 addSection(pAuto, "寻路")
 addButton(pAuto, "走向最近的门", function()
@@ -2010,6 +2189,12 @@ addButton(pAuto, "走向最近的门", function()
     end
     walkTo(pos)
     notify("开始寻路（速度受服务端限制，约 16 studs/s）", "info", 3)
+end)
+addButton(pAuto, "模拟移动走向最近的门", function()
+    local pos = nearestDoorPos()
+    if not pos then return notify("没找到门", "err", 3) end
+    simWalk(pos, 20)
+    notify("模拟移动中…（持续重新下发 MoveTo）", "info", 2.4)
 end)
 addButton(pAuto, "走向下一个可拾取物品", function()
     local c = charOf(lp)
@@ -2023,7 +2208,7 @@ addButton(pAuto, "走向下一个可拾取物品", function()
         end
     end
     if not best then return notify("附近没有可识别的物品", "warn", 3) end
-    walkTo(best.Position)
+    simWalk(best.Position, 18)
     notify(("走向物品: %s (%.0f studs)"):format(best.Parent.Name, bestD), "info", 3)
 end)
 addButton(pAuto, "停止寻路", function()
