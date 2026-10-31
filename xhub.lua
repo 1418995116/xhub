@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v7.1"
-local BUILD   = "2026-11-01 07:40"
+local VERSION = "v7.2"
+local BUILD   = "2026-11-01 08:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -1767,7 +1767,7 @@ end)
 --==================== 物品绘制 / 拾取 / 自动交互 ====================
 local ITEM_KW = { "key", "钥匙", "loot", "item", "coin", "chest", "drawer", "pickup",
                   "gem", "gold", "cash", "money", "bandage", "flashlight", "lighter",
-                  "candle", "crucifix", "lockpick", "vitamin", "potion", "weapon", "barrel", "crate", "sack", "bag", "pot", "box", "桶", "箱", "袋" }
+                  "candle", "crucifix", "lockpick", "vitamin", "potion", "weapon", "barrel", "crate", "sack", "bag", "box", "桶", "箱", "袋" }
 local itemStore = {}
 
 local function nameHits(v, list)
@@ -1779,7 +1779,7 @@ local function nameHits(v, list)
     return false
 end
 
-local ITEM_EXCLUDE = { "candle", "蜡烛", "drawer", "container", "wall", "stool", "chair", "seat", "bench", "table", "sofa", "lamp" }
+local ITEM_EXCLUDE = { "candle", "蜡烛", "drawer", "container", "wall", "stool", "chair", "seat", "bench", "table", "sofa", "lamp", "potted", "plant", "tree", "flower", "盆栽" }
 
 local function isItemInst(v)
     local nm = (v and v.Name or ""):lower()
@@ -1854,10 +1854,14 @@ local function autoPrompts(radius)
     for _, p in ipairs(workspace:GetDescendants()) do
         if p:IsA("ProximityPrompt") and p.Enabled then
             local pos
-            local pp = p.Parent
-            if pp and pp:IsA("BasePart") then pos = pp.Position
-            elseif pp and pp:IsA("Attachment") and pp.Parent and pp.Parent:IsA("BasePart") then
-                pos = pp.Parent.Position
+            local node = p.Parent
+            for _ = 1, 4 do
+                if not node then break end
+                if node:IsA("BasePart") then pos = node.Position break end
+                if node:IsA("Attachment") and node.Parent and node.Parent:IsA("BasePart") then
+                    pos = node.Parent.Position break
+                end
+                node = node.Parent
             end
             local pn = (p.Parent and p.Parent.Name or ""):lower()
             local act = (p.ActionText or ""):lower()
@@ -2276,6 +2280,8 @@ end
 
 local function hideSmart(name)
     if hiding then return end
+    if os.clock() < (S.lastHide or 0) + 15 then return end
+    S.lastHide = os.clock()
     hiding = true
 
     if preferSky(name) then
@@ -2445,7 +2451,8 @@ nearestTrigger = function()
     for _, m in ipairs(scanAll(3000)) do
         if m:IsA("Model") then
             local nm = m.Name:lower()
-            if not nm:find("cube", 1, true) then
+            local fake = nm:find("cube", 1, true) or nm:find("fake", 1, true) or nm:find("dupe", 1, true) or nm:find("clone", 1, true) and not nm:find("seek", 1, true)
+            if not fake then
             for _, k in ipairs(list) do
                 if nm:find(k, 1, true) then
                     local d = distTo(m)
@@ -2574,6 +2581,7 @@ local function navTo(pos)
         notify("没有角色，无法寻路", "err", 3)
         return
     end
+    navLog("A* 计算中…（射线采样网格）")
     notify("A* 计算中…", "info", 1.5)
     local path = navFindPath(hrp.Position, pos)
     if not path or #path == 0 then
@@ -3091,45 +3099,6 @@ addButton(pAuto, "A* 寻路到最近的门", function()
     navTo(pos)
 end)
 addSection(pAuto, "寻路")
-addButton(pAuto, "走向最近的门（模拟移动）", function()
-    local pos, d = nearestDoorPos()
-    if not pos then
-        notify("没找到任何名字含 door 的对象", "err", 3)
-        return
-    end
-    simWalk(pos, 20)
-    notify(("模拟移动 → 最近的门（%.0f studs）"):format(d or 0), "info", 2.6)
-end)
-addButton(pAuto, "走向最近的门（寻路 API）", function()
-    local pos = nearestDoorPos()
-    if not pos then
-        notify("没找到门（CurrentRooms 里没有 Door）", "err", 3)
-        return
-    end
-    walkTo(pos)
-    notify("开始寻路（速度受服务端限制，约 16 studs/s）", "info", 3)
-end)
-addButton(pAuto, "模拟移动走向最近的门", function()
-    local pos = nearestDoorPos()
-    if not pos then return notify("没找到门", "err", 3) end
-    simWalk(pos, 20)
-    notify("模拟移动中…（持续重新下发 MoveTo）", "info", 2.4)
-end)
-addButton(pAuto, "走向下一个可拾取物品", function()
-    local c = charOf(lp)
-    local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    local best, bestD = nil, math.huge
-    for _, v in ipairs(workspace:GetDescendants()) do
-        if v:IsA("BasePart") and v.Parent and isItemInst(v.Parent) then
-            local d = (v.Position - hrp.Position).Magnitude
-            if d < bestD then best, bestD = v, d end
-        end
-    end
-    if not best then return notify("附近没有可识别的物品", "warn", 3) end
-    simWalk(best.Position, 18)
-    notify(("走向物品: %s (%.0f studs)"):format(best.Parent.Name, bestD), "info", 3)
-end)
 addButton(pAuto, "停止寻路", function()
     stopWalk()
     notify("已停止寻路", "info", 1.5)
