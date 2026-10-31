@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v8.0"
-local BUILD   = "2026-11-01 10:45"
+local VERSION = "v8.1"
+local BUILD   = "2026-11-01 12:15"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -33,7 +33,7 @@ local S = {
     fly = false, flySpeed = 55,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false,
+    aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = true,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "cframe", antiSnap = true,
@@ -782,6 +782,73 @@ end
 pcall(function() RS:UnbindFromRenderStep("XHubAim") end)
 RS:BindToRenderStep("XHubAim", Enum.RenderPriority.Camera.Value + 1, aimTick)
 
+--==== 远程弹道改写（Remote Aim）：让静默/子弹追踪真正影响命中 ====
+local WEAPON_REMOTE_KW = { "fire", "shoot", "hit", "damage", "bullet", "gun",
+                           "attack", "click", "swing", "melee", "slash", "cast" }
+local fireUntil = 0
+
+UIS.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        fireUntil = os.clock() + 0.3
+    end
+end)
+
+local function remoteAimPoint()
+    if not (S.silentAim or S.btStandalone or S.bulletTrack) then return nil end
+    if not S.remoteAim then return nil end
+    local ok, t = pcall(findTarget)
+    if ok and t then return t.Position end
+    return nil
+end
+
+local remoteHooked = false
+local function installRemoteAim()
+    if remoteHooked then return end
+    if not (hookmetamethod and getnamecallmethod and checkcaller) then return end
+    local old
+    old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        local m = getnamecallmethod()
+        if checkcaller() and (m == "FireServer" or m == "InvokeServer") and os.clock() < fireUntil then
+            local okName, nm = pcall(function() return tostring(self.Name):lower() end)
+            if okName and nm then
+                local hit = false
+                for _, k in ipairs(WEAPON_REMOTE_KW) do
+                    if nm:find(k, 1, true) then hit = true break end
+                end
+                if hit then
+                    local pt = remoteAimPoint()
+                    if pt then
+                        local c = charOf(lp)
+                        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                        local args = { ... }
+                        local changed = false
+                        for i, v in ipairs(args) do
+                            local tv = typeof(v)
+                            if tv == "Vector3" then
+                                if v.Magnitude <= 3 and hrp then
+                                    args[i] = (pt - hrp.Position).Unit
+                                else
+                                    args[i] = pt
+                                end
+                                changed = true
+                            elseif tv == "CFrame" then
+                                args[i] = CFrame.lookAt(v.Position, pt)
+                                changed = true
+                            end
+                        end
+                        if changed then
+                            return old(self, table.unpack(args))
+                        end
+                    end
+                end
+            end
+        end
+        return old(self, ...)
+    end))
+    remoteHooked = true
+end
+pcall(installRemoteAim)
 --==== 静默瞄准（Silent Aim）：视角不动，只在开火瞬间改写相机方向 1~6 帧 ====
 local silent = { saved = nil, untilT = 0, pos = nil }
 
@@ -3196,6 +3263,11 @@ addButton(pVisual, "诊断扫描（F9 + 弹窗）", function()
     print(("[dbg] Model=%d  名字命中=%d"):format(mcount, hits))
     notify(("ws=%d CR=%s 扫=%d M=%d 命中=%d")
         :format(wsKids, cr and "有" or "无", #list, mcount, hits), "info", 5)
+end)
+
+addToggle(pCombat, "远程弹道改写（静默/子弹追踪真正生效的关键）", true, function(v)
+    S.remoteAim = v
+    notify(v and "远程改写已开：开火时把方向类参数改成对准目标" or "远程改写已关（只有视角变化，命中不受影响）", v and "ok" or "warn", 3)
 end)
 
 addSection(pCombat, "子弹追踪（独立功能，不需要自瞄）")
