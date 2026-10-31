@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v6.8"
-local BUILD   = "2026-11-01 06:40"
+local VERSION = "v6.9"
+local BUILD   = "2026-11-01 06:55"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -45,7 +45,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "zoom", doors = false, eyesAway = true, leverAuto = false, lever = false,
+    tpMode = "zoom", doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "auto",
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -2244,9 +2244,39 @@ end
 --==== 智能躲避：优先“柜子/床的 E 提示”（服务端认可的状态），否则高空顶住 ====
 local skyHold = nil
 
-local function hideSmart()
+local function preferSky(name)
+    if S.hidePrefer == "sky" then return true end
+    if S.hidePrefer == "closet" then return false end
+    local nm = (name or ""):lower()
+    -- auto: Rush/Ambush 钻柜子(服务端认可)；Seek 等追猎型用高空
+    if nm:find("rush", 1, true) or nm:find("ambush", 1, true) then return false end
+    return true
+end
+
+local function skyHide(reason)
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then hiding = false; return end
+    skyHold = { cf = hrp.CFrame + Vector3.new(0, S.skyHeight, 0), exp = os.clock() + S.skyTime }
+    notify(("高空躲避(%s): %.0f studs / %d 秒")
+        :format(reason or "?", S.skyHeight, S.skyTime), "warn", 3)
+    task.delay(S.skyTime, function()
+        skyHold = nil
+        local c2 = charOf(lp)
+        local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
+        if h2 then pcall(function() h2.Anchored = false end) end
+        hiding = false
+    end)
+end
+
+local function hideSmart(name)
     if hiding then return end
     hiding = true
+
+    if preferSky(name) then
+        skyHide(name)
+        return
+    end
 
     local prompt, d, part = findHidePrompt(150)
     if prompt and part then
@@ -2272,19 +2302,7 @@ local function hideSmart()
         return
     end
 
-    local c = charOf(lp)
-    local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    if not hrp then hiding = false; return end
-    skyHold = { cf = hrp.CFrame + Vector3.new(0, S.skyHeight, 0), exp = os.clock() + S.skyTime }
-    notify(("附近没有可用柜子 → 高空 %.0f studs / %d 秒（每帧顶住纠偏）")
-        :format(S.skyHeight, S.skyTime), "warn", 3)
-    task.delay(S.skyTime, function()
-        skyHold = nil
-        local c2 = charOf(lp)
-        local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
-        if h2 then pcall(function() h2.Anchored = false end) end
-        hiding = false
-    end)
+    skyHide("无柜子")
 end
 
 pcall(function() RS:UnbindFromRenderStep("XHubSky") end)
@@ -2403,7 +2421,7 @@ task.spawn(function()
         task.wait(0.4)
         if S.autoHide then
             local name, d = nearestTrigger()
-            if name and d <= S.hideDist then hideSmart() end
+            if name and d <= S.hideDist then hideSmart(name) end
         end
     end
 end)
@@ -2576,7 +2594,7 @@ workspace.DescendantAdded:Connect(function(d)
         for _, k in ipairs(SOUND_HINT) do
             if sn:find(k, 1, true) then
                 notify(("声音线索: %s"):format(d.Name), "warn", 3)
-                if S.autoHide then pcall(hideSmart) end
+                if S.autoHide then pcall(hideSmart, d.Name) end
                 break
             end
         end
@@ -2982,6 +3000,19 @@ addSlider(pAuto, "触发距离", 30, 200, S.hideDist, function(v) S.hideDist = v
 addToggle(pAuto, "只对 Rush/Ambush/Seek 触发", true, function(v) S.hideOnlyRush = v end)
 addSlider(pAuto, "高空高度 studs", 50, 800, S.skyHeight, function(v) S.skyHeight = v end)
 addSlider(pAuto, "高空停留 秒", 3, 20, S.skyTime, function(v) S.skyTime = v end)
+local setPreferBtn
+setPreferBtn = addButton(pAuto, "躲避策略: 自动(Rush钻柜/Seek升空)", function()
+    if S.hidePrefer == "auto" then
+        S.hidePrefer = "sky"
+    elseif S.hidePrefer == "sky" then
+        S.hidePrefer = "closet"
+    else
+        S.hidePrefer = "auto"
+    end
+    local txt = ({ auto = "自动(Rush钻柜/Seek升空)", sky = "全部高空", closet = "全部钻柜" })[S.hidePrefer]
+    setPreferBtn("躲避策略: " .. txt)
+    notify("躲避策略 = " .. S.hidePrefer, "info", 2)
+end)
 
 addButton(pAuto, "A* 寻路到最近的门", function()
     local pos, d = nearestDoorPos()
