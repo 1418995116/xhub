@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v6.4"
-local BUILD   = "2026-11-01 05:25"
+local VERSION = "v6.5"
+local BUILD   = "2026-11-01 05:45"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -1567,7 +1567,7 @@ local ENT_KW = { "Rush", "Ambush", "Eyes", "Screech", "Figure", "Hide", "Seek", 
                  "NPC", "Entity", "Bot", "Zombie", "Ghost" }
 local entStore = {}
 
-local ENT_IGNORE = { "baserig", "humanoidrig", "dummy", "template" }
+local ENT_IGNORE = { "baserig", "humanoidrig", "dummy", "template", "door", "doorframe", "doorway", "wall" }
 
 -- 精确实体名表：只比对“模型自己的名字”，绝不扫子对象（否则门里的 FigureAttack 会误报）
 local ENT_STRICT = { "rushmoving", "rush", "ambushmoving", "ambush", "seek", "figure",
@@ -1779,7 +1779,7 @@ local function nameHits(v, list)
     return false
 end
 
-local ITEM_EXCLUDE = { "candle", "蜡烛", "drawer", "container" }
+local ITEM_EXCLUDE = { "candle", "蜡烛", "drawer", "container", "door", "doorframe", "doorway", "wall" }
 
 local function isItemInst(v)
     local nm = (v and v.Name or ""):lower()
@@ -2094,7 +2094,27 @@ end
 
 pcall(function() RS:UnbindFromRenderStep("XHubCam") end)
 RS:BindToRenderStep("XHubCam", Enum.RenderPriority.Last.Value - 3, function()
-    if not S.thirdPerson or S.tpMode ~= "orbit" then return end
+    if not S.thirdPerson then return end
+    local P = lp
+    local c0 = charOf(lp)
+    local hum0 = c0 and c0:FindFirstChildOfClass("Humanoid")
+    if S.tpMode == "zoom" then
+        -- 变焦锁定：每帧抢，游戏重置也压不住
+        pcall(function() P.CameraMode = Enum.CameraMode.Classic end)
+        pcall(function()
+            if P.CameraMaxZoomDistance < 48 then P.CameraMaxZoomDistance = 48 end
+        end)
+        pcall(function()
+            if P.CameraMinZoomDistance < 10 then P.CameraMinZoomDistance = 10 end
+        end)
+        pcall(function()
+            if hum0 and cam.CameraSubject ~= hum0 then cam.CameraSubject = hum0 end
+            if cam.CameraType ~= Enum.CameraType.Custom then
+                cam.CameraType = Enum.CameraType.Custom
+            end
+        end)
+        return
+    end
     local d = UIS:GetMouseDelta()
     orbit.yaw = orbit.yaw - d.X * 0.0035
     local dy = S.invertY and -d.Y or d.Y
@@ -2109,6 +2129,7 @@ RS:BindToRenderStep("XHubCam", Enum.RenderPriority.Last.Value - 3, function()
     local look = CFrame.fromEulerAnglesYXZ(orbit.pitch, orbit.yaw, 0)
     local eye = hrp.Position + Vector3.new(0, 1.6, 0)
     local pos = eye - look.LookVector * orbit.dist
+    pcall(function() cam.CameraSubject = nil end)
     pcall(function() cam.CameraType = Enum.CameraType.Scriptable end)
     cam.CFrame = CFrame.lookAt(pos, eye)
 end)
@@ -2413,6 +2434,132 @@ nearestTrigger = function()
     return bestN, bestD
 end
 
+--==================== A* 网格寻路（类似 Baritone 的思路） ====================
+local NAV = { running = false, gen = 0, cell = 5, radius = 12 }
+
+local function navParams()
+    local p = RaycastParams.new()
+    p.FilterType = Enum.RaycastFilterType.Exclude
+    local list = { gui }
+    local ch = charOf(lp)
+    if ch then table.insert(list, ch) end
+    p.FilterDescendantsInstances = list
+    return p
+end
+
+local function sampleCell(x, z, yHint)
+    local params = navParams()
+    local hit = workspace:Raycast(Vector3.new(x, yHint + 8, z), Vector3.new(0, -26, 0), params)
+    if not hit or hit.Normal.Y < 0.55 then return nil end
+    local y = hit.Position.Y
+    local up = workspace:Raycast(Vector3.new(x, y + 1.4, z), Vector3.new(0, 4.2, 0), params)
+    if up then return nil end
+    return y
+end
+
+local function navFindPath(startPos, goalPos)
+    local cell, R = NAV.cell, NAV.radius
+    local sx, sz = math.floor(startPos.X / cell), math.floor(startPos.Z / cell)
+    local gx, gz = math.floor(goalPos.X / cell), math.floor(goalPos.Z / cell)
+    local function kk(x, z) return x .. ":" .. z end
+    local nodes, open, closed = {}, {}, {}
+    local function node(x, z)
+        local k = kk(x, z)
+        if nodes[k] then return nodes[k] end
+        local y = sampleCell(x * cell, z * cell, startPos.Y + 4)
+        if not y then return nil end
+        local n = { x = x, z = z, y = y, g = math.huge, f = math.huge, parent = nil }
+        nodes[k] = n
+        return n
+    end
+    local s = node(sx, sz)
+    if not s then return nil end
+    s.g = 0
+    s.f = math.abs(sx - gx) + math.abs(sz - gz)
+    open[1] = s
+    local guard = 0
+    while #open > 0 and guard < 3500 do
+        guard = guard + 1
+        local bi = 1
+        for i = 2, #open do
+            if open[i].f < open[bi].f then bi = i end
+        end
+        local cur = table.remove(open, bi)
+        local ck = kk(cur.x, cur.z)
+        if not closed[ck] then
+            closed[ck] = true
+            if cur.x == gx and cur.z == gz then
+                local path, n = {}, cur
+                while n do
+                    table.insert(path, 1, Vector3.new(n.x * cell, n.y + 2.5, n.z * cell))
+                    n = n.parent
+                end
+                return path
+            end
+            for dx = -1, 1 do
+                for dz = -1, 1 do
+                    if dx ~= 0 or dz ~= 0 then
+                        local nx, nz = cur.x + dx, cur.z + dz
+                        if math.abs(nx - sx) <= R and math.abs(nz - sz) <= R then
+                            local nk = kk(nx, nz)
+                            if not closed[nk] then
+                                local n2 = node(nx, nz)
+                                if n2 then
+                                    local stepCost = (dx ~= 0 and dz ~= 0) and 1.414 or 1
+                                    if math.abs(n2.y - cur.y) > 3 then stepCost = stepCost + 5 end
+                                    local g = cur.g + stepCost
+                                    if g < n2.g then
+                                        n2.g = g
+                                        n2.f = g + math.abs(nx - gx) + math.abs(nz - gz)
+                                        n2.parent = cur
+                                        open[#open + 1] = n2
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function navTo(pos)
+    if NAV.running then
+        NAV.gen = NAV.gen + 1
+        NAV.running = false
+    end
+    local c, h = charOf(lp), humOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not (h and hrp) then
+        notify("没有角色，无法寻路", "err", 3)
+        return
+    end
+    notify("A* 计算中…", "info", 1.5)
+    local path = navFindPath(hrp.Position, pos)
+    if not path or #path == 0 then
+        notify("A* 找不到路径（试试开 Noclip 或换个点）", "err", 3.5)
+        return
+    end
+    NAV.running = true
+    NAV.gen = NAV.gen + 1
+    local gen = NAV.gen
+    notify(("A* 成功: %d 个路点，开始移动"):format(#path), "ok", 2.5)
+    task.spawn(function()
+        for _, wp in ipairs(path) do
+            if NAV.gen ~= gen then break end
+            h:MoveTo(wp)
+            local t0 = os.clock()
+            while NAV.gen == gen and (hrp.Position - wp).Magnitude > 3.5 and os.clock() - t0 < 4 do
+                task.wait(0.1)
+            end
+        end
+        pcall(function() h:MoveTo(hrp.Position) end)
+        NAV.running = false
+    end)
+end
+
 --==================== 刷新即时捕获 + 声音线索（放在所有定义之后） ====================
 local SOUND_HINT = { "rush", "ambush", "seek", "figure", "screech" }
 
@@ -2668,6 +2815,27 @@ addSlider(pAuto, "触发距离", 30, 200, S.hideDist, function(v) S.hideDist = v
 addToggle(pAuto, "只对 Rush/Ambush/Seek 触发", true, function(v) S.hideOnlyRush = v end)
 addSlider(pAuto, "高空高度 studs", 50, 800, S.skyHeight, function(v) S.skyHeight = v end)
 addSlider(pAuto, "高空停留 秒", 3, 20, S.skyTime, function(v) S.skyTime = v end)
+
+addButton(pAuto, "A* 寻路到最近的门", function()
+    local pos, d = nearestDoorPos()
+    if not pos then return notify("没找到名字含 door 的对象", "err", 3) end
+    notify(("A* 目标: 最近的门的 (%.0f studs)"):format(d or 0), "info", 2)
+    navTo(pos)
+end)
+addButton(pAuto, "A* 寻路到最近物品", function()
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local best, bestD = nil, math.huge
+    for _, v in ipairs(scanAll(3000)) do
+        if v:IsA("BasePart") and v.Parent and isItemInst(v.Parent) then
+            local d = (v.Position - hrp.Position).Magnitude
+            if d < bestD then best, bestD = v, d end
+        end
+    end
+    if not best then return notify("附近没有可识别物品", "warn", 3) end
+    navTo(best.Position)
+end)
 
 addSection(pAuto, "寻路")
 addButton(pAuto, "走向最近的门（模拟移动）", function()
