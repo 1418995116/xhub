@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v6.2"
-local BUILD   = "2026-11-01 04:40"
+local VERSION = "v6.3"
+local BUILD   = "2026-11-01 05:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -45,6 +45,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
+    tpMode = "zoom",
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -1660,9 +1661,12 @@ end
 local function distTo(m)
     local c = charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
     local p = firstPart(m)
-    if not (hrp and p) then return nil end
-    return (p.Position - hrp.Position).Magnitude
+    if p then return (p.Position - hrp.Position).Magnitude end
+    local ok, cf = pcall(function() return m:GetBoundingBox() end)
+    if ok and cf then return (cf.Position - hrp.Position).Magnitude end
+    return nil
 end
 
 local function ensureEnt(m)
@@ -1788,6 +1792,28 @@ local function ensureItem(v)
             FillColor = Color3.fromRGB(80, 220, 255), FillTransparency = 0.5,
             OutlineColor = Color3.fromRGB(180, 245, 255), OutlineTransparency = 0,
             DepthMode = Enum.HighlightDepthMode.AlwaysOnTop }, v)
+    end
+    o.hl.Parent = v
+    local part = firstPart(v)
+    if not part then return end
+    if not (o.tag and o.tag.Parent) then
+        o.tag = mk("BillboardGui", { Name = "XHubItemTag", Size = UDim2.fromOffset(180, 30),
+            AlwaysOnTop = true, Adornee = part, StudsOffset = Vector3.new(0, 1.8, 0) }, part)
+        o.lbl = mk("TextLabel", { Text = v.Name, BackgroundTransparency = 1,
+            Size = UDim2.new(1, 0, 0, 15), Font = Enum.Font.GothamBold, TextSize = 12,
+            TextColor3 = Color3.fromRGB(170, 240, 255), TextStrokeTransparency = 0.35 }, o.tag)
+        o.dlbl = mk("TextLabel", { Text = "", BackgroundTransparency = 1,
+            Position = UDim2.new(0, 0, 0, 13), Size = UDim2.new(1, 0, 0, 13),
+            Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = Color3.fromRGB(220, 250, 255),
+            TextStrokeTransparency = 0.5 }, o.tag)
+    end
+    o.tag.Adornee = part
+    o.tag.Parent = part
+    if o.lbl then o.lbl.Text = v.Name end
+    if o.dlbl then
+        local c = charOf(lp)
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if hrp then o.dlbl.Text = ("%.0f m"):format((part.Position - hrp.Position).Magnitude) end
     end
 end
 
@@ -2039,10 +2065,14 @@ local function setThirdPerson(on)
         pcall(function() P.CameraMode = Enum.CameraMode.Classic end)
         pcall(function() P.CameraMaxZoomDistance = math.max(camOrig.max, 64) end)
         pcall(function() P.CameraMinZoomDistance = math.max(camOrig.min, 8) end)
-        local cf = cam.CFrame
-        orbit.yaw = math.atan2(-cf.LookVector.X, -cf.LookVector.Z)
-        orbit.pitch = math.asin(math.clamp(cf.LookVector.Y, -1, 1))
-        notify("强制第三人称：脚本已接管相机（WASD 照常移动）", "ok", 2.5)
+        if S.tpMode == "orbit" then
+            local cf = cam.CFrame
+            orbit.yaw = math.atan2(-cf.LookVector.X, -cf.LookVector.Z)
+            orbit.pitch = math.asin(math.clamp(cf.LookVector.Y, -1, 1))
+            notify("第三人称: 脚本相机（鼠标自由旋转）", "ok", 2.5)
+        else
+            notify("第三人称: 变焦锁定（把相机拉到身后，兼容性最好）", "ok", 2.5)
+        end
     else
         pcall(function() cam.CameraType = Enum.CameraType.Custom end)
         local h = humOf(lp)
@@ -2053,9 +2083,8 @@ local function setThirdPerson(on)
     end
 end
 
-pcall(function() RS:UnbindFromRenderStep("XHubCam") end)
-RS:BindToRenderStep("XHubCam", Enum.RenderPriority.Camera.Value + 20, function()
-    if not S.thirdPerson then return end
+pcall(function() RS:UnbindFromRenderStep("XHubCam") end)RS:BindToRenderStep("XHubCam", Enum.RenderPriority.Camera.Value + 20, function()
+    if not S.thirdPerson or S.tpMode ~= "orbit" then return end
     local d = UIS:GetMouseDelta()
     orbit.yaw = orbit.yaw - d.X * 0.0035
     local dy = S.invertY and -d.Y or d.Y
@@ -2072,6 +2101,23 @@ RS:BindToRenderStep("XHubCam", Enum.RenderPriority.Camera.Value + 20, function()
     local pos = eye - look.LookVector * orbit.dist
     pcall(function() cam.CameraType = Enum.CameraType.Scriptable end)
     cam.CFrame = CFrame.lookAt(pos, eye)
+end)
+
+-- 变焦锁定模式：每帧把游戏的视角设置拉回来（不少游戏会锁第一人称）
+task.spawn(function()
+    while true do
+        task.wait(0.15)
+        if S.thirdPerson and S.tpMode == "zoom" then
+            local P = lp
+            pcall(function() P.CameraMode = Enum.CameraMode.Classic end)
+            pcall(function()
+                if P.CameraMaxZoomDistance < 48 then P.CameraMaxZoomDistance = 48 end
+            end)
+            pcall(function()
+                if P.CameraMinZoomDistance < 10 then P.CameraMinZoomDistance = 10 end
+            end)
+        end
+    end
 end)
 
 local function simWalk(pos, timeoutSec)
@@ -2124,6 +2170,19 @@ local HIDE_KW = { "closet", "wardrobe", "bed", "locker", "hide", "柜", "床", "
 
 local HIDE_PROMPT_KW = { "hide", "closet", "wardrobe", "bed", "locker", "hiding", "柜", "床", "躲" }
 
+local function promptPos(p)
+    local node = p.Parent
+    for _ = 1, 4 do
+        if not node then return nil end
+        if node:IsA("BasePart") then return node end
+        if node:IsA("Attachment") and node.Parent and node.Parent:IsA("BasePart") then
+            return node.Parent
+        end
+        node = node.Parent
+    end
+    return nil
+end
+
 local function findHidePrompt(maxDist)
     local c = charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
@@ -2131,20 +2190,16 @@ local function findHidePrompt(maxDist)
     local best, bestD, bestPart
     bestD = maxDist or 120
     for _, p in ipairs(scanAll(4000)) do
-        if p:IsA("ProximityPrompt") then
+        if p:IsA("ProximityPrompt") or p:IsA("ClickDetector") then
             local nm = ((p.Parent and p.Parent.Name or "") .. " "
-                     .. (p.ActionText or "") .. " " .. (p.ObjectText or "")):lower()
+                     .. ((p:IsA("ProximityPrompt") and (p.ActionText or "") or "")) .. " "
+                     .. ((p:IsA("ProximityPrompt") and (p.ObjectText or "") or ""))):lower()
             local hit = false
             for _, k in ipairs(HIDE_PROMPT_KW) do
                 if nm:find(k, 1, true) then hit = true; break end
             end
             if hit then
-                local part
-                local pp = p.Parent
-                if pp and pp:IsA("BasePart") then part = pp
-                elseif pp and pp:IsA("Attachment") and pp.Parent and pp.Parent:IsA("BasePart") then
-                    part = pp.Parent
-                end
+                local part = promptPos(p)
                 if part then
                     local d = (part.Position - hrp.Position).Magnitude
                     if d < bestD then best, bestD, bestPart = p, d, part end
@@ -2174,10 +2229,14 @@ local function hideSmart()
             pcall(function() hrp.CFrame = CFrame.new(part.Position + dir.Unit * 3) end)
             task.wait(0.12)
         end
-        pcall(function() prompt.HoldDuration = 0 end)
-        pcall(function() prompt.MaxActivationDistance = 300 end)
-        pcall(function() prompt:InputHoldBegin() end)
-        task.delay(0.1, function() pcall(function() prompt:InputHoldEnd() end) end)
+        if prompt:IsA("ProximityPrompt") then
+            pcall(function() prompt.HoldDuration = 0 end)
+            pcall(function() prompt.MaxActivationDistance = 300 end)
+            pcall(function() prompt:InputHoldBegin() end)
+            task.delay(0.1, function() pcall(function() prompt:InputHoldEnd() end) end)
+        elseif fireclickdetector then
+            pcall(fireclickdetector, prompt)
+        end
         task.delay(S.skyTime, function() hiding = false end)
         return
     end
@@ -2284,7 +2343,7 @@ local function hideNow()
     end)
 end
 
-local HIDE_TRIGGER = { "rushmoving", "rush", "ambush", "seek", "glitch" }
+local HIDE_TRIGGER = { "rushmoving", "rush", "ambush", "seek", "glitch", "glitchcube", "cube", "dupe" }
 
 task.spawn(function()
     local wasAlive = true
@@ -2483,6 +2542,13 @@ addToggle(pVisual, "实体上色（按名字分配颜色）", true, function(v)
 end)
 addSection(pVisual, "视角")
 addToggle(pVisual, "强制第三人称", false, function(v) setThirdPerson(v) end)
+local setTpModeBtn
+setTpModeBtn = addButton(pVisual, "第三人称模式: 变焦锁定", function()
+    S.tpMode = (S.tpMode == "zoom") and "orbit" or "zoom"
+    setTpModeBtn("第三人称模式: " .. (S.tpMode == "zoom" and "变焦锁定" or "脚本相机"))
+    if S.thirdPerson then setThirdPerson(false); task.wait(0.1); setThirdPerson(true) end
+    notify("模式 = " .. S.tpMode, "info", 1.6)
+end)
 addToggle(pVisual, "第三人称 Y 轴反转", true, function(v) S.invertY = v end)
 addButton(pVisual, "恢复默认视角", function() setThirdPerson(false) end)
 addSection(pVisual, "性能")
