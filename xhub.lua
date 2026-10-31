@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v6.9"
-local BUILD   = "2026-11-01 06:55"
+local VERSION = "v7.0"
+local BUILD   = "2026-11-01 07:15"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -2093,7 +2093,7 @@ local function setThirdPerson(on)
 end
 
 pcall(function() RS:UnbindFromRenderStep("XHubCam") end)
-RS:BindToRenderStep("XHubCam", Enum.RenderPriority.Last.Value - 3, function()
+RS:BindToRenderStep("XHubCam", Enum.RenderPriority.Last.Value, function()
     if not S.thirdPerson then return end
     local P = lp
     local c0 = charOf(lp)
@@ -2427,7 +2427,7 @@ task.spawn(function()
 end)
 
 --==================== 躲避触发扫描（不依赖 ESP，独立按名字找） ====================
-local TRIGGER_STRICT = { "rushmoving", "rush", "ambush", "ambushmoving", "seekmovingnewclone", "seek" }
+local TRIGGER_STRICT = { "rushmoving", "rush", "ambush", "ambushmoving", "seekmovingnewclone", "seek", "glitch" }
 local TRIGGER_ALL = { "rushmoving", "rush", "ambush", "ambushmoving",
                       "seek", "glitch", "glitchcube", "figure", "dupe" }
 
@@ -2440,12 +2440,14 @@ nearestTrigger = function()
     for _, m in ipairs(scanAll(3000)) do
         if m:IsA("Model") then
             local nm = m.Name:lower()
+            if not nm:find("cube", 1, true) then
             for _, k in ipairs(list) do
                 if nm:find(k, 1, true) then
                     local d = distTo(m)
                     if d and d < bestD then bestD, bestN = d, m.Name end
                     break
                 end
+            end
             end
         end
     end
@@ -2454,6 +2456,19 @@ end
 
 --==================== A* 网格寻路（类似 Baritone 的思路） ====================
 local NAV = { running = false, gen = 0, cell = 5, radius = 12 }
+local navHud
+
+local function navLog(txt)
+    if not (navHud and navHud.Parent) then
+        navHud = mk("TextLabel", { Name = "XHubNavLog", Size = UDim2.fromOffset(380, 84),
+            Position = UDim2.new(0, 12, 0.5, 120), BackgroundTransparency = 0.25,
+            BackgroundColor3 = Color3.fromRGB(14, 16, 22), Text = "", TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left, Font = Enum.Font.Code, TextSize = 12,
+            TextColor3 = Color3.fromRGB(170, 230, 255), ZIndex = 30 }, gui)
+        local pad = mk("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingTop = UDim.new(0, 6) }, navHud)
+    end
+    navHud.Text = tostring(txt)
+end
 
 local function navParams()
     local p = RaycastParams.new()
@@ -2565,41 +2580,40 @@ local function navTo(pos)
     NAV.gen = NAV.gen + 1
     local gen = NAV.gen
     notify(("A* 成功: %d 个路点，开始移动"):format(#path), "ok", 2.5)
+    navLog(("路点 %d 个，目标 (%.0f, %.0f)"):format(#path, pos.X, pos.Z))
     task.spawn(function()
-        for _, wp in ipairs(path) do
-            if NAV.gen ~= gen then break end
-            h:MoveTo(wp)
-            local t0 = os.clock()
-            while NAV.gen == gen and (hrp.Position - wp).Magnitude > 3.5 and os.clock() - t0 < 4 do
-                task.wait(0.1)
+        -- 不依赖 Humanoid:MoveTo（很多游戏每帧覆写移动），直接按合法速度 CFrame 推进
+        local spd = math.max(12, math.min(S.walkSpeed or 16, 20))
+        local i, t0 = 1, os.clock()
+        while NAV.gen == gen and i <= #path and os.clock() - t0 < 90 do
+            local c2, h2 = charOf(lp), humOf(lp)
+            local hrp2 = c2 and c2:FindFirstChild("HumanoidRootPart")
+            if not (hrp2 and h2) then break end
+            local wp = path[i]
+            local flat = Vector3.new(wp.X - hrp2.Position.X, 0, wp.Z - hrp2.Position.Z)
+            if flat.Magnitude < 2.5 then
+                i = i + 1
+            else
+                local mv = flat.Unit * math.min(spd * 0.03, flat.Magnitude)
+                local np = hrp2.Position + mv
+                local ny = math.max(np.Y, wp.Y - 2.5)
+                pcall(function()
+                    hrp2.CFrame = CFrame.new(Vector3.new(np.X, ny, np.Z))
+                        * (hrp2.CFrame - hrp2.CFrame.Position)
+                    hrp2.AssemblyLinearVelocity = Vector3.zero
+                end)
+                if os.clock() - t0 > 0.25 then
+                    navLog(("路点 %d/%d · 距目标 %.0f · 剩余 %.0f studs")
+                        :format(i, #path, (hrp2.Position - pos).Magnitude, flat.Magnitude))
+                    t0 = os.clock()
+                end
             end
+            task.wait(0.03)
         end
-        pcall(function() h:MoveTo(hrp.Position) end)
         NAV.running = false
+        navLog(("结束 · 剩余 %.0f studs"):format((pos - (charOf(lp) and charOf(lp):FindFirstChild("HumanoidRootPart").Position or pos)).Magnitude))
     end)
 end
-
---==================== 刷新即时捕获 + 声音线索（放在所有定义之后） ====================
-local SOUND_HINT = { "rush", "ambush", "seek", "figure", "screech" }
-
-workspace.DescendantAdded:Connect(function(d)
-    if d:IsA("Model") and S.entityEsp and isEntityModel(d) then
-        task.defer(function() if d.Parent then pcall(ensureEnt, d) end end)
-    end
-    if (d:IsA("Tool") or d:IsA("Model")) and S.itemEsp and isItemInst(d) then
-        task.defer(function() if d.Parent then pcall(ensureItem, d) end end)
-    end
-    if d:IsA("Sound") then
-        local sn = d.Name:lower()
-        for _, k in ipairs(SOUND_HINT) do
-            if sn:find(k, 1, true) then
-                notify(("声音线索: %s"):format(d.Name), "warn", 3)
-                if S.autoHide then pcall(hideSmart, d.Name) end
-                break
-            end
-        end
-    end
-end)
 
 --==================== 场景物体绘制（柜子/床/抽屉，纯渲染，不计入实体） ====================
 local SCENE_KW = { "closet", "wardrobe", "bed", "locker", "drawer", "dresser",
@@ -2769,34 +2783,78 @@ task.spawn(function()
     end
 end)
 
+--==================== 刷新即时捕获 + 声音线索（放在所有定义之后） ====================
+local SOUND_HINT = { "rush", "ambush", "seek", "figure", "screech" }
+
+workspace.DescendantAdded:Connect(function(d)
+    if d:IsA("Model") and S.entityEsp and isEntityModel(d) then
+        task.defer(function() if d.Parent then pcall(ensureEnt, d) end end)
+    end
+    if (d:IsA("Tool") or d:IsA("Model")) and S.itemEsp and isItemInst(d) then
+        task.defer(function() if d.Parent then pcall(ensureItem, d) end end)
+    end
+    if d:IsA("Model") then
+        local nm2 = d.Name:lower()
+        if S.doors and isRealDoor(nm2) then pcall(ensureDoor, d) end
+        if S.lever and isLever(nm2) then pcall(ensureLever, d) end
+        if S.scenery then
+            for _, k in ipairs(SCENE_KW) do
+                if nm2:find(k:lower(), 1, true) then pcall(ensureScene, d); break end
+            end
+        end
+    end
+    if d:IsA("Sound") then
+        local sn = d.Name:lower()
+        for _, k in ipairs(SOUND_HINT) do
+            if sn:find(k, 1, true) then
+                notify(("声音线索: %s"):format(d.Name), "warn", 3)
+                if S.autoHide then pcall(hideSmart, d.Name) end
+                break
+            end
+        end
+    end
+end)
+
 --==== 遇到 Eyes 自动背对（把角色朝向转成背对它） ====
 task.spawn(function()
+    local locked = false
     while true do
-        task.wait(0.2)
+        task.wait(0.08)
         if S.eyesAway then
-            local c = charOf(lp)
+            local c, h = charOf(lp), humOf(lp)
             local hrp = c and c:FindFirstChild("HumanoidRootPart")
+            local best, bestD = nil, 200
             if hrp then
-                local best, bestD = nil, 200
                 for _, m in ipairs(scanAll(2500)) do
                     if m:IsA("Model") and m.Name:lower():find("eyes", 1, true) then
                         local d = distTo(m)
                         if d and d < bestD then bestD, best = d, m end
                     end
                 end
-                if best then
-                    local p = firstPart(best)
-                    if p then
-                        local away = hrp.Position - p.Position
-                        away = Vector3.new(away.X, 0, away.Z)
-                        if away.Magnitude > 0.1 then
-                            pcall(function()
-                                hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + away.Unit)
-                            end)
-                        end
+            end
+            if best and hrp then
+                if h and not locked then
+                    pcall(function() h.AutoRotate = false end)
+                    locked = true
+                end
+                local p = firstPart(best)
+                if p then
+                    local away = hrp.Position - p.Position
+                    away = Vector3.new(away.X, 0, away.Z)
+                    if away.Magnitude > 0.1 then
+                        pcall(function()
+                            hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + away.Unit)
+                        end)
                     end
                 end
+            elseif locked then
+                if h then pcall(function() h.AutoRotate = true end) end
+                locked = false
             end
+        elseif locked then
+            local h = humOf(lp)
+            if h then pcall(function() h.AutoRotate = true end) end
+            locked = false
         end
     end
 end)
