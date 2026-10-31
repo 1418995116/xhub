@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v7.5"
-local BUILD   = "2026-11-01 09:00"
+local VERSION = "v7.6"
+local BUILD   = "2026-11-01 09:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -33,7 +33,7 @@ local S = {
     fly = false, flySpeed = 55,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimHold = true, aimSmooth = 12, aimFov = 140,
+    aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "cframe", antiSnap = true,
@@ -695,11 +695,10 @@ local aimWant, aimGoal = false, nil
 local function aimTick(dt)
     aimWant = false
     if S.aim and not main.Visible then
-        if S.aimOnFire and UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+        -- 只保留「左键开火自瞄」；Q 键已移除
+        if UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
             aimWant = true
-        elseif S.aimHold and UIS:IsKeyDown(CONFIG.AimKey) then
-            aimWant = true
-        elseif not S.aimOnFire and not S.aimHold then
+        elseif not S.aimOnFire then
             aimWant = true
         end
     end
@@ -720,7 +719,7 @@ local function aimTick(dt)
 
     if not aimWant then
         aimGoal = nil
-        if aimInfo then aimInfo.Text = "自瞄: 待触发（按住左键 / Q）" end
+        if aimInfo then aimInfo.Text = "自瞄: 待触发（按住左键开火）" end
         return
     end
 
@@ -735,8 +734,13 @@ local function aimTick(dt)
     local cur = cam.CFrame
     local goal = CFrame.lookAt(cur.Position, t.Position)
     aimGoal = goal
-    local alpha = 1 - math.exp(-math.max(S.aimSmooth, 0.5) * dt)
-    cam.CFrame = cur:Lerp(goal, math.clamp(alpha, 0.02, 1))
+    if S.bulletTrack then
+        -- 子弹追踪：这一帧直接把相机对准目标（工具从相机方向发射时 = 命中）
+        cam.CFrame = goal
+    else
+        local alpha = 1 - math.exp(-math.max(S.aimSmooth, 0.5) * dt)
+        cam.CFrame = cur:Lerp(goal, math.clamp(alpha, 0.02, 1))
+    end
 
     if aimInfo then
         local vp = cam.ViewportSize
@@ -3036,7 +3040,7 @@ addToggle(pCombat, "启用自瞄", false, function(v)
     S.aim = v
     notify("自瞄 " .. (v and "开" or "关"), v and "ok" or "info", 1.4)
 end)
-addToggle(pCombat, "按住 Q 瞄准 (关=常开)", true, function(v) S.aimHold = v end)
+addToggle(pCombat, "子弹追踪（开火瞬间对准头部）", false, function(v) S.bulletTrack = v end)
 addToggle(pCombat, "左键开火时自瞄", true, function(v) S.aimOnFire = v end)
 addToggle(pCombat, "瞄准队友", false, function(v) S.aimTeam = v end)
 addToggle(pCombat, "隔墙忽略", true, function(v) S.aimWall = v end)
