@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v7.6"
-local BUILD   = "2026-11-01 09:20"
+local VERSION = "v7.7"
+local BUILD   = "2026-11-01 09:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -33,7 +33,7 @@ local S = {
     fly = false, flySpeed = 55,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false,
+    aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "cframe", antiSnap = true,
@@ -753,6 +753,57 @@ end
 
 pcall(function() RS:UnbindFromRenderStep("XHubAim") end)
 RS:BindToRenderStep("XHubAim", Enum.RenderPriority.Camera.Value + 1, aimTick)
+
+--==== 静默瞄准（Silent Aim）：视角不动，只在开火瞬间改写相机方向 1~6 帧 ====
+local silent = { saved = nil, untilT = 0, pos = nil }
+
+local function silentTarget()
+    if not S.aim then return nil end
+    return findTarget()
+end
+
+UIS.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+    if not (S.aim and S.silentAim) or main.Visible then return end
+    local t = silentTarget()
+    if t then
+        silent.saved = cam.CFrame
+        silent.pos = t.Position
+        silent.untilT = os.clock() + (S.silentTime or 0.09)
+    end
+end)
+
+pcall(function() RS:UnbindFromRenderStep("XHubSilent") end)
+RS:BindToRenderStep("XHubSilent", Enum.RenderPriority.Last.Value - 4, function()
+    if not silent.saved then return end
+    if os.clock() > silent.untilT then
+        pcall(function() cam.CFrame = silent.saved end)
+        silent.saved, silent.pos = nil, nil
+        return
+    end
+    if silent.pos then
+        pcall(function() cam.CFrame = CFrame.lookAt(silent.saved.Position, silent.pos) end)
+    end
+end)
+
+-- 兼容：如果执行器支持 hookfunction，再挂一层 ScreenPointToRay（更隐蔽）
+pcall(function()
+    if not (hookfunction and newcclosure) then return end
+    local c = workspace.CurrentCamera
+    local spr = c and c.ScreenPointToRay
+    if type(spr) ~= "function" then return end
+    hookfunction(spr, newcclosure(function(self, x, y, ...)
+        if S.silentAim and S.aim and not main.Visible then
+            local t = silentTarget()
+            if t then
+                local ok, sp = pcall(function() return self:WorldToViewportPoint(t.Position) end)
+                if ok and sp then return spr(self, sp.X, sp.Y, ...) end
+            end
+        end
+        return spr(self, x, y, ...)
+    end))
+end)
 
 -- 双保险: 有些游戏在 RenderStepped 里覆写相机,同帧再补一次
 RS.RenderStepped:Connect(function()
@@ -3041,6 +3092,11 @@ addToggle(pCombat, "启用自瞄", false, function(v)
     notify("自瞄 " .. (v and "开" or "关"), v and "ok" or "info", 1.4)
 end)
 addToggle(pCombat, "子弹追踪（开火瞬间对准头部）", false, function(v) S.bulletTrack = v end)
+addToggle(pCombat, "静默瞄准（视角不动，只改开火方向）", false, function(v)
+    S.silentAim = v
+    notify(v and "静默瞄准已开：开火瞬间改写相机方向，随后立刻恢复" or "静默瞄准已关闭", "info", 2.6)
+end)
+addSlider(pCombat, "静默改写时长 ×0.01s（9 = 90ms）", 3, 20, 9, function(v) S.silentTime = v / 100 end)
 addToggle(pCombat, "左键开火时自瞄", true, function(v) S.aimOnFire = v end)
 addToggle(pCombat, "瞄准队友", false, function(v) S.aimTeam = v end)
 addToggle(pCombat, "隔墙忽略", true, function(v) S.aimWall = v end)
