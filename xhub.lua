@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v6.5"
-local BUILD   = "2026-11-01 05:45"
+local VERSION = "v6.6"
+local BUILD   = "2026-11-01 06:05"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -45,7 +45,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "zoom",
+    tpMode = "zoom", doors = false,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -1567,7 +1567,7 @@ local ENT_KW = { "Rush", "Ambush", "Eyes", "Screech", "Figure", "Hide", "Seek", 
                  "NPC", "Entity", "Bot", "Zombie", "Ghost" }
 local entStore = {}
 
-local ENT_IGNORE = { "baserig", "humanoidrig", "dummy", "template", "door", "doorframe", "doorway", "wall" }
+local ENT_IGNORE = { "baserig", "humanoidrig", "dummy", "template", "wall" }
 
 -- 精确实体名表：只比对“模型自己的名字”，绝不扫子对象（否则门里的 FigureAttack 会误报）
 local ENT_STRICT = { "rushmoving", "rush", "ambushmoving", "ambush", "seek", "figure",
@@ -1779,7 +1779,7 @@ local function nameHits(v, list)
     return false
 end
 
-local ITEM_EXCLUDE = { "candle", "蜡烛", "drawer", "container", "door", "doorframe", "doorway", "wall" }
+local ITEM_EXCLUDE = { "candle", "蜡烛", "drawer", "container", "wall" }
 
 local function isItemInst(v)
     local nm = (v and v.Name or ""):lower()
@@ -2586,6 +2586,7 @@ end)
 local SCENE_KW = { "closet", "wardrobe", "bed", "locker", "drawer", "dresser",
                    "crate", "柜", "床", "抽屉" }
 local sceneStore = {}
+local doorStore = {}
 
 local function ensureScene(m)
     local o = sceneStore[m]
@@ -2599,20 +2600,56 @@ local function ensureScene(m)
     o.hl.Parent = m
 end
 
+local function ensureDoor(m)
+    local o = doorStore[m]
+    if not o then o = {}; doorStore[m] = o end
+    if not (o.hl and o.hl.Parent) then
+        o.hl = mk("Highlight", { Name = "XHubDoor",
+            FillColor = Color3.fromRGB(255, 205, 80), FillTransparency = 0.55,
+            OutlineColor = Color3.fromRGB(255, 235, 160), OutlineTransparency = 0,
+            DepthMode = Enum.HighlightDepthMode.AlwaysOnTop }, m)
+    end
+    o.hl.Parent = m
+    local part = firstPart(m)
+    if not part then return end
+    if not (o.tag and o.tag.Parent) then
+        o.tag = mk("BillboardGui", { Name = "XHubDoorTag", Size = UDim2.fromOffset(160, 28),
+            AlwaysOnTop = true, Adornee = part, StudsOffset = Vector3.new(0, 2, 0) }, part)
+        o.lbl = mk("TextLabel", { Text = m.Name, BackgroundTransparency = 1,
+            Size = UDim2.new(1, 0, 0, 14), Font = Enum.Font.GothamBold, TextSize = 12,
+            TextColor3 = Color3.fromRGB(255, 220, 120), TextStrokeTransparency = 0.35 }, o.tag)
+        o.dlbl = mk("TextLabel", { Text = "", BackgroundTransparency = 1,
+            Position = UDim2.new(0, 0, 0, 12), Size = UDim2.new(1, 0, 0, 12),
+            Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = Color3.fromRGB(255, 240, 200),
+            TextStrokeTransparency = 0.5 }, o.tag)
+    end
+    o.tag.Adornee = part
+    o.tag.Parent = part
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if o.dlbl and hrp then
+        o.dlbl.Text = ("%.0f m"):format((part.Position - hrp.Position).Magnitude)
+    end
+end
+
 task.spawn(function()
     while true do
         task.wait(S.fastScan and 1.5 or 0.6)
-        if S.scenery then
+        if S.scenery or S.doors then
             local n = 0
             for _, m in ipairs(scanAll(4000)) do
                 if m:IsA("Model") then
                     n = n + 1
                     if n > 4000 then break end
                     local nm = m.Name:lower()
-                    for _, k in ipairs(SCENE_KW) do
-                        if nm:find(k:lower(), 1, true) then
-                            pcall(ensureScene, m)
-                            break
+                    if S.doors and (nm:find("door", 1, true) or nm:find("门", 1, true)) then
+                        pcall(ensureDoor, m)
+                    elseif S.scenery then
+                        for _, k in ipairs(SCENE_KW) do
+                            if nm:find(k:lower(), 1, true) then
+                                pcall(ensureScene, m)
+                                break
+                            end
                         end
                     end
                 end
@@ -2622,9 +2659,19 @@ task.spawn(function()
                 if not m.Parent then destroyEnt(o); dead[#dead + 1] = m end
             end
             for _, m in ipairs(dead) do sceneStore[m] = nil end
-        elseif next(sceneStore) ~= nil then
+            local dead2 = {}
+            for m, o in pairs(doorStore) do
+                if not m.Parent then destroyEnt(o); dead2[#dead2 + 1] = m end
+            end
+            for _, m in ipairs(dead2) do doorStore[m] = nil end
+        end
+        if not S.scenery and next(sceneStore) ~= nil then
             for _, o in pairs(sceneStore) do destroyEnt(o) end
             sceneStore = {}
+        end
+        if not S.doors and next(doorStore) ~= nil then
+            for _, o in pairs(doorStore) do destroyEnt(o) end
+            doorStore = {}
         end
     end
 end)
@@ -2696,6 +2743,10 @@ addToggle(pVisual, "夜视（提亮+去雾，纯客户端）", false, function(v
 addToggle(pVisual, "场景物体绘制（柜子/床/抽屉，青色）", false, function(v)
     S.scenery = v
     notify(v and "场景绘制: 柜子/床/抽屉 会亮青色（纯渲染）" or "场景绘制已关闭", "info", 2.4)
+end)
+addToggle(pVisual, "门绘制（门/门框，金色 + 距离）", false, function(v)
+    S.doors = v
+    notify(v and "门绘制: 门会亮金色并显示名字/距离" or "门绘制已关闭", "info", 2.4)
 end)
 addToggle(pVisual, "实体绘制（怪物/NPC/Entity）", false, function(v)
     S.entityEsp = v
