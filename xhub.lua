@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v7.7"
-local BUILD   = "2026-11-01 09:40"
+local VERSION = "v7.8"
+local BUILD   = "2026-11-01 10:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -33,7 +33,7 @@ local S = {
     fly = false, flySpeed = 55,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09,
+    aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "cframe", antiSnap = true,
@@ -523,6 +523,10 @@ end
 RS.RenderStepped:Connect(function(dt)
     if not S.fly then return end
     local cap = flyCapNow()
+    if S.govEnabled and S.flyGov then
+        local govCap = math.floor((S.govMax or 12) / (S.govWindow or 0.6))
+        if govCap > 4 and cap > govCap then cap = govCap end
+    end
     if S.flySpeed > cap then S.flySpeed = cap end
     local c = charOf(lp); local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
@@ -683,6 +687,27 @@ local function findTarget()
                 if onScreen then
                     local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
                     if d < bestD and canSee(part) then best, bestD = part, d end
+                end
+            end
+        end
+    end
+    -- NPC / 怪物目标
+    if S.aimNpc then
+        local n = 0
+        for _, m in ipairs(scanAll(3000)) do
+            if m:IsA("Model") and not Players:GetPlayerFromCharacter(m) then
+                n = n + 1
+                if n > 3000 then break end
+                local hum = m:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health > 0 then
+                    local part = m:FindFirstChild("Head") or m:FindFirstChild("HumanoidRootPart", true)
+                    if part then
+                        local sp, onScreen = cam:WorldToViewportPoint(part.Position)
+                        if onScreen then
+                            local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+                            if d < bestD and canSee(part) then best, bestD = part, d end
+                        end
+                    end
                 end
             end
         end
@@ -1761,7 +1786,12 @@ local function ensureEnt(m)
     end
     o.tag.Adornee = head
     o.tag.Parent = head
-    if o.lbl then o.lbl.Text = m.Name end
+    local showName = m.Name
+    if S.espNpc then
+        local hum = m:FindFirstChildOfClass("Humanoid")
+        if hum then showName = ("%s  [%d]"):format(m.Name, math.floor(hum.Health)) end
+    end
+    if o.lbl then o.lbl.Text = showName end
     local d = distTo(m)
     if o.dlbl then o.dlbl.Text = d and ("%.0f m"):format(d) or "" end
 
@@ -1776,7 +1806,7 @@ end
 task.spawn(function()
     while true do
         task.wait(S.fastScan and 1.0 or 0.4)
-        if S.entityEsp then
+        if S.entityEsp or S.espNpc then
             local n = 0
             for _, d in ipairs(scanAll(4000)) do
                 n = n + 1
@@ -3002,6 +3032,10 @@ addToggle(pVisual, "名字", true, function(v) S.espName = v end)
 addToggle(pVisual, "血量条", true, function(v) S.espHp = v end)
 addToggle(pVisual, "距离", true, function(v) S.espDist = v end)
 addToggle(pVisual, "显示队友", false, function(v) S.espTeam = v end)
+addToggle(pVisual, "NPC / 怪物 ESP", false, function(v)
+    S.espNpc = v
+    notify(v and "NPC ESP 已开启（方框+名字+血量+距离）" or "NPC ESP 已关闭", "info", 2.2)
+end)
 addToggle(pVisual, "穿墙可见", true, function(v) S.espOccluded = v end)
 addToggle(pVisual, "彩虹上色", false, function(v) S.espRainbow = v end)
 addSection(pVisual, "环境")
@@ -3099,6 +3133,10 @@ end)
 addSlider(pCombat, "静默改写时长 ×0.01s（9 = 90ms）", 3, 20, 9, function(v) S.silentTime = v / 100 end)
 addToggle(pCombat, "左键开火时自瞄", true, function(v) S.aimOnFire = v end)
 addToggle(pCombat, "瞄准队友", false, function(v) S.aimTeam = v end)
+addToggle(pCombat, "瞄准 NPC / 怪物", false, function(v)
+    S.aimNpc = v
+    notify(v and "自瞄已包含 NPC/怪物" or "自瞄只锁玩家", "info", 2.2)
+end)
 addToggle(pCombat, "隔墙忽略", true, function(v) S.aimWall = v end)
 addToggle(pCombat, "显示 FOV", true, function(v) S.showFov = v end)
 addSlider(pCombat, "平滑", 1, 30, S.aimSmooth, function(v) S.aimSmooth = v end)
