@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v8.3"
-local BUILD   = "2026-11-01 13:05"
+local VERSION = "v8.4"
+local BUILD   = "2026-11-01 13:35"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -33,7 +33,7 @@ local S = {
     fly = false, flySpeed = 55,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = true, remoteAimAll = false, remoteProbe = false,
+    aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "cframe", antiSnap = true,
@@ -804,9 +804,10 @@ end
 
 local remoteHooked = false
 
-local function argSig(args)
+local function argSig(args, n)
     local parts = {}
-    for i = 1, math.min(#args, 6) do
+    n = n or #args
+    for i = 1, math.min(n, 6) do
         local v = args[i]
         local tv = typeof(v)
         if tv == "Vector3" then
@@ -830,15 +831,14 @@ local function installRemoteAim()
     old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local m = getnamecallmethod()
         local inWindow = os.clock() < fireUntil
-        -- 注意：不能要求 checkcaller()，因为开火是游戏脚本发起的（caller 不是我们）
         if (m == "FireServer" or m == "InvokeServer") and inWindow then
-            local okName, nm = pcall(function() return tostring(self.Name):lower() end)
+            local n = select("#", ...)          -- 关键：保留 nil 参数，不能被 # 截断
             local args = { ... }
+            local okName, nm = pcall(function() return tostring(self.Name):lower() end)
 
-            -- 探针：把开火窗口内所有远程打出来
             if S.remoteProbe then
-                print(("[probe] %s  %s  (%d args)"):format(tostring(self.Name), m, #args))
-                print("[probe]   " .. argSig(args))
+                print(("[probe] %s  %s  (%d args)"):format(tostring(self.Name), m, n))
+                print("[probe]   " .. argSig(args, n))
             end
 
             if S.remoteAim then
@@ -854,33 +854,57 @@ local function installRemoteAim()
                         local c = charOf(lp)
                         local hrp = c and c:FindFirstChild("HumanoidRootPart")
                         local changed = false
-                        for i, v in ipairs(args) do
+                        for i = 1, n do
+                            local v = args[i]
                             local tv = typeof(v)
                             if tv == "Vector3" then
+                                local dir
                                 if v.Magnitude <= 3 and hrp then
-                                    args[i] = (pt - hrp.Position).Unit
+                                    dir = (pt - hrp.Position)
                                 else
-                                    args[i] = pt
+                                    dir = pt - v
                                 end
-                                changed = true
+                                if dir.Magnitude > 0.01 then
+                                    dir = dir.Unit
+                                    -- 限制偏转角：默认 25 度，避免服务器判定“这是外挂方向”
+                                    local orig
+                                    if tv == "Vector3" and v.Magnitude <= 3 then
+                                        orig = v.Unit
+                                    else
+                                        orig = Vector3.zero
+                                    end
+                                    if orig.Magnitude < 0.1 then
+                                        args[i] = (v.Magnitude <= 3) and dir or (v + dir * dir.Magnitude)
+                                    else
+                                        local ang = math.deg(math.acos(math.clamp(orig:Dot(dir), -1, 1)))
+                                        if ang <= (S.silentMaxAngle or 25) then
+                                            args[i] = dir
+                                        end
+                                    end
+                                    changed = true
+                                end
                             elseif tv == "CFrame" then
-                                args[i] = CFrame.lookAt(v.Position, pt)
-                                changed = true
+                                local want = CFrame.lookAt(v.Position, pt)
+                                local ang = math.deg(math.acos(math.clamp(v.LookVector:Dot(want.LookVector), -1, 1)))
+                                if ang <= (S.silentMaxAngle or 25) then
+                                    args[i] = want
+                                    changed = true
+                                end
                             end
                         end
                         if changed then
                             if S.remoteProbe then
-                                print(("[probe]   >>> 已改写 %s 的方向参数"):format(tostring(self.Name)))
+                                print(("[probe]   >>> 已改写 %s 的方向参数（偏转受限）"):format(tostring(self.Name)))
                             end
-                            return old(self, table.unpack(args))
+                            return old(self, table.unpack(args, 1, n))
                         end
                     end
                 end
             end
+            return old(self, table.unpack(args, 1, n))
         end
         return old(self, ...)
-    end))
-    remoteHooked = true
+    end))    remoteHooked = true
     print("[XHub] remote hook installed")
 end
 pcall(installRemoteAim)
@@ -897,6 +921,7 @@ UIS.InputBegan:Connect(function(input, gp)
     if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
     if main.Visible then return end
     if not (S.silentAim or S.btStandalone) then return end
+    if S.silentAim and S.remoteAim then return end   -- 远程改写已生效时，相机一律不动（真静默）
     local wasAim = S.aim
     if not wasAim then S.aim = true end
     local t = nil
@@ -3334,6 +3359,7 @@ addToggle(pCombat, "静默瞄准（视角不动，只改开火方向）", false,
     notify(v and "静默瞄准已开：开火瞬间改写相机方向，随后立刻恢复" or "静默瞄准已关闭", "info", 2.6)
 end)
 addSlider(pCombat, "静默改写时长 ×0.01s（9 = 90ms）", 3, 20, 9, function(v) S.silentTime = v / 100 end)
+addSlider(pCombat, "远程改写最大偏转角 度（防判）", 5, 90, 25, function(v) S.silentMaxAngle = v end)
 addToggle(pCombat, "左键开火时自瞄", true, function(v) S.aimOnFire = v end)
 addToggle(pCombat, "瞄准队友", false, function(v) S.aimTeam = v end)
 addToggle(pCombat, "瞄准 NPC / 怪物", false, function(v)
