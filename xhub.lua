@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v7.9"
-local BUILD   = "2026-11-01 10:25"
+local VERSION = "v8.0"
+local BUILD   = "2026-11-01 10:45"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -693,24 +693,26 @@ local function findTarget()
     end
     -- NPC / 怪物目标
     if S.aimNpc then
-        local n = 0
-        for _, m in ipairs(scanAll(3000)) do
-            if m:IsA("Model") and not Players:GetPlayerFromCharacter(m) then
+        pcall(function()
+            local n = 0
+            for _, m in ipairs(workspace:GetDescendants()) do
                 n = n + 1
                 if n > 3000 then break end
-                local hum = m:FindFirstChildOfClass("Humanoid")
-                if hum and hum.Health > 0 then
-                    local part = m:FindFirstChild("Head") or m:FindFirstChild("HumanoidRootPart", true)
-                    if part then
-                        local sp, onScreen = cam:WorldToViewportPoint(part.Position)
-                        if onScreen then
-                            local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
-                            if d < bestD and canSee(part) then best, bestD = part, d end
+                if m:IsA("Model") and not Players:GetPlayerFromCharacter(m) then
+                    local hum = m:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 then
+                        local part = m:FindFirstChild("Head") or m:FindFirstChild("HumanoidRootPart", true)
+                        if part then
+                            local sp, onScreen = cam:WorldToViewportPoint(part.Position)
+                            if onScreen then
+                                local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+                                if d < bestD and canSee(part) then best, bestD = part, d end
+                            end
                         end
                     end
                 end
             end
-        end
+        end)
     end
     return best
 end
@@ -748,7 +750,8 @@ local function aimTick(dt)
         return
     end
 
-    local t = findTarget()
+    local okT, t = pcall(findTarget)
+    if not okT then t = nil end
     if not t then
         aimGoal = nil
         if aimInfo then aimInfo.Text = "自瞄: FOV 内无目标" end
