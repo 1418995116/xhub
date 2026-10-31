@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v6.3"
-local BUILD   = "2026-11-01 05:00"
+local VERSION = "v6.4"
+local BUILD   = "2026-11-01 05:25"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -1779,7 +1779,13 @@ local function nameHits(v, list)
     return false
 end
 
+local ITEM_EXCLUDE = { "candle", "蜡烛", "drawer", "container" }
+
 local function isItemInst(v)
+    local nm = (v and v.Name or ""):lower()
+    for _, k in ipairs(ITEM_EXCLUDE) do
+        if nm:find(k, 1, true) then return false end
+    end
     if v:IsA("Tool") then return true end
     return nameHits(v, ITEM_KW)
 end
@@ -2039,7 +2045,10 @@ task.spawn(function()
         local iv = S.pickupInterval or 0.12
         if iv < 0.05 then iv = 0.05 end
         task.wait(iv)
-        if S.pickup then pcall(rangePickup, S.pickupRadius) end
+        if S.pickup then
+            pcall(rangePickup, S.pickupRadius)
+            pcall(autoPrompts, S.pickupRadius)
+        end
         if S.autoPrompt then pcall(autoPrompts, S.promptRadius) end
     end
 end)
@@ -2083,7 +2092,8 @@ local function setThirdPerson(on)
     end
 end
 
-pcall(function() RS:UnbindFromRenderStep("XHubCam") end)RS:BindToRenderStep("XHubCam", Enum.RenderPriority.Camera.Value + 20, function()
+pcall(function() RS:UnbindFromRenderStep("XHubCam") end)
+RS:BindToRenderStep("XHubCam", Enum.RenderPriority.Last.Value - 3, function()
     if not S.thirdPerson or S.tpMode ~= "orbit" then return end
     local d = UIS:GetMouseDelta()
     orbit.yaw = orbit.yaw - d.X * 0.0035
@@ -2365,28 +2375,43 @@ task.spawn(function()
     end
 end)
 
+local nearestTrigger
+
 task.spawn(function()
     while true do
         task.wait(0.4)
         if S.autoHide then
-            local bestD, bestN = math.huge, nil
-            for m in pairs(entStore) do
-                local nm = m.Name:lower()
-                local ok = not S.hideOnlyRush
-                if not ok then
-                    for _, k in ipairs(HIDE_TRIGGER) do
-                        if nm:find(k, 1, true) then ok = true; break end
-                    end
-                end
-                if ok then
-                    local d = distTo(m)
-                    if d and d < bestD then bestD, bestN = d, m.Name end
-                end
-            end
-            if bestN and bestD <= S.hideDist then hideSmart() end
+            local name, d = nearestTrigger()
+            if name and d <= S.hideDist then hideSmart() end
         end
     end
 end)
+
+--==================== 躲避触发扫描（不依赖 ESP，独立按名字找） ====================
+local TRIGGER_STRICT = { "rushmoving", "rush", "ambush", "ambushmoving" }
+local TRIGGER_ALL = { "rushmoving", "rush", "ambush", "ambushmoving",
+                      "seek", "glitch", "glitchcube", "figure", "dupe" }
+
+nearestTrigger = function()
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    local list = S.hideOnlyRush and TRIGGER_STRICT or TRIGGER_ALL
+    local bestD, bestN = math.huge, nil
+    for _, m in ipairs(scanAll(3000)) do
+        if m:IsA("Model") then
+            local nm = m.Name:lower()
+            for _, k in ipairs(list) do
+                if nm:find(k, 1, true) then
+                    local d = distTo(m)
+                    if d and d < bestD then bestD, bestN = d, m.Name end
+                    break
+                end
+            end
+        end
+    end
+    return bestN, bestD
+end
 
 --==================== 刷新即时捕获 + 声音线索（放在所有定义之后） ====================
 local SOUND_HINT = { "rush", "ambush", "seek", "figure", "screech" }
