@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v5.4"
-local BUILD   = "2026-11-01 02:48"
+local VERSION = "v5.5"
+local BUILD   = "2026-11-01 03:05"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -1574,7 +1574,7 @@ local ENT_KW = { "Rush", "Ambush", "Eyes", "Screech", "Figure", "Hide", "Seek", 
                  "NPC", "Entity", "Bot", "Zombie", "Ghost" }
 local entStore = {}
 
-local ENT_IGNORE = { "baserig", "humanoidrig", "dummy", "template", "rig" }
+local ENT_IGNORE = { "baserig", "humanoidrig", "dummy", "template" }
 
 local function isEntityModel(m)
     if not m:IsA("Model") then return false end
@@ -1592,14 +1592,34 @@ local function isEntityModel(m)
     return false
 end
 
-local function scanTargets()
-    local out = {}
+local function scanAll(cap)
+    local out, n = {}, 0
+    cap = cap or 5000
+    -- 先扫 CurrentRooms 子树(房间内实体/物品都在这里)
     local cr = workspace:FindFirstChild("CurrentRooms")
     if cr then
-        for _, d in ipairs(cr:GetDescendants()) do out[#out + 1] = d end
+        for _, d in ipairs(cr:GetDescendants()) do
+            n = n + 1
+            if n > cap then break end
+            out[#out + 1] = d
+        end
     end
-    for _, d in ipairs(workspace:GetChildren()) do
-        if d ~= cr then out[#out + 1] = d end
+    -- 再扫 workspace 其它顶层子树(实体也可能挂在某个 Folder / Model 下)
+    if n <= cap then
+        for _, child in ipairs(workspace:GetChildren()) do
+            if n > cap then break end
+            if child ~= cr then
+                n = n + 1
+                out[#out + 1] = child
+                if n <= cap then
+                    for _, d in ipairs(child:GetDescendants()) do
+                        n = n + 1
+                        if n > cap then break end
+                        out[#out + 1] = d
+                    end
+                end
+            end
+        end
     end
     return out
 end
@@ -1681,10 +1701,10 @@ end
 
 task.spawn(function()
     while true do
-        task.wait(S.fastScan and 0.8 or 0.3)
+        task.wait(S.fastScan and 1.0 or 0.4)
         if S.entityEsp then
             local n = 0
-            for _, d in ipairs(scanTargets()) do
+            for _, d in ipairs(scanAll(4000)) do
                 n = n + 1
                 if n > 3000 then break end
                 if d:IsA("Model") and isEntityModel(d) then
@@ -1756,26 +1776,21 @@ local function ensureItem(v)
     end
 end
 
+local pickupParts = {}
+
 local function rangePickup(radius)
     if not firetouchinterest then return 0 end
     local c = charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if not hrp then return 0 end
     local n = 0
-    local roots = { workspace, workspace:FindFirstChild("CurrentRooms") }
-    for _, root in ipairs(roots) do
-        if root then
-            for _, v in ipairs(root:GetDescendants()) do
-                if v:IsA("BasePart") and v.Parent and isItemInst(v.Parent) then
-                    if (v.Position - hrp.Position).Magnitude <= radius then
-                        pcall(firetouchinterest, v, hrp, 0)
-                        pcall(firetouchinterest, v, hrp, 1)
-                        local cd = v:FindFirstChildOfClass("ClickDetector")
-                        if cd and fireclickdetector then pcall(fireclickdetector, cd) end
-                        n = n + 1
-                    end
-                end
-            end
+    for _, v in ipairs(pickupParts) do
+        if v.Parent and (v.Position - hrp.Position).Magnitude <= radius then
+            pcall(firetouchinterest, v, hrp, 0)
+            pcall(firetouchinterest, v, hrp, 1)
+            local cd = v:FindFirstChildOfClass("ClickDetector")
+            if cd and fireclickdetector then pcall(fireclickdetector, cd) end
+            n = n + 1
         end
     end
     return n
@@ -1917,28 +1932,37 @@ local function walkTo(pos, timeoutSec)
 end
 
 local function nearestDoorPos()
-    local rooms = workspace:FindFirstChild("CurrentRooms")
     local c = charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    if not rooms or not hrp then return nil end
+    if not hrp then return nil end
     local best, bestD = nil, math.huge
-    for _, room in ipairs(rooms:GetChildren()) do
-        local door = room:FindFirstChild("Door")
-        local part = door and door:FindFirstChildWhichIsA("BasePart", true)
-        if part then
-            local d = (part.Position - hrp.Position).Magnitude
-            if d < bestD then best, bestD = part, d end
+    local cr = workspace:FindFirstChild("CurrentRooms")
+    local roots = {}
+    if cr then roots[#roots + 1] = cr end
+    roots[#roots + 1] = workspace
+    for _, root in ipairs(roots) do
+        for _, d in ipairs(root:GetDescendants()) do
+            -- 名字里带 door 的模型/部件都算候选（Door / DoorFrame / Doorway …）
+            local nm = d.Name:lower()
+            if nm:find("door", 1, true) then
+                local part = d:IsA("BasePart") and d or d:FindFirstChildWhichIsA("BasePart", true)
+                if part and part.Parent then
+                    local dd = (part.Position - hrp.Position).Magnitude
+                    if dd < bestD then best, bestD = part, dd end
+                end
+            end
+            if bestD < 6 then break end
         end
     end
-    return best and best.Position or nil
+    return best and best.Position or nil, bestD
 end
 
 task.spawn(function()
     while true do
-        task.wait(S.fastScan and 1.0 or 0.35)
+        task.wait(S.fastScan and 1.5 or 0.35)
         if S.itemEsp then
             local n = 0
-            for _, v in ipairs(scanTargets()) do
+            for _, v in ipairs(scanAll(4000)) do
                 n = n + 1
                 if n > 3000 then break end
                 if (v:IsA("Tool") or v:IsA("Model")) and isItemInst(v) then
@@ -1955,6 +1979,15 @@ task.spawn(function()
         elseif next(itemStore) ~= nil then
             for v, o in pairs(itemStore) do destroyEnt(o) end
             itemStore = {}
+        end
+        if S.pickup then
+            local cache = {}
+            for _, v in ipairs(scanAll(2500)) do
+                if v:IsA("BasePart") and v.Parent and isItemInst(v.Parent) then
+                    cache[#cache + 1] = v
+                end
+            end
+            pickupParts = cache
         end
     end
 end)
@@ -2231,7 +2264,21 @@ addButton(pVisual, "恢复默认视角", function() setThirdPerson(false) end)
 addSection(pVisual, "性能")
 addToggle(pVisual, "优化模式（降低扫描频率）", true, function(v)
     S.fastScan = v
-    notify(v and "优化模式: 实体 0.8s / 物品 1.0s 扫描" or "优化模式关闭: 0.3s 扫描（更卡）", "info", 2.4)
+    notify(v and "优化模式: 实体 1.0s / 物品 1.5s 扫描" or "优化模式关闭: 扫描更频繁（更卡）", "info", 2.4)
+end)
+addButton(pVisual, "打印候选实体到 F9（调试）", function()
+    local n = 0
+    for _, d in ipairs(scanAll(4000)) do
+        if d:IsA("Model") then
+            local h = d:FindFirstChildOfClass("Humanoid")
+            local r = d:FindFirstChild("HumanoidRootPart", true)
+            if h or r then
+                n = n + 1
+                print(("[ent] %s"):format(d:GetFullName()))
+            end
+        end
+    end
+    notify(("已打印 %d 个候选模型"):format(n), "info", 3)
 end)
 
 addSection(pCombat, "AIMBOT")
@@ -2293,7 +2340,16 @@ addSlider(pAuto, "高空高度 studs", 50, 800, S.skyHeight, function(v) S.skyHe
 addSlider(pAuto, "高空停留 秒", 3, 20, S.skyTime, function(v) S.skyTime = v end)
 
 addSection(pAuto, "寻路")
-addButton(pAuto, "走向最近的门", function()
+addButton(pAuto, "走向最近的门（模拟移动）", function()
+    local pos, d = nearestDoorPos()
+    if not pos then
+        notify("没找到任何名字含 door 的对象", "err", 3)
+        return
+    end
+    simWalk(pos, 20)
+    notify(("模拟移动 → 最近的门（%.0f studs）"):format(d or 0), "info", 2.6)
+end)
+addButton(pAuto, "走向最近的门（寻路 API）", function()
     local pos = nearestDoorPos()
     if not pos then
         notify("没找到门（CurrentRooms 里没有 Door）", "err", 3)
