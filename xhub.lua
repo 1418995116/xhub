@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v8.5"
-local BUILD   = "2026-11-01 14:05"
+local VERSION = "v8.6"
+local BUILD   = "2026-11-01 14:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -33,7 +33,7 @@ local S = {
     fly = false, flySpeed = 55,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25,
+    aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "cframe", antiSnap = true,
@@ -716,6 +716,16 @@ local function findTarget()
     end
     return best
 end
+local function leadPoint(part)
+    if not part then return nil end
+    if not S.leadEnabled then return part.Position end
+    local spd = math.max(S.leadSpeed or 600, 50)
+    local vel = part.AssemblyLinearVelocity
+    local dist = (part.Position - cam.CFrame.Position).Magnitude
+    local tt = dist / spd
+    return part.Position + vel * tt * (S.leadScale or 1)
+end
+
 local aimInfo
 local aimWant, aimGoal = false, nil
 
@@ -760,7 +770,7 @@ local function aimTick(dt)
 
     if cam.CameraType ~= Enum.CameraType.Custom then cam.CameraType = Enum.CameraType.Custom end
     local cur = cam.CFrame
-    local goal = CFrame.lookAt(cur.Position, t.Position)
+    local goal = CFrame.lookAt(cur.Position, leadPoint(t) or t.Position)
     aimGoal = goal
     if S.bulletTrack then
         -- 子弹追踪：这一帧直接把相机对准目标（工具从相机方向发射时 = 命中）
@@ -798,7 +808,7 @@ local function remoteAimPoint()
     if not (S.silentAim or S.btStandalone or S.bulletTrack) then return nil end
     if not S.remoteAim then return nil end
     local ok, t = pcall(findTarget)
-    if ok and t then return t.Position end
+    if ok and t then return leadPoint(t) or t.Position end
     return nil
 end
 
@@ -930,7 +940,7 @@ UIS.InputBegan:Connect(function(input, gp)
     S.aim = wasAim
     if t then
         silent.saved = cam.CFrame
-        silent.pos = t.Position
+        silent.pos = leadPoint(t) or t.Position
         if wasAim then
             silent.untilT = os.clock() + (S.silentTime or 0.09)
         else
@@ -3373,6 +3383,12 @@ addSlider(pCombat, "静默改写时长 ×0.01s（9 = 90ms）", 3, 20, 9, functio
 addSlider(pCombat, "远程改写最大偏转角 度（防判）", 5, 90, 25, function(v) S.silentMaxAngle = v end)
 addToggle(pCombat, "左键开火时自瞄", true, function(v) S.aimOnFire = v end)
 addToggle(pCombat, "瞄准队友", false, function(v) S.aimTeam = v end)
+addToggle(pCombat, "预判瞄准（Lead Target，打移动目标）", false, function(v)
+    S.leadEnabled = v
+    notify(v and "预判已开：按目标速度 + 弹速算提前量" or "预判已关（直接锁当前位置）", "info", 2.6)
+end)
+addSlider(pCombat, "子弹速度 studs/s（预判用）", 100, 2000, 600, function(v) S.leadSpeed = v end)
+addSlider(pCombat, "提前量倍率 ×0.1（10 = 1.0x）", 1, 25, 10, function(v) S.leadScale = v / 10 end)
 addToggle(pCombat, "瞄准 NPC / 怪物", false, function(v)
     S.aimNpc = v
     notify(v and "自瞄已包含 NPC/怪物" or "自瞄只锁玩家", "info", 2.2)
