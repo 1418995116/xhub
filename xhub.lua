@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v7.8"
-local BUILD   = "2026-11-01 10:00"
+local VERSION = "v7.9"
+local BUILD   = "2026-11-01 10:25"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -33,7 +33,7 @@ local S = {
     fly = false, flySpeed = 55,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true,
+    aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "cframe", antiSnap = true,
@@ -790,12 +790,21 @@ end
 UIS.InputBegan:Connect(function(input, gp)
     if gp then return end
     if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-    if not (S.aim and S.silentAim) or main.Visible then return end
-    local t = silentTarget()
+    if main.Visible then return end
+    if not (S.silentAim or S.btStandalone) then return end
+    local wasAim = S.aim
+    if not wasAim then S.aim = true end
+    local t = nil
+    pcall(function() t = findTarget() end)
+    S.aim = wasAim
     if t then
         silent.saved = cam.CFrame
         silent.pos = t.Position
-        silent.untilT = os.clock() + (S.silentTime or 0.09)
+        if wasAim then
+            silent.untilT = os.clock() + (S.silentTime or 0.09)
+        else
+            silent.untilT = os.clock() + 0.25   -- 独立子弹追踪：多留几帧确保命中的那一发被改写
+        end
     end
 end)
 
@@ -989,7 +998,7 @@ task.spawn(function()
                             hrp.AssemblyLinearVelocity = Vector3.zero
                             hrp.CFrame = CFrame.new(hrp.Position.X, gy + 3.2, hrp.Position.Z)
                         end)
-                        notify("检测到陷地，已抬回地面", "warn", 2)
+                        -- 静默抬回，不再弹通知（避免和其他功能互相顶）
                     end
                 end
             else
@@ -2928,6 +2937,72 @@ workspace.DescendantAdded:Connect(function(d)
     end
 end)
 
+--==== NPC / 怪物 ESP（独立模块：方框 + 名字 + 血量 + 距离） ====
+local npcStore = {}
+
+local function ensureNpcEsp(m)
+    local o = npcStore[m]
+    if not o then o = {}; npcStore[m] = o end
+    if not (o.hl and o.hl.Parent) then
+        o.hl = mk("Highlight", { Name = "XHubNpcEsp",
+            FillColor = Color3.fromRGB(90, 255, 120), FillTransparency = 0.75,
+            OutlineColor = Color3.fromRGB(190, 255, 200), OutlineTransparency = 0,
+            DepthMode = Enum.HighlightDepthMode.AlwaysOnTop }, m)
+    end
+    o.hl.Parent = m
+    local head = m:FindFirstChild("Head") or m:FindFirstChild("HumanoidRootPart", true)
+                  or m:FindFirstChildWhichIsA("BasePart", true)
+    if not head then return end
+    if not (o.tag and o.tag.Parent) then
+        o.tag = mk("BillboardGui", { Name = "XHubNpcEspTag", Size = UDim2.fromOffset(200, 54),
+            AlwaysOnTop = true, Adornee = head, StudsOffset = Vector3.new(0, 2.6, 0) }, head)
+        o.box = mk("Frame", { Size = UDim2.fromOffset(38, 58), Position = UDim2.new(0.5, -19, 0.5, -29),
+            BackgroundTransparency = 1, BorderSizePixel = 2,
+            BorderColor3 = Color3.fromRGB(140, 255, 150) }, o.tag)
+        o.lbl = mk("TextLabel", { Text = m.Name, BackgroundTransparency = 1,
+            Size = UDim2.new(1, 0, 0, 15), Font = Enum.Font.GothamBold, TextSize = 12,
+            TextColor3 = Color3.fromRGB(160, 255, 180), TextStrokeTransparency = 0.3 }, o.tag)
+        o.dlbl = mk("TextLabel", { Text = "", BackgroundTransparency = 1,
+            Position = UDim2.new(0, 0, 0, 13), Size = UDim2.new(1, 0, 0, 13),
+            Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = Color3.fromRGB(220, 255, 225),
+            TextStrokeTransparency = 0.5 }, o.tag)
+    end
+    o.tag.Adornee = head
+    o.tag.Parent = head
+    local hum = m:FindFirstChildOfClass("Humanoid")
+    local hp = hum and math.floor(hum.Health) or 0
+    if o.lbl then o.lbl.Text = m.Name end
+    if o.dlbl then
+        local d = distTo(m)
+        o.dlbl.Text = d and ("HP %d · %.0f m"):format(hp, d) or ("HP %d"):format(hp)
+    end
+end
+
+task.spawn(function()
+    while true do
+        task.wait(S.fastScan and 0.8 or 0.4)
+        if S.espNpc then
+            local n = 0
+            for _, m in ipairs(scanAll(4000)) do
+                if m:IsA("Model") and not Players:GetPlayerFromCharacter(m) then
+                    n = n + 1
+                    if n > 4000 then break end
+                    if m:FindFirstChildOfClass("Humanoid") then
+                        pcall(ensureNpcEsp, m)
+                    end
+                end
+            end
+            local dead = {}
+            for m, o in pairs(npcStore) do
+                if not m.Parent then destroyEnt(o); dead[#dead + 1] = m end
+            end
+            for _, m in ipairs(dead) do npcStore[m] = nil end
+        elseif next(npcStore) ~= nil then
+            for _, o in pairs(npcStore) do destroyEnt(o) end
+            npcStore = {}
+        end
+    end
+end)
 --==== 遇到 Eyes 自动背对（把角色朝向转成背对它） ====
 task.spawn(function()
     local locked = false
@@ -3118,6 +3193,12 @@ addButton(pVisual, "诊断扫描（F9 + 弹窗）", function()
     print(("[dbg] Model=%d  名字命中=%d"):format(mcount, hits))
     notify(("ws=%d CR=%s 扫=%d M=%d 命中=%d")
         :format(wsKids, cr and "有" or "无", #list, mcount, hits), "info", 5)
+end)
+
+addSection(pCombat, "子弹追踪（独立功能，不需要自瞄）")
+addToggle(pCombat, "开火自动对准目标（250ms）", false, function(v)
+    S.btStandalone = v
+    notify(v and "子弹追踪已开：每次开火自动对准一次" or "子弹追踪已关闭", "info", 2.6)
 end)
 
 addSection(pCombat, "AIMBOT")
@@ -3339,7 +3420,7 @@ addSection(pGuard, "车辆 / 角色")
 addToggle(pGuard, "车辆安全模式（上下车暂停/恢复绕过）", true, function(v)
     S.vehicleSafe = v
 end)
-addToggle(pGuard, "防遁地守护（陷地自动抬回）", true, function(v)
+addToggle(pGuard, "防遁地守护（陷地自动抬回）", false, function(v)
     S.antiFall = v
 end)
 addButton(pGuard, "角色复位（起身/解焊/抬升）", function() characterFix(false) end)
