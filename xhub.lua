@@ -3,7 +3,7 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v4.9"
+local VERSION = "v5.0"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -38,6 +38,9 @@ local S = {
     flyMode = "cframe", antiSnap = true,
     noclip = false, walkSpeed = 20, safeMode = false, autoTune = true, ghost = false,
     night = false, entityEsp = false,
+    itemEsp = false, pickup = false, pickupRadius = 25,
+    autoPrompt = false, promptRadius = 20,
+    autoDoor = false, doorRadius = 28, autoWalk = false,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -1621,9 +1624,198 @@ task.spawn(function()
     end
 end)
 
+--==================== 物品绘制 / 拾取 / 自动交互 ====================
+local ITEM_KW = { "key", "钥匙", "loot", "item", "coin", "chest", "drawer", "pickup",
+                  "gem", "gold", "cash", "money", "bandage", "flashlight", "lighter",
+                  "candle", "crucifix", "lockpick", "vitamin", "potion", "tool", "weapon" }
+local itemStore = {}
+
+local function nameHits(v, list)
+    local nm = (v and v.Name or ""):lower()
+    if nm == "" then return false end
+    for _, k in ipairs(list) do
+        if nm:find(k:lower(), 1, true) then return true end
+    end
+    return false
+end
+
+local function isItemInst(v)
+    if v:IsA("Tool") then return true end
+    return nameHits(v, ITEM_KW)
+end
+
+local function ensureItem(v)
+    local o = itemStore[v]
+    if not o then o = {}; itemStore[v] = o end
+    if not (o.hl and o.hl.Parent) then
+        o.hl = mk("Highlight", { Name = "XHubItem",
+            FillColor = Color3.fromRGB(80, 220, 255), FillTransparency = 0.5,
+            OutlineColor = Color3.fromRGB(180, 245, 255), OutlineTransparency = 0,
+            DepthMode = Enum.HighlightDepthMode.AlwaysOnTop }, v)
+    end
+end
+
+local function rangePickup(radius)
+    if not firetouchinterest then return 0 end
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return 0 end
+    local n = 0
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("BasePart") and v.Parent and isItemInst(v.Parent) then
+            if (v.Position - hrp.Position).Magnitude <= radius then
+                pcall(firetouchinterest, v, hrp, 0)
+                pcall(firetouchinterest, v, hrp, 1)
+                n = n + 1
+            end
+        end
+    end
+    return n
+end
+
+local function autoPrompts(radius)
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return 0 end
+    local n = 0
+    for _, p in ipairs(workspace:GetDescendants()) do
+        if p:IsA("ProximityPrompt") and p.Enabled then
+            local pos
+            local pp = p.Parent
+            if pp and pp:IsA("BasePart") then pos = pp.Position
+            elseif pp and pp:IsA("Attachment") and pp.Parent and pp.Parent:IsA("BasePart") then
+                pos = pp.Parent.Position
+            end
+            if pos and (pos - hrp.Position).Magnitude <= radius then
+                pcall(function() p.MaxActivationDistance = math.max(p.MaxActivationDistance, radius + 5) end)
+                pcall(function() p:InputHoldBegin() end)
+                pcall(function() p:InputHoldEnd() end)
+                n = n + 1
+            end
+        end
+    end
+    return n
+end
+
+local function autoDoors(radius)
+    local rooms = workspace:FindFirstChild("CurrentRooms")
+    if not rooms then return 0 end
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return 0 end
+    local n = 0
+    for _, room in ipairs(rooms:GetChildren()) do
+        local door = room:FindFirstChild("Door")
+        if door then
+            local part = door:FindFirstChildWhichIsA("BasePart", true)
+            local re = door:FindFirstChild("ClientOpen", true)
+            if part and re and (part.Position - hrp.Position).Magnitude <= radius then
+                if re:IsA("RemoteEvent") then
+                    pcall(function() re:FireServer() end)
+                    n = n + 1
+                elseif re:IsA("RemoteFunction") then
+                    pcall(function() re:InvokeServer() end)
+                    n = n + 1
+                end
+            end
+        end
+    end
+    return n
+end
+
+--==================== 自动寻路 ====================
+local PF = { running = false, gen = 0 }
+
+local function stopWalk()
+    PF.running = false
+    PF.gen = PF.gen + 1
+    local h = humOf(lp)
+    if h then pcall(function() h:MoveTo(h.Parent.HumanoidRootPart.Position) end) end
+end
+
+local function walkTo(pos, timeoutSec)
+    if PF.running then stopWalk() end
+    PF.running = true
+    PF.gen = PF.gen + 1
+    local gen = PF.gen
+    timeoutSec = timeoutSec or 25
+
+    task.spawn(function()
+        local t0 = os.clock()
+        local c, h = charOf(lp), humOf(lp)
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if not (h and hrp) then PF.running = false; return end
+        local path = game:GetService("PathfindingService"):CreatePath({
+            AgentRadius = 2, AgentHeight = 5, AgentCanJump = true,
+        })
+        local ok = pcall(function() path:ComputeAsync(hrp.Position, pos) end)
+        if not ok or path.Status ~= Enum.PathStatus.Success then
+            notify("寻路失败（目标不可达，试试开 Noclip 再点）", "err", 3)
+            PF.running = false
+            return
+        end
+        local wps = path:GetWaypoints()
+        for _, wp in ipairs(wps) do
+            if not PF.running or PF.gen ~= gen or os.clock() - t0 > timeoutSec then break end
+            h:MoveTo(wp.Position)
+            local tw = os.clock()
+            while (hrp.Position - wp.Position).Magnitude > 3.5 do
+                if not PF.running or PF.gen ~= gen or os.clock() - t0 > timeoutSec then break end
+                task.wait(0.08)
+            end
+        end
+        PF.running = false
+    end)
+end
+
+local function nearestDoorPos()
+    local rooms = workspace:FindFirstChild("CurrentRooms")
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not rooms or not hrp then return nil end
+    local best, bestD = nil, math.huge
+    for _, room in ipairs(rooms:GetChildren()) do
+        local door = room:FindFirstChild("Door")
+        local part = door and door:FindFirstChildWhichIsA("BasePart", true)
+        if part then
+            local d = (part.Position - hrp.Position).Magnitude
+            if d < bestD then best, bestD = part, d end
+        end
+    end
+    return best and best.Position or nil
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.4)
+        if S.itemEsp then
+            local n = 0
+            for _, v in ipairs(workspace:GetDescendants()) do
+                n = n + 1
+                if n > 4000 then break end
+                if (v:IsA("Tool") or v:IsA("Model")) and isItemInst(v) then
+                    pcall(ensureItem, v)
+                end
+            end
+            local dead = {}
+            for v, o in pairs(itemStore) do
+                if not v.Parent then destroyEnt(o); dead[#dead + 1] = v end
+            end
+            for _, v in ipairs(dead) do itemStore[v] = nil end
+        elseif next(itemStore) ~= nil then
+            for v, o in pairs(itemStore) do destroyEnt(o) end
+            itemStore = {}
+        end
+        if S.pickup then pcall(rangePickup, S.pickupRadius) end
+        if S.autoPrompt then pcall(autoPrompts, S.promptRadius) end
+        if S.autoDoor then pcall(autoDoors, S.doorRadius) end
+    end
+end)
+
 --==================== 页面 ====================
 local pMain, pVisual = addPage("主要"), addPage("视觉")
-local pCombat, pGuard = addPage("战斗"), addPage("防护")
+local pCombat, pAuto = addPage("战斗"), addPage("自动")
+local pGuard = addPage("防护")
 local pMisc = addPage("杂项")
 
 addSection(pMain, "MOVEMENT")
@@ -1711,6 +1903,50 @@ aimInfo = mk("TextLabel", { Text = "自瞄: 待触发（按住左键 / Q）", Ba
     Size = UDim2.new(1, 0, 0, 20), Font = Enum.Font.Code, TextSize = 11,
     TextColor3 = Color3.fromRGB(150, 210, 180), TextXAlignment = Enum.TextXAlignment.Left,
     LayoutOrder = rowOrder }, pCombat)
+
+addSection(pAuto, "物品")
+addToggle(pAuto, "物品绘制（钥匙 / 道具 / 箱子）", false, function(v)
+    S.itemEsp = v
+    notify(v and "物品绘制已开启" or "物品绘制已关闭", "info", 2)
+end)
+addToggle(pAuto, "范围拾取（touch 模拟）", false, function(v) S.pickup = v end)
+addSlider(pAuto, "拾取半径", 5, 60, S.pickupRadius, function(v) S.pickupRadius = v end)
+
+addSection(pAuto, "交互")
+addToggle(pAuto, "自动交互（ProximityPrompt）", false, function(v) S.autoPrompt = v end)
+addSlider(pAuto, "交互半径", 5, 40, S.promptRadius, function(v) S.promptRadius = v end)
+addToggle(pAuto, "自动开门（Door.ClientOpen）", false, function(v) S.autoDoor = v end)
+addSlider(pAuto, "开门半径", 5, 50, S.doorRadius, function(v) S.doorRadius = v end)
+
+addSection(pAuto, "寻路")
+addButton(pAuto, "走向最近的门", function()
+    local pos = nearestDoorPos()
+    if not pos then
+        notify("没找到门（CurrentRooms 里没有 Door）", "err", 3)
+        return
+    end
+    walkTo(pos)
+    notify("开始寻路（速度受服务端限制，约 16 studs/s）", "info", 3)
+end)
+addButton(pAuto, "走向下一个可拾取物品", function()
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local best, bestD = nil, math.huge
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("BasePart") and v.Parent and isItemInst(v.Parent) then
+            local d = (v.Position - hrp.Position).Magnitude
+            if d < bestD then best, bestD = v, d end
+        end
+    end
+    if not best then return notify("附近没有可识别的物品", "warn", 3) end
+    walkTo(best.Position)
+    notify(("走向物品: %s (%.0f studs)"):format(best.Parent.Name, bestD), "info", 3)
+end)
+addButton(pAuto, "停止寻路", function()
+    stopWalk()
+    notify("已停止寻路", "info", 1.5)
+end)
 
 addSection(pGuard, "① 基础压制")
 addToggle(pGuard, "线程 + 连接 + marker", false, function(v) if v then acRun() end end)
