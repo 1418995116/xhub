@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v5.2"
-local BUILD   = "2026-11-01 02:15"
+local VERSION = "v5.3"
+local BUILD   = "2026-11-01 02:35"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -43,7 +43,7 @@ local S = {
     autoPrompt = false, promptRadius = 20,
     autoDoor = false, doorRadius = 28, autoWalk = false, pulse = false,
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
-    instantPrompt = true,
+    hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -1507,6 +1507,20 @@ local function newServer()
     notify(ok and "正在切换到新服务器…" or "切服失败", ok and "info" or "err", 3)
 end
 
+-- 实体 / 物品 刷新即时捕获（轮询会漏掉一闪而过的 Rush）
+workspace.DescendantAdded:Connect(function(d)
+    if d:IsA("Model") then
+        if S.entityEsp and isEntityModel(d) then
+            task.defer(function() if d.Parent then pcall(ensureEnt, d) end end)
+        end
+        if S.itemEsp and isItemInst(d) then
+            task.defer(function() if d.Parent then pcall(ensureItem, d) end end)
+        end
+    elseif d:IsA("Tool") and S.itemEsp then
+        task.defer(function() if d.Parent then pcall(ensureItem, d) end end)
+    end
+end)
+
 --==================== 夜视 ====================
 local NV = { saved = nil, cc = nil }
 
@@ -1765,7 +1779,7 @@ local function autoPrompts(radius)
                 pos = pp.Parent.Position
             end
             if pos and (pos - hrp.Position).Magnitude <= radius
-               and (now - (promptCool[p] or 0)) > 0.7 then
+               and (now - (promptCool[p] or 0)) > 0.25 then
                 promptCool[p] = now
                 n = n + 1
                 if S.instantPrompt then
@@ -1773,9 +1787,11 @@ local function autoPrompts(radius)
                 end
                 pcall(function() p.MaxActivationDistance = math.max(p.MaxActivationDistance, radius + 5) end)
                 pcall(function() p:InputHoldBegin() end)
-                task.delay(S.instantPrompt and 0.12 or 0.6, function()
+                if S.instantPrompt then
                     pcall(function() p:InputHoldEnd() end)
-                end)
+                else
+                    task.delay(0.5, function() pcall(function() p:InputHoldEnd() end) end)
+                end
             end
         end
     end
@@ -1943,29 +1959,47 @@ end)
 
 --==================== 第三人称 / 模拟移动 / 自动躲避 ====================
 local camOrig = nil
+local orbit = { yaw = 0, pitch = 0.25, dist = 14 }
 
 local function setThirdPerson(on)
     S.thirdPerson = on
     local P = lp
     if not camOrig then
-        camOrig = {
-            max = P.CameraMaxZoomDistance,
-            min = P.CameraMinZoomDistance,
-        }
+        camOrig = { max = P.CameraMaxZoomDistance, min = P.CameraMinZoomDistance }
     end
     if on then
         pcall(function() P.CameraMode = Enum.CameraMode.Classic end)
         pcall(function() P.CameraMaxZoomDistance = math.max(camOrig.max, 64) end)
         pcall(function() P.CameraMinZoomDistance = math.max(camOrig.min, 8) end)
-        pcall(function() cam.CameraType = Enum.CameraType.Custom end)
-        notify("已切第三人称（游戏若锁视角可能无效）", "ok", 2.2)
+        local cf = cam.CFrame
+        orbit.yaw = math.atan2(-cf.LookVector.X, -cf.LookVector.Z)
+        orbit.pitch = math.asin(math.clamp(cf.LookVector.Y, -1, 1))
+        notify("强制第三人称：脚本已接管相机（WASD 照常移动）", "ok", 2.5)
     else
-        pcall(function() P.CameraMode = Enum.CameraMode.Classic end)
+        pcall(function() cam.CameraType = Enum.CameraType.Custom end)
+        local h = humOf(lp)
+        if h then pcall(function() cam.CameraSubject = h end) end
         pcall(function() P.CameraMaxZoomDistance = camOrig.max end)
         pcall(function() P.CameraMinZoomDistance = camOrig.min end)
-        notify("已恢复默认视角距离", "info", 1.6)
+        notify("已交还相机控制", "info", 1.6)
     end
 end
+
+pcall(function() RS:UnbindFromRenderStep("XHubCam") end)
+RS:BindToRenderStep("XHubCam", Enum.RenderPriority.Camera.Value + 20, function()
+    if not S.thirdPerson then return end
+    local d = UIS:GetMouseDelta()
+    orbit.yaw = orbit.yaw - d.X * 0.0035
+    orbit.pitch = math.clamp(orbit.pitch + d.Y * 0.0035, -1.2, 1.2)
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local look = CFrame.fromEulerAnglesYXZ(orbit.pitch, orbit.yaw, 0)
+    local eye = hrp.Position + Vector3.new(0, 1.6, 0)
+    local pos = eye - look.LookVector * orbit.dist
+    pcall(function() cam.CameraType = Enum.CameraType.Scriptable end)
+    cam.CFrame = CFrame.lookAt(pos, eye)
+end)
 
 local function simWalk(pos, timeoutSec)
     stopWalk()
@@ -2017,17 +2051,48 @@ end
 local hiding = false
 local function hideNow()
     if hiding then return end
-    local spot, d = findHideSpot(90)
-    if not spot then
-        notify("附近没找到柜子/床", "warn", 2)
+    hiding = true
+
+    if S.hideMode == "sky" then
+        -- 高空躲避: 抬到 Rush 够不到的高度,等它跑过去再落回
+        local c = charOf(lp)
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if not hrp then hiding = false; return end
+        local back = hrp.CFrame
+        notify(("高空躲避: 抬升 %.0f studs，%d 秒后回落"):format(S.skyHeight, S.skyTime), "warn", 2.6)
+        pcall(function()
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.Anchored = true
+            hrp.CFrame = back + Vector3.new(0, S.skyHeight, 0)
+        end)
+        task.delay(S.skyTime, function()
+            local c2 = charOf(lp)
+            local h2 = c2 and c2:FindFirstChild("HumanoidRootPart")
+            if h2 then
+                pcall(function()
+                    h2.CFrame = back
+                    h2.AssemblyLinearVelocity = Vector3.zero
+                    h2.Anchored = false
+                end)
+            end
+            notify("已落回原位", "info", 1.6)
+            hiding = false
+        end)
         return
     end
-    hiding = true
+
+    -- 柜子模式
+    local spot, d = findHideSpot(90)
+    if not spot then
+        notify("附近没找到柜子/床（可改用高空躲避）", "warn", 2.4)
+        hiding = false
+        return
+    end
     notify(("自动躲避: 冲向 %s（%.0f m）"):format(spot.Parent and spot.Parent.Name or spot.Name, d or 0), "warn", 2.6)
     simWalk(spot.Position, 15)
-    task.delay(1.2, function()
+    task.delay(1.0, function()
         pcall(autoPrompts, 9)
-        task.delay(1.4, function()
+        task.delay(1.0, function()
             pcall(autoPrompts, 9)
             hiding = false
         end)
@@ -2174,11 +2239,19 @@ addToggle(pAuto, "自动开门（Door.ClientOpen）", false, function(v) S.autoD
 addSlider(pAuto, "开门半径", 5, 50, S.doorRadius, function(v) S.doorRadius = v end)
 
 addSection(pAuto, "躲避")
-addToggle(pAuto, "遇到实体自动躲柜子/床", false, function(v)
+addToggle(pAuto, "遇到实体自动躲", false, function(v)
     S.autoHide = v
-    notify(v and "自动躲避已开启（实体进入半径就冲向最近柜子）" or "自动躲避已关闭", "info", 2.4)
+    notify(v and "自动躲避已开启（按当前模式执行）" or "自动躲避已关闭", "info", 2.4)
+end)
+local setHideModeBtn
+setHideModeBtn = addButton(pAuto, "躲避方式: 高空传送", function()
+    S.hideMode = (S.hideMode == "sky") and "closet" or "sky"
+    setHideModeBtn("躲避方式: " .. (S.hideMode == "sky" and "高空传送" or "柜子/床"))
+    notify("躲避方式 = " .. S.hideMode, "info", 1.6)
 end)
 addSlider(pAuto, "触发距离", 30, 200, S.hideDist, function(v) S.hideDist = v end)
+addSlider(pAuto, "高空高度 studs", 50, 800, S.skyHeight, function(v) S.skyHeight = v end)
+addSlider(pAuto, "高空停留 秒", 3, 20, S.skyTime, function(v) S.skyTime = v end)
 
 addSection(pAuto, "寻路")
 addButton(pAuto, "走向最近的门", function()
