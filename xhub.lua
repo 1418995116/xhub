@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v5.7"
-local BUILD   = "2026-11-01 03:35"
+local VERSION = "v5.8"
+local BUILD   = "2026-11-01 03:42"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -2088,7 +2088,11 @@ RS:BindToRenderStep("XHubCam", Enum.RenderPriority.Camera.Value + 20, function()
     orbit.pitch = math.clamp(orbit.pitch + dy * 0.0035, -1.2, 1.2)
     local c = charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
+    if not hrp then
+        -- 角色没了(死亡/加载中)：立刻交还相机，否则会黑屏
+        pcall(function() cam.CameraType = Enum.CameraType.Custom end)
+        return
+    end
     local look = CFrame.fromEulerAnglesYXZ(orbit.pitch, orbit.yaw, 0)
     local eye = hrp.Position + Vector3.new(0, 1.6, 0)
     local pos = eye - look.LookVector * orbit.dist
