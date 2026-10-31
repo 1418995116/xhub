@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v6.7"
-local BUILD   = "2026-11-01 06:15"
+local VERSION = "v6.8"
+local BUILD   = "2026-11-01 06:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -45,7 +45,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "zoom", doors = false,
+    tpMode = "zoom", doors = false, eyesAway = true, leverAuto = false, lever = false,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -1767,7 +1767,7 @@ end)
 --==================== 物品绘制 / 拾取 / 自动交互 ====================
 local ITEM_KW = { "key", "钥匙", "loot", "item", "coin", "chest", "drawer", "pickup",
                   "gem", "gold", "cash", "money", "bandage", "flashlight", "lighter",
-                  "candle", "crucifix", "lockpick", "vitamin", "potion", "tool", "weapon" }
+                  "candle", "crucifix", "lockpick", "vitamin", "potion", "weapon" }
 local itemStore = {}
 
 local function nameHits(v, list)
@@ -1779,7 +1779,7 @@ local function nameHits(v, list)
     return false
 end
 
-local ITEM_EXCLUDE = { "candle", "蜡烛", "drawer", "container", "wall" }
+local ITEM_EXCLUDE = { "candle", "蜡烛", "drawer", "container", "wall", "stool", "chair", "seat", "bench", "table", "sofa", "lamp" }
 
 local function isItemInst(v)
     local nm = (v and v.Name or ""):lower()
@@ -2409,7 +2409,7 @@ task.spawn(function()
 end)
 
 --==================== 躲避触发扫描（不依赖 ESP，独立按名字找） ====================
-local TRIGGER_STRICT = { "rushmoving", "rush", "ambush", "ambushmoving" }
+local TRIGGER_STRICT = { "rushmoving", "rush", "ambush", "ambushmoving", "seekmovingnewclone", "seek" }
 local TRIGGER_ALL = { "rushmoving", "rush", "ambush", "ambushmoving",
                       "seek", "glitch", "glitchcube", "figure", "dupe" }
 
@@ -2539,7 +2539,8 @@ local function navTo(pos)
     notify("A* 计算中…", "info", 1.5)
     local path = navFindPath(hrp.Position, pos)
     if not path or #path == 0 then
-        notify("A* 找不到路径（试试开 Noclip 或换个点）", "err", 3.5)
+        notify("A* 找不到路径 → 退回直线移动", "warn", 3)
+        simWalk(pos, 25)
         return
     end
     NAV.running = true
@@ -2587,6 +2588,58 @@ local SCENE_KW = { "closet", "wardrobe", "bed", "locker", "drawer", "dresser",
                    "crate", "柜", "床", "抽屉" }
 local sceneStore = {}
 local doorStore = {}
+local leverStore = {}
+
+local DOOR_BAD = { "frame", "blocked", "fake", "start", "end", "hidden", "lock", "doorway" }
+
+local function isRealDoor(nm)
+    if not (nm:find("door", 1, true) or nm:find("门", 1, true)) then return false end
+    for _, k in ipairs(DOOR_BAD) do
+        if nm:find(k, 1, true) then return false end
+    end
+    return true
+end
+
+local LEVER_KW = { "lever", "拉杆", "switch", "handle", "valve" }
+
+local function isLever(nm)
+    for _, k in ipairs(LEVER_KW) do
+        if nm:find(k, 1, true) then return true end
+    end
+    return false
+end
+
+local function ensureLever(m)
+    local o = leverStore[m]
+    if not o then o = {}; leverStore[m] = o end
+    if not (o.hl and o.hl.Parent) then
+        o.hl = mk("Highlight", { Name = "XHubLever",
+            FillColor = Color3.fromRGB(255, 60, 220), FillTransparency = 0.4,
+            OutlineColor = Color3.fromRGB(255, 180, 245), OutlineTransparency = 0,
+            DepthMode = Enum.HighlightDepthMode.AlwaysOnTop }, m)
+    end
+    o.hl.Parent = m
+    local part = firstPart(m)
+    if not part then return end
+    if not (o.tag and o.tag.Parent) then
+        o.tag = mk("BillboardGui", { Name = "XHubLeverTag", Size = UDim2.fromOffset(150, 26),
+            AlwaysOnTop = true, Adornee = part, StudsOffset = Vector3.new(0, 1.6, 0) }, part)
+        o.lbl = mk("TextLabel", { Text = "拉杆", BackgroundTransparency = 1,
+            Size = UDim2.new(1, 0, 0, 14), Font = Enum.Font.GothamBold, TextSize = 12,
+            TextColor3 = Color3.fromRGB(255, 150, 240), TextStrokeTransparency = 0.3 }, o.tag)
+        o.dlbl = mk("TextLabel", { Text = "", BackgroundTransparency = 1,
+            Position = UDim2.new(0, 0, 0, 12), Size = UDim2.new(1, 0, 0, 12),
+            Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = Color3.fromRGB(255, 220, 250),
+            TextStrokeTransparency = 0.5 }, o.tag)
+    end
+    o.tag.Adornee = part
+    o.tag.Parent = part
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if o.dlbl and hrp then
+        o.dlbl.Text = ("%.0f m"):format((part.Position - hrp.Position).Magnitude)
+    end
+end
 
 local function ensureScene(m)
     local o = sceneStore[m]
@@ -2634,16 +2687,29 @@ end
 
 task.spawn(function()
     while true do
-        task.wait(S.fastScan and 1.5 or 0.6)
-        if S.scenery or S.doors then
+        task.wait(S.fastScan and 1.2 or 0.5)
+        if S.scenery or S.doors or S.lever then
+            local c0 = charOf(lp)
+            local hrp0 = c0 and c0:FindFirstChild("HumanoidRootPart")
             local n = 0
             for _, m in ipairs(scanAll(4000)) do
                 if m:IsA("Model") then
                     n = n + 1
                     if n > 4000 then break end
                     local nm = m.Name:lower()
-                    if S.doors and (nm:find("door", 1, true) or nm:find("门", 1, true)) then
+                    local d = hrp0 and distTo(m) or nil
+                    if d and d > 260 then
+                        -- 远处的不要，过会儿再处理
+                    elseif S.doors and isRealDoor(nm) then
                         pcall(ensureDoor, m)
+                    elseif S.lever and isLever(nm) then
+                        pcall(ensureLever, m)
+                        if S.leverAuto and d and d <= 14 then
+                            local part = firstPart(m)
+                            if part then
+                                pcall(autoPrompts, 16)
+                            end
+                        end
                     elseif S.scenery then
                         for _, k in ipairs(SCENE_KW) do
                             if nm:find(k:lower(), 1, true) then
@@ -2664,6 +2730,11 @@ task.spawn(function()
                 if not m.Parent then destroyEnt(o); dead2[#dead2 + 1] = m end
             end
             for _, m in ipairs(dead2) do doorStore[m] = nil end
+            local dead3 = {}
+            for m, o in pairs(leverStore) do
+                if not m.Parent then destroyEnt(o); dead3[#dead3 + 1] = m end
+            end
+            for _, m in ipairs(dead3) do leverStore[m] = nil end
         end
         if not S.scenery and next(sceneStore) ~= nil then
             for _, o in pairs(sceneStore) do destroyEnt(o) end
@@ -2672,6 +2743,42 @@ task.spawn(function()
         if not S.doors and next(doorStore) ~= nil then
             for _, o in pairs(doorStore) do destroyEnt(o) end
             doorStore = {}
+        end
+        if not S.lever and next(leverStore) ~= nil then
+            for _, o in pairs(leverStore) do destroyEnt(o) end
+            leverStore = {}
+        end
+    end
+end)
+
+--==== 遇到 Eyes 自动背对（把角色朝向转成背对它） ====
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        if S.eyesAway then
+            local c = charOf(lp)
+            local hrp = c and c:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local best, bestD = nil, 200
+                for _, m in ipairs(scanAll(2500)) do
+                    if m:IsA("Model") and m.Name:lower():find("eyes", 1, true) then
+                        local d = distTo(m)
+                        if d and d < bestD then bestD, best = d, m end
+                    end
+                end
+                if best then
+                    local p = firstPart(best)
+                    if p then
+                        local away = hrp.Position - p.Position
+                        away = Vector3.new(away.X, 0, away.Z)
+                        if away.Magnitude > 0.1 then
+                            pcall(function()
+                                hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + away.Unit)
+                            end)
+                        end
+                    end
+                end
+            end
         end
     end
 end)
@@ -2748,6 +2855,15 @@ addToggle(pVisual, "门绘制（门/门框，金色 + 距离）", false, functio
     S.doors = v
     notify(v and "门绘制: 门会亮金色并显示名字/距离" or "门绘制已关闭", "info", 2.4)
 end)
+addToggle(pVisual, "拉杆绘制 + 距离（洋红）", false, function(v)
+    S.lever = v
+    notify(v and "拉杆绘制已开启（lever/switch/拉杆）" or "拉杆绘制已关闭", "info", 2.4)
+end)
+addToggle(pVisual, "自动拉杆（靠近自动点 E）", false, function(v)
+    S.leverAuto = v
+    notify(v and "自动拉杆: 14 studs 内会自动触发提示" or "自动拉杆已关闭", "info", 2.4)
+end)
+addToggle(pVisual, "遇到 Eyes 自动背对", true, function(v) S.eyesAway = v end)
 addToggle(pVisual, "实体绘制（怪物/NPC/Entity）", false, function(v)
     S.entityEsp = v
     notify(v and "实体绘制已开启（关键词 + 非玩家 Humanoid）" or "实体绘制已关闭", "info", 2.5)
