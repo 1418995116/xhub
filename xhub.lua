@@ -1,7 +1,10 @@
 --=====================================================================
---  XHub · 合并版 (Fly / ESP / Aimbot / AC压制 / AC-Guard v2 / 线程清理)
---  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准
+--  XHub v4 · Fly / ESP / Aimbot / AC压制 / AC-Guard / ThreadCleaner
+--  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
+--  修复: 不再拦 Connect(保住车辆/疾跑按键) + 可回滚 + 白名单
 --=====================================================================
+local VERSION = "v4"
+
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
     FlyKey   = Enum.KeyCode.F,
@@ -11,24 +14,27 @@ local CONFIG = {
     Mate     = Color3.fromRGB(90, 255, 120),
     AC = { Patterns = { "BS_", "最强防御", "防御", "Antikick", "AntiCheat", "Anti_Kick", "AC_" },
            Marker = "BS_Script_Running_Marker" },
-    ACG = { Keywords = { "AntiCheat", "Antikick", "AntiKick", "Anti_Kick", "BS_", "防御", "AC_" },
-            RemoteKw = { "Anti", "Cheat", "Kick", "Ban", "Report", "AC", "BS", "Guard" },
+    ACG = { Keywords = { "AntiCheat", "Antikick", "AntiKick", "Anti_Kick", "BS_", "防御" },
+            RemoteKw = { "AntiCheat", "Antikick", "ReportCheat", "BanPlayer" },
             Hashes   = {} },
+    -- 永不触碰的脚本关键字（车辆/输入/疾跑/相机/角色）
+    Safe = { "veh", "car", "drive", "input", "control", "sprint", "camera", "mouse",
+             "key", "player", "character", "anim", "tool", "seat", "vehicle" },
 }
 
 local Players, RS = game:GetService("Players"), game:GetService("RunService")
 local UIS, CoreGui = game:GetService("UserInputService"), game:GetService("CoreGui")
 local RStorage, SC = game:GetService("ReplicatedStorage"), game:GetService("ScriptContext")
-local Lighting = game:GetService("Lighting")
+local Lighting, TweenService = game:GetService("Lighting"), game:GetService("TweenService")
 local lp, cam = Players.LocalPlayer, workspace.CurrentCamera
 
 local S = {
-    fly = false, flySpeed = 60,
+    fly = false, flySpeed = 55,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimHold = true, aimSmooth = 10, aimFov = 140,
+    aim = false, aimHold = true, aimSmooth = 12, aimFov = 140,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
-    dim = true, bgA = 0.55, blur = false,
+    dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
 
@@ -46,6 +52,14 @@ local function charOf(p) local c = p and p.Character; if c and c.Parent then ret
 local function humOf(p) local c = charOf(p); return c and c:FindFirstChildOfClass("Humanoid") end
 local function alive(p) local h = humOf(p); return h ~= nil and h.Health > 0 end
 local function isMate(p) return lp.Team ~= nil and p.Team == lp.Team end
+local function isSafeName(s)
+    s = (s or ""):lower()
+    if s == "" then return false end
+    for _, k in ipairs(CONFIG.Safe) do
+        if s:find(k, 1, true) then return true end
+    end
+    return false
+end
 
 local APARTS = { Head = {"Head"}, Root = {"HumanoidRootPart"}, Torso = {"UpperTorso","Torso","HumanoidRootPart"} }
 local function aimPartOf(p)
@@ -70,7 +84,7 @@ local function canSee(part)
     return hit == nil or hit.Instance:IsDescendantOf(part.Parent)
 end
 
---==================== 背景层 ====================
+--==================== 界面骨架 ====================
 local gui = mk("ScreenGui", { Name = "XHub", ResetOnSpawn = false, IgnoreGuiInset = true,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 999 })
 if not pcall(function() gui.Parent = CoreGui end) then
@@ -82,13 +96,47 @@ local backdrop = mk("Frame", { Name = "Backdrop", Size = UDim2.fromScale(1, 1),
     BorderSizePixel = 0, Visible = S.dim, ZIndex = 0, Active = false }, gui)
 
 local blurFx = Instance.new("BlurEffect")
-blurFx.Size = 0
-blurFx.Enabled = false
-blurFx.Parent = Lighting
+blurFx.Size = 0; blurFx.Enabled = false; blurFx.Parent = Lighting
+
+--==================== 右上角通知 ====================
+local notifHolder = mk("Frame", { Name = "Notifs", Size = UDim2.fromOffset(290, 0),
+    Position = UDim2.new(1, -14, 0, 14), AnchorPoint = Vector2.new(1, 0),
+    BackgroundTransparency = 1, AutomaticSize = Enum.AutomaticSize.Y,
+    ZIndex = 60, ClipsDescendants = false }, gui)
+mk("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder,
+    HorizontalAlignment = Enum.HorizontalAlignment.Right }, notifHolder)
+local notifOrder = 0
+
+local function notify(text, kind, life)
+    notifOrder = notifOrder + 1
+    local col = CONFIG.Accent
+    if kind == "err" then col = Color3.fromRGB(255, 96, 96)
+    elseif kind == "ok" then col = Color3.fromRGB(96, 232, 150)
+    elseif kind == "warn" then col = Color3.fromRGB(255, 196, 92) end
+
+    local card = mk("Frame", { Size = UDim2.fromOffset(290, 34),
+        BackgroundColor3 = Color3.fromRGB(24, 27, 34), BackgroundTransparency = 0.08,
+        BorderSizePixel = 0, LayoutOrder = notifOrder, ZIndex = 60 }, notifHolder)
+    mk("UICorner", { CornerRadius = UDim.new(0, 8) }, card)
+    mk("UIStroke", { Color = col, Thickness = 1, Transparency = 0.55 }, card)
+    mk("Frame", { Size = UDim2.fromOffset(3, 20), Position = UDim2.new(0, 6, 0.5, -10),
+        BackgroundColor3 = col, BorderSizePixel = 0, ZIndex = 61 }, card)
+    mk("TextLabel", { Text = text, BackgroundTransparency = 1, Position = UDim2.new(0, 16, 0, 0),
+        Size = UDim2.new(1, -24, 1, 0), Font = Enum.Font.GothamMedium, TextSize = 12,
+        TextColor3 = Color3.fromRGB(234, 240, 250), TextXAlignment = Enum.TextXAlignment.Left,
+        TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 61 }, card)
+
+    TweenService:Create(card, TweenInfo.new(0.18), { BackgroundTransparency = 0.08 }):Play()
+    task.delay(life or 3.2, function()
+        if not card.Parent then return end
+        TweenService:Create(card, TweenInfo.new(0.3), { BackgroundTransparency = 1 }):Play()
+        task.delay(0.34, function() if card.Parent then card:Destroy() end end)
+    end)
+end
 
 --==================== 主面板 ====================
-local main = mk("Frame", { Name = "Main", Size = UDim2.fromOffset(560, 420),
-    Position = UDim2.new(0.5, -280, 0.5, -210), BackgroundColor3 = Color3.fromRGB(20, 22, 28),
+local main = mk("Frame", { Name = "Main", Size = UDim2.fromOffset(570, 430),
+    Position = UDim2.new(0.5, -285, 0.5, -215), BackgroundColor3 = Color3.fromRGB(20, 22, 28),
     BorderSizePixel = 0, Active = true, ClipsDescendants = true, ZIndex = 5 }, gui)
 mk("UICorner", { CornerRadius = UDim.new(0, 12) }, main)
 mk("UIStroke", { Color = Color3.fromRGB(58, 64, 78), Thickness = 1 }, main)
@@ -100,11 +148,11 @@ local bar = mk("Frame", { Size = UDim2.new(1, 0, 0, 42), BackgroundColor3 = Colo
 mk("TextLabel", { Text = "XHub", BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
     Position = UDim2.new(0, 16, 0, 0), Size = UDim2.fromOffset(60, 42), Font = Enum.Font.GothamBold,
     TextSize = 15, TextColor3 = Color3.fromRGB(235, 241, 250) }, bar)
-mk("TextLabel", { Text = "universal", BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
-    Position = UDim2.new(0, 68, 0, 0), Size = UDim2.fromOffset(100, 42), Font = Enum.Font.Gotham,
-    TextSize = 11, TextColor3 = Color3.fromRGB(120, 130, 148) }, bar)
+mk("TextLabel", { Text = VERSION .. "  universal", BackgroundTransparency = 1,
+    TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.new(0, 68, 0, 0),
+    Size = UDim2.fromOffset(120, 42), Font = Enum.Font.Gotham, TextSize = 11,
+    TextColor3 = Color3.fromRGB(120, 130, 148) }, bar)
 
-local toast
 local icon
 local function setVisible(v)
     main.Visible = v
@@ -114,11 +162,7 @@ local function setVisible(v)
         blurFx.Size = (v and S.blur) and 14 or 0
     end
     if icon then icon.BackgroundColor3 = v and CONFIG.Accent or Color3.fromRGB(30, 34, 44) end
-    if toast then
-        toast.Text = v and "XHub · 已打开" or "XHub · 已关闭"
-        toast.Visible = true
-        task.delay(1.1, function() if toast then toast.Visible = false end end)
-    end
+    notify(v and "菜单已打开" or "菜单已隐藏", "info", 1.1)
 end
 
 do
@@ -135,18 +179,10 @@ do
         AutoButtonColor = false, ZIndex = 10 }, gui)
     mk("UICorner", { CornerRadius = UDim.new(0, 8) }, keyBtn)
 
-    toast = mk("TextLabel", { Name = "XHubToast", Text = "", Size = UDim2.fromOffset(250, 28),
-        Position = UDim2.new(0.5, -125, 0, 54), BackgroundColor3 = Color3.fromRGB(20, 22, 28),
-        BackgroundTransparency = 0.12, TextColor3 = Color3.fromRGB(230, 236, 246),
-        Font = Enum.Font.GothamBold, TextSize = 13, Visible = false, ZIndex = 20 }, gui)
-    mk("UICorner", { CornerRadius = UDim.new(0, 8) }, toast)
-    mk("UIStroke", { Color = Color3.fromRGB(58, 64, 78), Thickness = 1 }, toast)
-
     icon.MouseButton1Click:Connect(function() setVisible(not main.Visible) end)
     keyBtn.MouseButton1Click:Connect(function()
         captureMode = true
-        toast.Text = "按下新的菜单键（Esc 取消）"
-        toast.Visible = true
+        notify("按下新的菜单键（Esc 取消）", "warn", 4)
     end)
 end
 
@@ -175,12 +211,10 @@ end
 local tabBar = mk("Frame", { Size = UDim2.new(0, 124, 1, -56), Position = UDim2.new(0, 12, 0, 50),
     BackgroundTransparency = 1, ZIndex = 3 }, main)
 mk("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, tabBar)
-
 local cardBg = mk("Frame", { Size = UDim2.new(1, -160, 1, -64), Position = UDim2.new(0, 148, 0, 50),
     BackgroundColor3 = Color3.fromRGB(15, 17, 22), BorderSizePixel = 0, ZIndex = 3 }, main)
 mk("UICorner", { CornerRadius = UDim.new(0, 9) }, cardBg)
 mk("UIStroke", { Color = Color3.fromRGB(44, 49, 60), Thickness = 1 }, cardBg)
-
 local content = mk("Frame", { Size = UDim2.new(1, -170, 1, -74), Position = UDim2.new(0, 153, 0, 55),
     BackgroundTransparency = 1, ClipsDescendants = true, ZIndex = 4 }, main)
 
@@ -239,8 +273,7 @@ local function addToggle(page, text, default, cb)
     end
     local function set(v) on = v; paint(); if cb then cb(v) end end
     row.MouseButton1Click:Connect(function() set(not on) end)
-    hover(row, base)
-    paint(); if cb then cb(on) end
+    hover(row, base); paint(); if cb then cb(on) end
     return set
 end
 local function addSlider(page, text, mn, mx, default, cb)
@@ -321,6 +354,7 @@ local function setFly(on)
         if flyBV then flyBV:Destroy() end
         flyBV = mk("BodyVelocity", { Name = "XHubFly", MaxForce = Vector3.new(1e5, 1e5, 1e5),
             Velocity = Vector3.zero, P = 1250 }, hrp)
+        notify("飞行已开启 速度 " .. S.flySpeed, "ok", 1.4)
     else
         if flyBV then flyBV:Destroy(); flyBV = nil end
         local h = humOf(lp); if h then h.PlatformStand = false end
@@ -492,7 +526,46 @@ RS:BindToRenderStep("XHubAim", Enum.RenderPriority.Camera.Value + 1, function(dt
     cam.CFrame = cur:Lerp(goal, math.clamp(alpha, 0.02, 1))
 end)
 
---==================== 基础压制(线程+连接+marker) ====================
+--==================== 可回滚记录 + 输入修复 ====================
+local FIX = { conns = {}, hooks = {} }
+
+local function repairInput(showNotif)
+    local nC, nH = 0, 0
+    for _, e in ipairs(FIX.hooks) do
+        if pcall(hookfunction, e.f, e.old) then nH = nH + 1 end
+    end
+    FIX.hooks = {}
+    for _, c in ipairs(FIX.conns) do
+        if pcall(function() c:Enable() end) then nC = nC + 1 end
+    end
+    FIX.conns = {}
+    pcall(function() UIS.ModalEnabled = false end)
+    pcall(function() UIS.MouseBehavior = Enum.MouseBehavior.Default end)
+    pcall(function() UIS.MouseIconEnabled = true end)
+    local h = humOf(lp)
+    if h then
+        pcall(function()
+            h.PlatformStand = false
+            h.Sit = false
+            if h.WalkSpeed < 1 then h.WalkSpeed = 16 end
+            if h.JumpPower < 1 then h.JumpPower = 50 end
+        end)
+    end
+    local c = charOf(lp)
+    if c then
+        for _, v in ipairs(c:GetDescendants()) do
+            if v:IsA("BodyVelocity") or v:IsA("BodyGyro") or v:IsA("LinearVelocity") then
+                if v.Name ~= "XHubFly" or not S.fly then pcall(function() v:Destroy() end) end
+            end
+        end
+    end
+    if showNotif ~= false then
+        notify(("输入已修复 · 还原闭包 %d / 重连 %d"):format(nH, nC), "ok", 3)
+    end
+    return nH, nC
+end
+
+--==================== 基础压制 ====================
 local AC = { marker = nil, guard = false }
 local function acIs(s)
     if type(s) ~= "string" or s == "" then return false end
@@ -505,25 +578,26 @@ local function acRun()
         for _, v in pairs(getreg()) do
             if type(v) == "thread" then
                 local ok, src = pcall(function() return debug.info(v, "s") end)
-                if ok and acIs(src) and (pcall(coroutine.close, v)) then t = t + 1 end
+                if ok and acIs(src) and not isSafeName(src) and (pcall(coroutine.close, v)) then
+                    t = t + 1
+                end
             end
         end
     end
     if getconnections then
         local sigs = {}
-        for _, n in ipairs({ "Heartbeat", "RenderStepped", "PreRender", "Stepped",
-                             "PreSimulation", "PostSimulation" }) do
+        for _, n in ipairs({ "Heartbeat", "RenderStepped", "PreRender", "Stepped" }) do
             local ok, sig = pcall(function() return RS[n] end)
             if ok and sig then sigs[#sigs + 1] = sig end
         end
-        sigs[#sigs + 1] = SC.Error
         for _, sig in ipairs(sigs) do
             local ok, conns = pcall(getconnections, sig)
             if ok and conns then
                 for _, k in ipairs(conns) do
                     local sn = ""
                     pcall(function() if k.Script then sn = k.Script.Name end end)
-                    if acIs(sn) then
+                    if acIs(sn) and not isSafeName(sn) then
+                        FIX.conns[#FIX.conns + 1] = k
                         pcall(function() k:Disable() end)
                         pcall(function() k:Disconnect() end)
                         c = c + 1
@@ -540,6 +614,7 @@ local function acRun()
             local ok, conns = pcall(getconnections, sig)
             if ok and conns then
                 for _, k in ipairs(conns) do
+                    FIX.conns[#FIX.conns + 1] = k
                     pcall(function() k:Disable() end); pcall(function() k:Disconnect() end)
                     mc = mc + 1
                 end
@@ -557,11 +632,12 @@ local function acRun()
         end
     end
     local msg = ("线程 %d / 连接 %d / marker %d"):format(t, c, mc)
+    notify("基础压制: " .. msg, "ok", 3)
     print("[XHub-AC]", msg)
     return msg
 end
 
---==================== AC Guard v2 ====================
+--==================== AC Guard ====================
 local G = { layer1 = false, layer2 = false, blockKick = true,
             hookedFns = 0, hookedRemotes = 0, killedThreads = 0, blocked = 0,
             targetScripts = {}, matches = {}, oldNamecall = nil, installed = false }
@@ -574,7 +650,7 @@ local function hash(s)
 end
 local function isTarget(s)
     s = tostring(s or "")
-    if s == "" then return false end
+    if s == "" or isSafeName(s) then return false end
     if CONFIG.ACG.Hashes[hash(s)] then return true end
     local low = s:lower()
     for _, k in ipairs(CONFIG.ACG.Keywords) do
@@ -614,7 +690,7 @@ local function hookClosures(byName)
             if islclosure == nil or islclosure(v) then
                 local src = ""
                 pcall(function() src = debug.info(v, "s") or "" end)
-                if src ~= "" then
+                if src ~= "" and not isSafeName(src) then
                     local hit = isTarget(src)
                     if not hit then
                         local low = src:lower()
@@ -622,7 +698,13 @@ local function hookClosures(byName)
                             if low:find(nm, 1, true) then hit = true; break end
                         end
                     end
-                    if hit and pcall(hookfunction, v, noop) then n = n + 1 end
+                    if hit then
+                        local okh, old = pcall(hookfunction, v, noop)
+                        if okh and old then
+                            FIX.hooks[#FIX.hooks + 1] = { f = v, old = old }
+                            n = n + 1
+                        end
+                    end
                 end
             end
         end
@@ -638,7 +720,7 @@ local function killACGThreads(byName)
             local src = ""
             pcall(function() src = debug.info(v, "s") or "" end)
             local hit = isTarget(src)
-            if not hit and src ~= "" then
+            if not hit and src ~= "" and not isSafeName(src) then
                 for nm in pairs(byName) do
                     if src:lower():find(nm, 1, true) then hit = true; break end
                 end
@@ -656,12 +738,10 @@ local function disableACGConns(byName)
     if not getconnections then return 0 end
     local n = 0
     local sigs = {}
-    for _, nm in ipairs({ "Heartbeat", "RenderStepped", "PreRender", "Stepped",
-                         "PreSimulation", "PostSimulation" }) do
+    for _, nm in ipairs({ "Heartbeat", "RenderStepped", "PreRender", "Stepped" }) do
         local ok, sig = pcall(function() return RS[nm] end)
         if ok and sig then sigs[#sigs + 1] = sig end
     end
-    sigs[#sigs + 1] = SC.Error
     for _, sig in ipairs(sigs) do
         local ok, conns = pcall(getconnections, sig)
         if ok and conns then
@@ -669,7 +749,9 @@ local function disableACGConns(byName)
                 local sn, src = "", ""
                 pcall(function() if c.Script then sn = c.Script:GetFullName() end end)
                 pcall(function() src = debug.info(c.Function, "s") or "" end)
-                if isTarget(sn) or isTarget(src) then
+                if (isTarget(sn) or isTarget(src))
+                   and not isSafeName(sn) and not isSafeName(src) then
+                    FIX.conns[#FIX.conns + 1] = c
                     pcall(function() c:Disable() end)
                     pcall(function() c:Disconnect() end)
                     n = n + 1
@@ -723,7 +805,6 @@ local function scanRemotes()
         end
     end
     pcall(walk, RStorage)
-    pcall(walk, workspace)
     return n
 end
 local function installGlobalHook()
@@ -741,11 +822,13 @@ local function installGlobalHook()
                 G.blocked = G.blocked + 1
                 return nil
             end
+            -- 只切上行；不再拦 Connect(那会掐死车辆/疾跑按键)
             if m == "FireServer" or m == "InvokeServer" then
                 local cs = getcallingscript and getcallingscript()
                 local sn, short = "", ""
                 if cs then pcall(function() sn = cs:GetFullName(); short = cs.Name end) end
-                if isTarget(sn) or isTarget(short) or G.targetScripts[(short or ""):lower()] then
+                if not isSafeName(sn) and not isSafeName(short)
+                   and (isTarget(sn) or isTarget(short) or G.targetScripts[(short or ""):lower()]) then
                     G.blocked = G.blocked + 1
                     return nil
                 end
@@ -847,7 +930,7 @@ local function tcKill(q)
     local killed, matched = 0, 0
     if not coroutine.close then return 0, 0 end
     for _, e in ipairs(TC.all) do
-        if tcMatch(e, q) then
+        if tcMatch(e, q) and not isSafeName(e.name) then
             matched = matched + 1
             local ok, res = pcall(coroutine.close, e.t)
             if ok and res then killed = killed + 1
@@ -858,22 +941,20 @@ local function tcKill(q)
 end
 local function tcDump()
     print(("===== thread dump (%d) ====="):format(#TC.all))
-    for i, e in ipairs(TC.all) do
-        print(("%4d [%s] %s:%d"):format(i, e.status, e.name, e.line))
-    end
+    for i, e in ipairs(TC.all) do print(("%4d [%s] %s:%d"):format(i, e.status, e.name, e.line)) end
 end
 local function tcBuild()
     if TC.panel then return end
     TC.all = tcCollect()
     local p = mk("Frame", { Name = "TCPanel", Size = UDim2.fromOffset(560, 450),
         Position = UDim2.new(0.5, -280, 0.5, -225), BackgroundColor3 = Color3.fromRGB(20, 22, 28),
-        BorderSizePixel = 0, Active = true, Visible = false, ClipsDescendants = true, ZIndex = 30 }, gui)
+        BorderSizePixel = 0, Active = true, Visible = false, ClipsDescendants = true, ZIndex = 70 }, gui)
     mk("UICorner", { CornerRadius = UDim.new(0, 12) }, p)
     mk("UIStroke", { Color = Color3.fromRGB(58, 64, 78), Thickness = 1 }, p)
     TC.panel = p
 
     local tb = mk("Frame", { Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = Color3.fromRGB(27, 30, 39),
-        BorderSizePixel = 0, ZIndex = 31 }, p)
+        BorderSizePixel = 0, ZIndex = 71 }, p)
     mk("TextLabel", { Text = "Thread Cleaner", BackgroundTransparency = 1,
         TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.new(0, 12, 0, 0),
         Size = UDim2.new(1, -60, 1, 0), Font = Enum.Font.GothamBold, TextSize = 13,
@@ -899,9 +980,9 @@ local function tcBuild()
 
     TC.search = mk("TextBox", { Size = UDim2.new(1, -24, 0, 32), Position = UDim2.new(0, 12, 0, 46),
         BackgroundColor3 = Color3.fromRGB(26, 29, 37), BorderSizePixel = 0, ClearTextOnFocus = false,
-        PlaceholderText = "搜索线程/脚本名,例如 BS_ 或 Antikick", Text = "",
-        PlaceholderColor3 = Color3.fromRGB(120, 128, 145), Font = Enum.Font.Gotham, TextSize = 13,
-        TextColor3 = Color3.fromRGB(235, 240, 250), TextXAlignment = Enum.TextXAlignment.Left }, p)
+        PlaceholderText = "搜索线程/脚本名", Text = "", PlaceholderColor3 = Color3.fromRGB(120, 128, 145),
+        Font = Enum.Font.Gotham, TextSize = 13, TextColor3 = Color3.fromRGB(235, 240, 250),
+        TextXAlignment = Enum.TextXAlignment.Left }, p)
     mk("UICorner", { CornerRadius = UDim.new(0, 7) }, TC.search)
     mk("UIPadding", { PaddingLeft = UDim.new(0, 8) }, TC.search)
 
@@ -949,27 +1030,49 @@ local function tcBuild()
         b.MouseButton1Click:Connect(cb)
         return b
     end
-
     TC.search:GetPropertyChangedSignal("Text"):Connect(tcRender)
     btn("刷新", 12, 80, function() tcRefresh() end)
     btn("列到 F9", 98, 80, function() tcDump() end)
-    btn("自动填 BS_", 184, 96, function()
+    btn("填 BS_", 184, 80, function()
         TC.search.Text = "BS_"
-        TC.status.Text = "已填 BS_ —— 不行再试 防御 / Antikick / AntiCheat"
+        TC.status.Text = "已填 BS_（车辆/输入脚本已白名单，不会误杀）"
     end)
-    btn("终止匹配", 286, 100, function()
+    btn("终止匹配", 270, 96, function()
         local k, m = tcKill(TC.search.Text or "")
         TC.status.Text = ("终止了 %d / %d（匹配 %d）"):format(k, #TC.all, m)
         task.delay(0.3, tcRefresh)
     end)
-    btn("关闭", 392, 60, function() p.Visible = false end)
-
+    btn("关闭", 372, 60, function() p.Visible = false end)
     tcRender()
 end
 local function tcShow()
-    tcBuild()
-    TC.panel.Visible = true
-    tcRefresh()
+    tcBuild(); TC.panel.Visible = true; tcRefresh()
+end
+
+--==================== 角色 / 服务器操作 ====================
+local function suicide()
+    local h = humOf(lp)
+    if h then pcall(function() h.Health = 0 end) end
+    local c = charOf(lp)
+    if c then
+        for _, v in ipairs(c:GetDescendants()) do
+            if v:IsA("BasePart") then pcall(function() v:BreakJoints() end) end
+        end
+    end
+    notify("已自杀，等待重生", "warn", 2.5)
+end
+local function rejoinHere()
+    local TS = game:GetService("TeleportService")
+    notify("正在重进本服…", "info", 2)
+    task.wait(0.4)
+    local ok = pcall(function() TS:TeleportToPlaceInstance(game.PlaceId, game.JobId, lp) end)
+    if not ok then ok = pcall(function() TS:Teleport(game.PlaceId, lp) end) end
+    if not ok then notify("重进失败（被游戏/AC 拦截，或该体验禁止传送）", "err", 4) end
+end
+local function newServer()
+    local TS = game:GetService("TeleportService")
+    local ok = pcall(function() TS:Teleport(game.PlaceId, lp) end)
+    notify(ok and "正在切换到新服务器…" or "切服失败", ok and "info" or "err", 3)
 end
 
 --==================== 页面 ====================
@@ -979,22 +1082,19 @@ local pMisc = addPage("杂项")
 
 addSection(pMain, "MOVEMENT")
 addToggle(pMain, "飞行 (F)", false, function(v) setFly(v) end)
-addSlider(pMain, "飞行速度", 10, 300, S.flySpeed, function(v) S.flySpeed = v end)
+addSlider(pMain, "飞行速度", 10, 120, S.flySpeed, function(v) S.flySpeed = v end)
 addSection(pMain, "菜单背景")
 addToggle(pMain, "压暗游戏背景", true, function(v)
     S.dim = v
     if backdrop then backdrop.Visible = main.Visible and v end
 end)
-addSlider(pMain, "背景不透明度 %", 0, 90, 55, function(v)
+addSlider(pMain, "背景不透明度 %", 0, 90, 50, function(v)
     S.bgA = v / 100
     if backdrop then backdrop.BackgroundTransparency = 1 - S.bgA end
 end)
 addToggle(pMain, "背景模糊 (BlurEffect)", false, function(v)
     S.blur = v
-    if blurFx then
-        blurFx.Size = v and 14 or 0
-        blurFx.Enabled = v and main.Visible
-    end
+    if blurFx then blurFx.Size = v and 14 or 0; blurFx.Enabled = v and main.Visible end
 end)
 addSection(pMain, "HUB")
 local setKeyBtn = addButton(pMain, "菜单键: " .. CONFIG.MenuKeys[1].Name .. " (点我改键)", function()
@@ -1004,7 +1104,7 @@ end)
 addButton(pMain, "隐藏菜单", function() setVisible(false) end)
 
 addSection(pVisual, "ESP")
-addToggle(pVisual, "启用 ESP", false, function(v) S.esp = v end)
+addToggle(pVisual, "启用 ESP", false, function(v) S.esp = v; notify("ESP " .. (v and "开" or "关"), v and "ok" or "info", 1.4) end)
 addToggle(pVisual, "方框高亮", true, function(v) S.espBox = v end)
 addToggle(pVisual, "名字", true, function(v) S.espName = v end)
 addToggle(pVisual, "血量条", true, function(v) S.espHp = v end)
@@ -1014,7 +1114,7 @@ addToggle(pVisual, "穿墙可见", true, function(v) S.espOccluded = v end)
 addToggle(pVisual, "彩虹上色", false, function(v) S.espRainbow = v end)
 
 addSection(pCombat, "AIMBOT")
-addToggle(pCombat, "启用自瞄", false, function(v) S.aim = v end)
+addToggle(pCombat, "启用自瞄", false, function(v) S.aim = v; notify("自瞄 " .. (v and "开" or "关"), v and "ok" or "info", 1.4) end)
 addToggle(pCombat, "按住 Q 瞄准 (关=常开)", true, function(v) S.aimHold = v end)
 addToggle(pCombat, "瞄准队友", false, function(v) S.aimTeam = v end)
 addToggle(pCombat, "隔墙忽略", true, function(v) S.aimWall = v end)
@@ -1030,52 +1130,41 @@ local setPartBtn = addButton(pCombat, "部位: Head", function()
 end)
 
 addSection(pGuard, "① 基础压制")
-local guardStatus
-addToggle(pGuard, "线程 + 连接 + marker", false, function(v)
-    if v then
-        local msg = acRun()
-        if guardStatus then guardStatus(msg) end
-    end
-end)
-addButton(pGuard, "重新执行基础压制", function()
-    local msg = acRun()
-    if guardStatus then guardStatus(msg) end
-end)
+addToggle(pGuard, "线程 + 连接 + marker", false, function(v) if v then acRun() end end)
+addButton(pGuard, "重新执行基础压制", function() acRun() end)
 
-addSection(pGuard, "② AC GUARD — 检测层")
-addToggle(pGuard, "挂钩本地检测函数", false, function(v)
+addSection(pGuard, "② 检测层（挂钩本地判定）")
+addToggle(pGuard, "挂钩检测函数 / 杀线程", false, function(v)
     G.layer1 = v
     if v then
         local f, t, c = runLayer1()
-        if guardStatus then guardStatus(("检测层: 闭包 %d / 线程 %d / 连接 %d"):format(f, t, c)) end
+        notify(("检测层: 闭包 %d / 线程 %d / 连接 %d"):format(f, t, c), "ok", 3)
     end
 end)
 
-addSection(pGuard, "③ AC GUARD — 通道层")
-addToggle(pGuard, "切断上行 + 拦本地踢人", false, function(v)
-    G.layer2 = v
-    G.blockKick = v
+addSection(pGuard, "③ 通道层（只切上行，不动 Connect）")
+addToggle(pGuard, "切断上报 + 拦本地踢人", false, function(v)
+    G.layer2 = v; G.blockKick = v
     if v then
         local n = runLayer2()
-        if guardStatus then guardStatus(("通道层: remote %d / blocked %d"):format(n, G.blocked)) end
+        notify(("通道层: remote %d / blocked %d"):format(n, G.blocked), "ok", 3)
     end
 end)
 
 addSection(pGuard, "哈希搜索")
-local hashBox = addBox(pGuard, "输入 AntiCheat / 混淆名 / 脚本名", "AntiCheat")
+local hashBox = addBox(pGuard, "输入 AntiCheat / 混淆名", "AntiCheat")
 addButton(pGuard, "哈希搜索 + 挂钩", function()
     local f, t, n = hashSearch(hashBox.Text)
-    if guardStatus then guardStatus(("搜索 %s → 闭包 %d / 线程 %d / remote %d"):format(hashBox.Text, f, t, n)) end
+    notify(("搜索 %s → 闭包 %d / 线程 %d / remote %d"):format(hashBox.Text, f, t, n), "ok", 3)
 end)
-addButton(pGuard, "只把关键词加进哈希表", function()
+addButton(pGuard, "只加入哈希表", function()
     CONFIG.ACG.Hashes[hash(hashBox.Text)] = true
-    if guardStatus then guardStatus(("hash(%s) = %d 已加入"):format(hashBox.Text, hash(hashBox.Text))) end
+    notify(("hash(%s) = %d 已加入"):format(hashBox.Text, hash(hashBox.Text)), "ok", 2.5)
 end)
-addButton(pGuard, "列出匹配到 F9 + 恢复钩子", function()
+addButton(pGuard, "列出匹配到 F9", function()
     print(("=== ACG matches (%d) ==="):format(#G.matches))
     for _, m in ipairs(G.matches) do print(m) end
-    acgRestore()
-    if guardStatus then guardStatus(("已打印 %d 条,__namecall 已恢复"):format(#G.matches)) end
+    notify(("已打印 %d 条"):format(#G.matches), "info", 2)
 end)
 
 addSection(pGuard, "THREAD CLEANER")
@@ -1083,37 +1172,47 @@ addButton(pGuard, "打开线程面板", function() tcShow() end)
 addButton(pGuard, "快速杀 BS_", function()
     TC.all = tcCollect()
     local k, m = tcKill("BS_")
-    if guardStatus then guardStatus(("BS_ 匹配 %d / 终止 %d"):format(m, k)) end
+    notify(("BS_ 匹配 %d / 终止 %d"):format(m, k), k > 0 and "ok" or "warn", 3)
 end)
 addButton(pGuard, "列出全部线程到 F9", function()
     TC.all = tcCollect(); tcDump()
-    if guardStatus then guardStatus(("已打印 %d 个线程"):format(#TC.all)) end
+    notify(("已打印 %d 个线程"):format(#TC.all), "info", 2)
 end)
 
-rowOrder = rowOrder + 1
-guardStatus = addButton(pGuard, "状态: 就绪", function() end)
-rowOrder = rowOrder + 1
-mk("TextLabel", { Text = "先 ③ 通道层,再 ② 检测层,最后 ① 基础压制。267 是引擎层,这里管不到。",
-    BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 30), Font = Enum.Font.Gotham,
-    TextSize = 11, TextColor3 = Color3.fromRGB(140, 148, 162), TextWrapped = true,
-    TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = rowOrder }, pGuard)
-
-addSection(pMisc, "清理")
-addButton(pMisc, "卸载并恢复", function()
-    setFly(false); S.esp = false; S.aim = false
+addSection(pGuard, "输入急救")
+addButton(pGuard, "修复车辆/疾跑按键", function() repairInput(true) end)
+addButton(pGuard, "还原 ACG 钩子 + 输入", function()
     acgRestore()
+    repairInput(true)
+  notify("已还原 __namecall 与所有被改动的闭包", "ok", 3)
+end)
+
+addSection(pMisc, "角色")
+addButton(pMisc, "自杀 / 重生", function() suicide() end)
+addSection(pMisc, "服务器")
+addButton(pMisc, "重进本服 (同 JobId)", function() rejoinHere() end)
+addButton(pMisc, "换一个新服务器", function() newServer() end)
+addSection(pMisc, "其他")
+addButton(pMisc, "卸载并恢复全部", function()
+    setFly(false); S.esp = false; S.aim = false
+    acgRestore(); repairInput(false)
     for _, o in pairs(espStore) do destroyESP(o) end
     espStore = {}
     pcall(function() RS:UnbindFromRenderStep("XHubAim") end)
     if blurFx then blurFx:Destroy() end
+    if notifHolder then notifHolder:Destroy() end
     gui:Destroy()
 end)
 addSection(pMisc, "信息")
 rowOrder = rowOrder + 1
-mk("TextLabel", { Text = ("执行器: %s\nhash() 可用 · ACG 关键词 %d 个"):format(
-    (identifyexecutor and identifyexecutor()) or "unknown", #CONFIG.ACG.Keywords),
-    BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 40), Font = Enum.Font.Code,
-    TextSize = 11, TextColor3 = Color3.fromRGB(160, 200, 180), TextWrapped = true,
+mk("TextLabel", { Text = ("版本: %s   执行器: %s"):format(VERSION,
+    (identifyexecutor and identifyexecutor()) or "unknown"),
+    BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 20), Font = Enum.Font.Code,
+    TextSize = 11, TextColor3 = Color3.fromRGB(160, 200, 180), LayoutOrder = rowOrder }, pMisc)
+rowOrder = rowOrder + 1
+mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n通道层只切 FireServer,不拦 Connect",
+    BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 34), Font = Enum.Font.Gotham,
+    TextSize = 10, TextColor3 = Color3.fromRGB(140, 148, 162), TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = rowOrder }, pMisc)
 
 pcall(function() tabBtns["主要"]:Fire("MouseButton1Click") end)
@@ -1129,28 +1228,27 @@ UIS.InputBegan:Connect(function(i, gp)
     if captureMode then
         captureMode = false
         if i.KeyCode == Enum.KeyCode.Escape then
-            toast.Text = "改键已取消"
+            notify("改键已取消", "warn", 2)
         else
             CONFIG.MenuKeys = { i.KeyCode }
-            toast.Text = "菜单键 = " .. i.KeyCode.Name
             setKeyBtn("菜单键: " .. i.KeyCode.Name .. " (点我改键)")
+            notify("菜单键 = " .. i.KeyCode.Name, "ok", 2)
         end
-        toast.Visible = true
-        task.delay(1.2, function() if toast then toast.Visible = false end end)
         return
     end
     if isMenuKey(i.KeyCode) then
         setVisible(not main.Visible)
     elseif i.KeyCode == CONFIG.FlyKey and not gp then
         setFly(not S.fly)
-        toast.Text = "飞行: " .. (S.fly and "开" or "关")
-        toast.Visible = true
-        task.delay(1.0, function() if toast then toast.Visible = false end end)
+        if not S.fly then notify("飞行已关闭", "info", 1.2) end
     end
 end)
 
-setVisible(true)
-toast.Text = "XHub 就绪 · " .. CONFIG.MenuKeys[1].Name .. " 开关菜单"
-toast.Visible = true
-task.delay(2, function() if toast then toast.Visible = false end end)
-print("[XHub] loaded · 菜单键 " .. CONFIG.MenuKeys[1].Name .. " / 5 页 / ACG v2 已并入")
+setVisible(false)
+task.delay(0.2, function() setVisible(true) end)
+notify("XHub " .. VERSION .. " 已加载", "ok", 3)
+task.delay(0.4, function()
+    notify("菜单键 " .. CONFIG.MenuKeys[1].Name .. " · F 飞行 · Q 瞄准", "info", 3)
+end)
+print(("[XHub] %s loaded · 5 页 · 菜单键 %s · 输入白名单已启用"):format(
+    VERSION, CONFIG.MenuKeys[1].Name))
