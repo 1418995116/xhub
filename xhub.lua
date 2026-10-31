@@ -3,7 +3,7 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v4.3"
+local VERSION = "v4.4"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -35,6 +35,7 @@ local S = {
     aim = false, aimHold = true, aimSmooth = 12, aimFov = 140,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = true,
+    flyMode = "cframe", antiSnap = true,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -361,39 +362,93 @@ local function addBox(page, placeholder, default)
     return box
 end
 
---==================== 飞行 ====================
-local flyBV
+--==================== 飞行 v2: 双模式 + 反拉回 ====================
+local flyBV, flyPos, lastHrpPos
+local flySnaps = 0
+
+local function flyStop()
+    S.fly = false
+    if flyBV then flyBV:Destroy(); flyBV = nil end
+    local h = humOf(lp)
+    if h then pcall(function() h.PlatformStand = false end) end
+    cam.CameraType = Enum.CameraType.Custom
+    flyPos, lastHrpPos, flySnaps = nil, nil, 0
+end
+
 local function setFly(on)
     S.fly = on
     local c = charOf(lp); local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if on and hrp then
-        if flyBV then flyBV:Destroy() end
-        flyBV = mk("BodyVelocity", { Name = "XHubFly", MaxForce = Vector3.new(1e5, 1e5, 1e5),
-            Velocity = Vector3.zero, P = 1250 }, hrp)
-        notify("飞行已开启 速度 " .. S.flySpeed, "ok", 1.4)
+        flyPos = hrp.Position
+        lastHrpPos = nil
+        flySnaps = 0
+        local h = humOf(lp)
+        if S.flyMode == "cframe" and h then pcall(function() h.PlatformStand = true end) end
+        if S.flyMode == "body" then
+            if flyBV then flyBV:Destroy() end
+            flyBV = mk("BodyVelocity", { Name = "XHubFly", MaxForce = Vector3.new(1e5, 1e5, 1e5),
+                Velocity = Vector3.zero, P = 1250 }, hrp)
+        end
+        notify(("飞行已开启 · %s · 速度 %d"):format(S.flyMode == "body" and "物理" or "CFrame", S.flySpeed), "ok", 1.6)
     else
-        if flyBV then flyBV:Destroy(); flyBV = nil end
-        local h = humOf(lp); if h then h.PlatformStand = false end
-        cam.CameraType = Enum.CameraType.Custom
+        flyStop()
+        notify("飞行已关闭", "info", 1.2)
     end
 end
-RS.Heartbeat:Connect(function()
+
+local function flyDir()
+    local cf = cam.CFrame
+    local d = Vector3.zero
+    if UIS:IsKeyDown(Enum.KeyCode.W) then d = d + cf.LookVector end
+    if UIS:IsKeyDown(Enum.KeyCode.S) then d = d - cf.LookVector end
+    if UIS:IsKeyDown(Enum.KeyCode.A) then d = d - cf.RightVector end
+    if UIS:IsKeyDown(Enum.KeyCode.D) then d = d + cf.RightVector end
+    if UIS:IsKeyDown(Enum.KeyCode.Space) then d = d + Vector3.yAxis end
+    if UIS:IsKeyDown(Enum.KeyCode.LeftControl) then d = d - Vector3.yAxis end
+    return d
+end
+
+local function onSnap()
+    flySnaps = flySnaps + 1
+    if flySnaps % 3 == 0 then
+        S.flySpeed = math.max(20, math.floor(S.flySpeed * 0.75))
+        notify(("被拉回 ×%d，自适应降速 → %d"):format(flySnaps, S.flySpeed), "warn", 2.4)
+    end
+end
+
+RS.RenderStepped:Connect(function(dt)
     if not S.fly then return end
     local c = charOf(lp); local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
-    if not flyBV or flyBV.Parent ~= hrp then
-        flyBV = mk("BodyVelocity", { Name = "XHubFly", MaxForce = Vector3.new(1e5, 1e5, 1e5),
-            Velocity = Vector3.zero, P = 1250 }, hrp)
+    local dir = flyDir()
+
+    if S.flyMode == "body" then
+        if not flyBV or flyBV.Parent ~= hrp then
+            flyBV = mk("BodyVelocity", { Name = "XHubFly", MaxForce = Vector3.new(1e5, 1e5, 1e5),
+                Velocity = Vector3.zero, P = 1250 }, hrp)
+        end
+        flyBV.Velocity = (dir.Magnitude > 0) and (dir.Unit * S.flySpeed) or Vector3.zero
+        if S.antiSnap and lastHrpPos and dir.Magnitude > 0 then
+            if (hrp.Position - lastHrpPos).Magnitude < 0.03 then onSnap() end
+        end
+        lastHrpPos = hrp.Position
+        return
     end
-    local cf = cam.CFrame; local dir = Vector3.zero
-    if UIS:IsKeyDown(Enum.KeyCode.W) then dir = dir + cf.LookVector end
-    if UIS:IsKeyDown(Enum.KeyCode.S) then dir = dir - cf.LookVector end
-    if UIS:IsKeyDown(Enum.KeyCode.A) then dir = dir - cf.RightVector end
-    if UIS:IsKeyDown(Enum.KeyCode.D) then dir = dir + cf.RightVector end
-    if UIS:IsKeyDown(Enum.KeyCode.Space) then dir = dir + Vector3.yAxis end
-    if UIS:IsKeyDown(Enum.KeyCode.LeftControl) then dir = dir - Vector3.yAxis end
-    flyBV.Velocity = (dir.Magnitude > 0) and (dir.Unit * S.flySpeed) or Vector3.zero
+
+    -- CFrame 模式: 直接写位置,被服务器拉回就顺势续飞(不硬抢)
+    local cur = hrp.CFrame
+    flyPos = flyPos or cur.Position
+    if S.antiSnap and (cur.Position - flyPos).Magnitude > 6 then
+        onSnap()
+        flyPos = cur.Position
+    end
+    local step = (dir.Magnitude > 0) and (dir.Unit * S.flySpeed * dt) or Vector3.zero
+    flyPos = flyPos + step
+    local rot = cur - cur.Position
+    hrp.CFrame = CFrame.new(flyPos) * rot
+    pcall(function() hrp.AssemblyLinearVelocity = Vector3.zero end)
 end)
+
 lp.CharacterAdded:Connect(function() if S.fly then setFly(true) end end)
 
 --==================== ESP ====================
@@ -1265,7 +1320,13 @@ local pMisc = addPage("杂项")
 
 addSection(pMain, "MOVEMENT")
 addToggle(pMain, "飞行 (F)", false, function(v) setFly(v) end)
-addSlider(pMain, "飞行速度", 10, 120, S.flySpeed, function(v) S.flySpeed = v end)
+addSlider(pMain, "飞行速度", 10, 200, S.flySpeed, function(v) S.flySpeed = v end)
+local setModeBtn = addButton(pMain, "飞行模式: CFrame（防拉回更好）", function()
+    S.flyMode = (S.flyMode == "cframe") and "body" or "cframe"
+    setModeBtn("飞行模式: " .. (S.flyMode == "cframe" and "CFrame（防拉回更好）" or "物理 BodyVelocity"))
+    if S.fly then setFly(false); setFly(true) end
+end)
+addToggle(pMain, "反拉回（被拉回自动降速）", true, function(v) S.antiSnap = v end)
 addSection(pMain, "菜单背景")
 addToggle(pMain, "压暗游戏背景", true, function(v)
     S.dim = v
