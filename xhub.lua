@@ -3,7 +3,7 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v4.4"
+local VERSION = "v4.8"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -36,6 +36,7 @@ local S = {
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = true,
     flyMode = "cframe", antiSnap = true,
+    noclip = false, walkSpeed = 20, safeMode = false, autoTune = true, ghost = false,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -100,6 +101,63 @@ local function canSee(part)
     end
     return true
 end
+
+--==================== 服务器档位: 按“特征”自动识别 ====================
+local PROFILES = {
+    doors = {
+        label = "DOORS · 服务端权威",
+        flySpeed = 18, flyCap = 20, flyMode = "cframe", walkSpeed = 20,
+        antiSnap = true, noclip = true, vehicleSafe = false, banRisk = "低",
+        tip = "按 0.6s 周期纠正位置，高速必被拉回；用 Noclip + 走速 20",
+    },
+    sanAurie = {
+        label = "San Aurie · 会封号",
+        flySpeed = 16, flyCap = 18, flyMode = "cframe", walkSpeed = 16,
+        antiSnap = true, noclip = true, vehicleSafe = true, banRisk = "高",
+        tip = "实测服务端会下发 600 封禁；速度已锁 18 以下，建议只开 ESP / Noclip",
+    },
+    ["default"] = {
+        label = "通用 · 未识别",
+        flySpeed = 40, flyCap = 60, flyMode = "cframe", walkSpeed = 16,
+        antiSnap = true, noclip = false, vehicleSafe = true, banRisk = "未知",
+        tip = "未匹配特征，按实测调速度（先 35，被拉就降 5 档）",
+    },
+}
+
+local function detectProfile()
+    local ok, res = pcall(function()
+        if RStorage:FindFirstChild("RemotesFolder") and workspace:FindFirstChild("CurrentRooms") then
+            return "doors"
+        end
+        if game:GetService("ReplicatedFirst"):FindFirstChild("AntiCheat")
+           or RStorage:FindFirstChild("BS_Script_Running_Marker") then
+            return "sanAurie"
+        end
+        return "default"
+    end)
+    return ok and res or "default"
+end
+
+local currentProfileKey = detectProfile()
+
+local function applyProfile(key)
+    local p = PROFILES[key] or PROFILES["default"]
+    currentProfileKey = key
+    S.flySpeed    = math.min(p.flySpeed or 40, p.flyCap or 60)
+    S.flyMode     = p.flyMode
+    S.walkSpeed   = p.walkSpeed
+    S.antiSnap    = p.antiSnap
+    S.noclip      = p.noclip
+    S.vehicleSafe = p.vehicleSafe
+    return p
+end
+
+local function flyCapNow()
+    local p = PROFILES[currentProfileKey]
+    return (p and p.flyCap) or 60
+end
+
+applyProfile(currentProfileKey)
 
 --==================== 界面骨架 ====================
 local gui = mk("ScreenGui", { Name = "XHub", ResetOnSpawn = false, IgnoreGuiInset = true,
@@ -376,6 +434,10 @@ local function flyStop()
 end
 
 local function setFly(on)
+    if on and S.safeMode then
+        notify("安全模式开启：位移类功能已禁用（先关掉安全模式）", "err", 3)
+        return
+    end
     S.fly = on
     local c = charOf(lp); local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if on and hrp then
@@ -408,16 +470,39 @@ local function flyDir()
     return d
 end
 
-local function onSnap()
+local tune = { n = 0, dSum = 0, pSum = 0, pN = 0, lastT = 0 }
+
+local function onSnap(delta)
     flySnaps = flySnaps + 1
-    if flySnaps % 3 == 0 then
-        S.flySpeed = math.max(20, math.floor(S.flySpeed * 0.75))
-        notify(("被拉回 ×%d，自适应降速 → %d"):format(flySnaps, S.flySpeed), "warn", 2.4)
+    local now = os.clock()
+    tune.n = tune.n + 1
+    tune.dSum = tune.dSum + (delta or 0)
+    if tune.lastT > 0 then
+        tune.pSum = tune.pSum + (now - tune.lastT)
+        tune.pN = tune.pN + 1
+    end
+    tune.lastT = now
+
+    if tune.n >= 3 then
+        local period = (tune.pN > 0) and (tune.pSum / tune.pN) or 0.63
+        local avgD = tune.dSum / tune.n
+        local allowed = math.floor(S.flySpeed - avgD / period)
+        local cap = flyCapNow()
+        local target = math.max(10, math.min(cap, math.floor((S.flySpeed - avgD / period) * 0.9)))
+        if S.autoTune and target < S.flySpeed then
+            S.flySpeed = target
+            notify(("自动调参: 每 %.2fs 被扣 %.1f studs → 该服上限≈%d → 已设为 %d")
+                :format(period, avgD, math.max(allowed, 10), target), "warn", 4.5)
+        end
+        tune.n, tune.dSum, tune.pSum, tune.pN = 0, 0, 0, 0
+        flySnaps = 0
     end
 end
 
 RS.RenderStepped:Connect(function(dt)
     if not S.fly then return end
+    local cap = flyCapNow()
+    if S.flySpeed > cap then S.flySpeed = cap end
     local c = charOf(lp); local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
     local dir = flyDir()
@@ -438,11 +523,21 @@ RS.RenderStepped:Connect(function(dt)
     -- CFrame 模式: 直接写位置,被服务器拉回就顺势续飞(不硬抢)
     local cur = hrp.CFrame
     flyPos = flyPos or cur.Position
-    if S.antiSnap and (cur.Position - flyPos).Magnitude > 6 then
-        onSnap()
+    local snapDelta = (cur.Position - flyPos).Magnitude
+    if S.antiSnap and snapDelta > 6 then
+        onSnap(snapDelta)
         flyPos = cur.Position
     end
-    local step = (dir.Magnitude > 0) and (dir.Unit * S.flySpeed * dt) or Vector3.zero
+
+    -- 幽灵位移: 伪装走速 + 脉冲前进(每 0.7s 只走 0.5s,避免跨过采样窗口累积)
+    local moving = dir.Magnitude > 0
+    if S.ghost then
+        local h2 = humOf(lp)
+        if h2 then pcall(function() h2.WalkSpeed = 16 end) end
+        if (os.clock() % 0.7) >= 0.5 then moving = false end
+    end
+
+    local step = moving and (dir.Unit * S.flySpeed * dt) or Vector3.zero
     flyPos = flyPos + step
     local rot = cur - cur.Position
     hrp.CFrame = CFrame.new(flyPos) * rot
@@ -801,6 +896,54 @@ task.spawn(function()
     end
 end)
 
+--==================== 穿墙 / 移速 ====================
+local noclipOrig = {}
+
+local function setNoclip(on)
+    S.noclip = on
+    local c = charOf(lp)
+    if not c then return end
+    if on then
+        for _, v in ipairs(c:GetDescendants()) do
+            if v:IsA("BasePart") then
+                noclipOrig[v] = v.CanCollide
+                pcall(function() v.CanCollide = false end)
+            end
+        end
+        notify("穿墙已开启（低速穿墙不会触发回弹）", "ok", 2)
+    else
+        for _, v in ipairs(c:GetDescendants()) do
+            if v:IsA("BasePart") then
+                pcall(function() v.CanCollide = noclipOrig[v] ~= false end)
+            end
+        end
+        noclipOrig = {}
+        notify("穿墙已关闭", "info", 1.2)
+    end
+end
+
+task.spawn(function()
+    while task.wait(0.25) do
+        if S.noclip then
+            local c = charOf(lp)
+            if c then
+                for _, v in ipairs(c:GetDescendants()) do
+                    if v:IsA("BasePart") and v.CanCollide then
+                        if noclipOrig[v] == nil then noclipOrig[v] = true end
+                        pcall(function() v.CanCollide = false end)
+                    end
+                end
+            end
+        end
+        if not S.fly and not isSeated() then
+            local h = humOf(lp)
+            if h and math.abs(h.WalkSpeed - S.walkSpeed) > 0.5 then
+                pcall(function() h.WalkSpeed = S.walkSpeed end)
+            end
+        end
+    end
+end)
+
 --==================== 基础压制 ====================
 local AC = { marker = nil, guard = false }
 local function acIs(s)
@@ -1107,6 +1250,46 @@ local function acgRestore()
     end
 end
 
+--==================== 按名字拦截远程(通用) ====================
+local blockedRemotes = {}
+
+local function blockRemoteSubstr(sub)
+    sub = tostring(sub or ""):lower()
+    if sub == "" then return 0 end
+    if not (hookmetamethod and getnamecallmethod) then return 0 end
+    local n = 0
+    local function walk(root)
+        for _, d in ipairs(root:GetDescendants()) do
+            if (d:IsA("RemoteEvent") or d:IsA("RemoteFunction") or d:IsA("UnreliableRemoteEvent"))
+               and not blockedRemotes[d] then
+                local full = d:GetFullName():lower()
+                if full:find(sub, 1, true) then
+                    local ok = pcall(function()
+                        local old
+                        old = hookmetamethod(d, "__namecall", newcclosure(function(self, ...)
+                            local m = getnamecallmethod()
+                            if m == "FireServer" or m == "InvokeServer" then
+                                G.blocked = G.blocked + 1
+                                return nil
+                            end
+                            return old(self, ...)
+                        end))
+                    end)
+                    if ok then
+                        blockedRemotes[d] = true
+                        n = n + 1
+                        G.matches[#G.matches + 1] = "blocked: " .. d:GetFullName()
+                    end
+                end
+            end
+        end
+    end
+    pcall(walk, RStorage)
+    pcall(walk, game:GetService("ReplicatedFirst"))
+    pcall(walk, workspace)
+    return n
+end
+
 --==================== 线程清理面板 ====================
 local TC = { all = {}, panel = nil, exact = false, cs = false, rowIdx = 0 }
 local function tcCollect()
@@ -1327,6 +1510,18 @@ local setModeBtn = addButton(pMain, "飞行模式: CFrame（防拉回更好）",
     if S.fly then setFly(false); setFly(true) end
 end)
 addToggle(pMain, "反拉回（被拉回自动降速）", true, function(v) S.antiSnap = v end)
+addToggle(pMain, "安全模式（禁飞/禁加速，只留视觉）", false, function(v)
+    S.safeMode = v
+    if v and S.fly then setFly(false) end
+    notify(v and "安全模式: 位移类功能已禁用" or "安全模式: 已关闭", v and "warn" or "info", 2.5)
+end)
+addToggle(pMain, "自动调参（实测该服速度上限）", true, function(v) S.autoTune = v end)
+addToggle(pMain, "幽灵位移（伪装走速 + 脉冲前进）", false, function(v)
+    S.ghost = v
+    notify(v and "幽灵位移: 走速锁定 16,位移改为脉冲" or "幽灵位移: 已关闭", "info", 2.5)
+end)
+addSlider(pMain, "走路速度（服务端容忍≈16-22）", 16, 60, S.walkSpeed, function(v) S.walkSpeed = v end)
+addToggle(pMain, "穿墙 Noclip（不改速度,不触发回弹）", false, function(v) setNoclip(v) end)
 addSection(pMain, "菜单背景")
 addToggle(pMain, "压暗游戏背景", true, function(v)
     S.dim = v
@@ -1425,6 +1620,14 @@ addButton(pGuard, "列出匹配到 F9", function()
     notify(("已打印 %d 条"):format(#G.matches), "info", 2)
 end)
 
+addSection(pGuard, "远程拦截（按名字）")
+local remoteBox = addBox(pGuard, "例如 MotorReplication / Report / AntiCheat", "MotorReplication")
+addButton(pGuard, "拦截匹配的 FireServer/InvokeServer", function()
+    local n = blockRemoteSubstr(remoteBox.Text)
+    notify(("已拦截 %d 个远程（匹配 %s）"):format(n, remoteBox.Text),
+        n > 0 and "ok" or "warn", 3)
+end)
+
 addSection(pGuard, "THREAD CLEANER")
 addButton(pGuard, "打开线程面板", function() tcShow() end)
 addButton(pGuard, "快速杀 BS_", function()
@@ -1459,6 +1662,23 @@ addButton(pGuard, "打印 AC 脚本全名到 F9", function()
     for k in pairs(by) do n = n + 1 end
     for _, m in ipairs(G.matches) do print(m) end
     notify(("匹配 %d 个标识 / %d 条记录（见 F9）"):format(n, #G.matches), "info", 3)
+end)
+
+addSection(pMisc, "服务器档位")
+addButton(pMisc, "打印 PlaceId / 识别结果", function()
+    print(("[profile] PlaceId=%d  JobId=%s  识别=%s")
+        :format(game.PlaceId, tostring(game.JobId), currentProfileKey))
+    notify(("PlaceId %d · 档位 %s"):format(game.PlaceId, PROFILES[currentProfileKey].label), "info", 4)
+end)
+local setProfileBtn
+setProfileBtn = addButton(pMisc, "当前档位: " .. PROFILES[currentProfileKey].label, function()
+    local order = { "doors", "sanAurie", "default" }
+    local i = 1
+    for k, v in ipairs(order) do if v == currentProfileKey then i = k end end
+    local p = applyProfile(order[(i % #order) + 1])
+    setProfileBtn("当前档位: " .. p.label)
+    notify(("已切换档位: %s"):format(p.label), "ok", 3)
+    notify(p.tip, "info", 5)
 end)
 
 addSection(pMisc, "角色")
@@ -1522,7 +1742,11 @@ setVisible(false, true)
 task.delay(0.2, function() setVisible(true, true) end)
 notify("XHub " .. VERSION .. " 已加载", "ok", 3)
 task.delay(0.4, function()
-    notify("菜单键 " .. CONFIG.MenuKeys[1].Name .. " · F 飞行 · Q 瞄准", "info", 3)
+    notify(("档位: %s"):format(PROFILES[currentProfileKey].label), "ok", 4)
+    notify(PROFILES[currentProfileKey].tip, "info", 5)
 end)
-print(("[XHub] %s loaded · 5 页 · 菜单键 %s · 输入白名单已启用"):format(
-    VERSION, CONFIG.MenuKeys[1].Name))
+if S.noclip then
+    task.delay(0.6, function() pcall(function() setNoclip(true) end) end)
+end
+print(("[XHub] %s loaded · 5 页 · 菜单键 %s · 档位=%s (PlaceId=%d)"):format(
+    VERSION, CONFIG.MenuKeys[1].Name, currentProfileKey, game.PlaceId))
