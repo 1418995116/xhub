@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v6.0"
-local BUILD   = "2026-11-01 04:10"
+local VERSION = "v6.1"
+local BUILD   = "2026-11-01 04:25"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -1568,16 +1568,23 @@ local entStore = {}
 
 local ENT_IGNORE = { "baserig", "humanoidrig", "dummy", "template" }
 
+-- 精确实体名表：只比对“模型自己的名字”，绝不扫子对象（否则门里的 FigureAttack 会误报）
+local ENT_STRICT = { "rushmoving", "rush", "ambushmoving", "ambush", "seek", "figure",
+                     "screech", "eyes", "glitch", "timothy", "jack", "dupe",
+                     "snare", "halt", "void", "shadow" }
+
 local function isEntityModel(m)
     if not m:IsA("Model") then return false end
     if Players:GetPlayerFromCharacter(m) then return false end
-    local nm0 = m.Name:lower()
+    local nm = m.Name:lower():gsub("%s+", "")
     for _, k in ipairs(ENT_IGNORE) do
-        if nm0:find(k, 1, true) then return false end
+        if nm:find(k, 1, true) then return false end
     end
-    -- 只认“有活体特征”的模型：Humanoid 或 HumanoidRootPart
     if m:FindFirstChildOfClass("Humanoid") then return true end
     if m:FindFirstChild("HumanoidRootPart", true) then return true end
+    for _, k in ipairs(ENT_STRICT) do
+        if nm:find(k, 1, true) then return true end
+    end
     return false
 end
 
