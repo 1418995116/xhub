@@ -3,7 +3,7 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v4.8"
+local VERSION = "v4.9"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -37,6 +37,7 @@ local S = {
     aimOnFire = true, vehicleSafe = true, antiFall = true,
     flyMode = "cframe", antiSnap = true,
     noclip = false, walkSpeed = 20, safeMode = false, autoTune = true, ghost = false,
+    night = false, entityEsp = false,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -529,16 +530,19 @@ RS.RenderStepped:Connect(function(dt)
         flyPos = cur.Position
     end
 
-    -- 幽灵位移: 伪装走速 + 脉冲前进(每 0.7s 只走 0.5s,避免跨过采样窗口累积)
     local moving = dir.Magnitude > 0
     if S.ghost then
         local h2 = humOf(lp)
         if h2 then pcall(function() h2.WalkSpeed = 16 end) end
-        if (os.clock() % 0.7) >= 0.5 then moving = false end
     end
 
-    local step = moving and (dir.Unit * S.flySpeed * dt) or Vector3.zero
-    flyPos = flyPos + step
+    if not moving then
+        -- 静止时绝不写 CFrame：否则每帧把角色钉住，穿墙/物理都会被我们挡住
+        flyPos = cur.Position
+        return
+    end
+
+    flyPos = flyPos + dir.Unit * S.flySpeed * dt
     local rot = cur - cur.Position
     hrp.CFrame = CFrame.new(flyPos) * rot
     pcall(function() hrp.AssemblyLinearVelocity = Vector3.zero end)
@@ -1496,6 +1500,127 @@ local function newServer()
     notify(ok and "正在切换到新服务器…" or "切服失败", ok and "info" or "err", 3)
 end
 
+--==================== 夜视 ====================
+local NV = { saved = nil, cc = nil }
+
+local function setNight(on)
+    S.night = on
+    local L = Lighting
+    if on then
+        if not NV.saved then
+            NV.saved = {
+                Brightness = L.Brightness, Ambient = L.Ambient,
+                OutdoorAmbient = L.OutdoorAmbient, ClockTime = L.ClockTime,
+                FogEnd = L.FogEnd, GlobalShadows = L.GlobalShadows,
+            }
+        end
+        pcall(function()
+            L.Brightness = 3
+            L.Ambient = Color3.fromRGB(150, 150, 165)
+            L.OutdoorAmbient = Color3.fromRGB(140, 140, 160)
+            L.ClockTime = 14
+            L.FogEnd = 1000000
+            L.GlobalShadows = false
+        end)
+        if not NV.cc then
+            NV.cc = Instance.new("ColorCorrectionEffect")
+            NV.cc.Brightness = 0.28
+            NV.cc.Contrast = 0.12
+            NV.cc.Saturation = 0.15
+            NV.cc.Parent = Lighting
+        end
+        notify("夜视已开启（纯客户端,服务端看不到）", "ok", 2)
+    else
+        if NV.saved then
+            pcall(function()
+                L.Brightness = NV.saved.Brightness
+                L.Ambient = NV.saved.Ambient
+                L.OutdoorAmbient = NV.saved.OutdoorAmbient
+                L.ClockTime = NV.saved.ClockTime
+                L.FogEnd = NV.saved.FogEnd
+                L.GlobalShadows = NV.saved.GlobalShadows
+            end)
+        end
+        if NV.cc then NV.cc:Destroy(); NV.cc = nil end
+        notify("夜视已关闭", "info", 1.2)
+    end
+end
+
+--==================== 实体 / NPC / 怪物绘制 ====================
+local ENT_KW = { "Rush", "Ambush", "Eyes", "Screech", "Figure", "Hide", "Seek", "Glitch",
+                 "Timothy", "Jack", "Shadow", "Dupe", "Snare", "Guiding", "Monster",
+                 "NPC", "Entity", "Bot", "Zombie", "Ghost" }
+local entStore = {}
+
+local function isEntityModel(m)
+    if not m:IsA("Model") then return false end
+    local h = m:FindFirstChildOfClass("Humanoid")
+    if h then
+        if Players:GetPlayerFromCharacter(m) then return false end
+        return true
+    end
+    local nm = m.Name:lower()
+    for _, k in ipairs(ENT_KW) do
+        if nm:find(k:lower(), 1, true) then return true end
+    end
+    return false
+end
+
+local function destroyEnt(o)
+    for _, v in pairs(o) do if typeof(v) == "Instance" then v:Destroy() end end
+end
+
+local function ensureEnt(m)
+    local o = entStore[m]
+    if not o then o = {}; entStore[m] = o end
+    if not (o.hl and o.hl.Parent) then
+        o.hl = mk("Highlight", { Name = "XHubEnt",
+            FillColor = Color3.fromRGB(255, 120, 40), FillTransparency = 0.55,
+            OutlineColor = Color3.fromRGB(255, 205, 130), OutlineTransparency = 0,
+            DepthMode = Enum.HighlightDepthMode.AlwaysOnTop }, m)
+    end
+    o.hl.Parent = m
+    local head = m:FindFirstChild("Head") or m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
+    if head then
+        if not (o.tag and o.tag.Parent) then
+            o.tag = mk("BillboardGui", { Name = "XHubEntTag", Size = UDim2.fromOffset(170, 18),
+                AlwaysOnTop = true, Adornee = head, StudsOffset = Vector3.new(0, 2.2, 0) }, head)
+            o.lbl = mk("TextLabel", { Text = m.Name, BackgroundTransparency = 1,
+                Size = UDim2.fromScale(1, 1), Font = Enum.Font.GothamBold, TextSize = 12,
+                TextColor3 = Color3.fromRGB(255, 195, 125), TextStrokeTransparency = 0.35 }, o.tag)
+        end
+        o.tag.Adornee = head
+        o.tag.Parent = head
+        if o.lbl then o.lbl.Text = m.Name end
+    end
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.3)
+        if S.entityEsp then
+            local n = 0
+            for _, d in ipairs(workspace:GetDescendants()) do
+                n = n + 1
+                if n > 4000 then break end
+                if d:IsA("Model") and isEntityModel(d) then
+                    pcall(ensureEnt, d)
+                end
+            end
+            local dead = {}
+            for m, o in pairs(entStore) do
+                if not m.Parent or not S.entityEsp then
+                    destroyEnt(o); dead[#dead + 1] = m
+                end
+            end
+            for _, m in ipairs(dead) do entStore[m] = nil end
+        else
+            for m, o in pairs(entStore) do destroyEnt(o) end
+            entStore = {}
+        end
+    end
+end)
+
 --==================== 页面 ====================
 local pMain, pVisual = addPage("主要"), addPage("视觉")
 local pCombat, pGuard = addPage("战斗"), addPage("防护")
@@ -1554,6 +1679,12 @@ addToggle(pVisual, "距离", true, function(v) S.espDist = v end)
 addToggle(pVisual, "显示队友", false, function(v) S.espTeam = v end)
 addToggle(pVisual, "穿墙可见", true, function(v) S.espOccluded = v end)
 addToggle(pVisual, "彩虹上色", false, function(v) S.espRainbow = v end)
+addSection(pVisual, "环境")
+addToggle(pVisual, "夜视（提亮+去雾，纯客户端）", false, function(v) setNight(v) end)
+addToggle(pVisual, "实体绘制（怪物/NPC/Entity）", false, function(v)
+    S.entityEsp = v
+    notify(v and "实体绘制已开启（关键词 + 非玩家 Humanoid）" or "实体绘制已关闭", "info", 2.5)
+end)
 
 addSection(pCombat, "AIMBOT")
 addToggle(pCombat, "启用自瞄", false, function(v)
