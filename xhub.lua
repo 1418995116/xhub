@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v7.4"
-local BUILD   = "2026-11-01 08:40"
+local VERSION = "v7.5"
+local BUILD   = "2026-11-01 09:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -45,7 +45,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "zoom", doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", forceDoors = false,
+    tpMode = "zoom", doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -3116,7 +3116,61 @@ addButton(pAuto, "停止寻路", function()
     notify("已停止寻路", "info", 1.5)
 end)
 
+--==== 位移限速器：把 0.6 秒内的位移硬压在该服容忍值以内（服务端永远看不到异常速度） ====
+local govHist = {}
+task.spawn(function()
+    while true do
+        task.wait(0.08)
+        if S.govEnabled and not isSeated() then
+            local c = charOf(lp)
+            local hrp = c and c:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local now, p = os.clock(), hrp.Position
+                govHist[#govHist + 1] = { t = now, p = p }
+                while #govHist > 0 and now - govHist[1].t > (S.govWindow or 0.6) do
+                    table.remove(govHist, 1)
+                end
+                local first = govHist[1]
+                if first then
+                    local delta = p - first.p
+                    local maxD = S.govMax or 12
+                    if delta.Magnitude > maxD then
+                        local target = first.p + delta.Unit * maxD
+                        pcall(function()
+                            hrp.CFrame = CFrame.new(target) * (hrp.CFrame - hrp.CFrame.Position)
+                            hrp.AssemblyLinearVelocity = Vector3.zero
+                        end)
+                    end
+                end
+            end
+        elseif #govHist > 0 then
+            govHist = {}
+        end
+    end
+end)
+
 addSection(pGuard, "① 基础压制")
+addButton(pGuard, "圣奥里安全预设（限速 + 关飞行 + 开①③）", function()
+    S.safeMode = true
+    S.fly = false
+    S.walkSpeed = 16
+    S.govEnabled = true
+    S.govMax = 12
+    S.govWindow = 0.6
+    S.autoHide = false
+    S.doors = false
+    S.lever = false
+    pcall(function() if S.fly then setFly(false) end end)
+    pcall(function() h = humOf(lp); if h then h.WalkSpeed = 16 end end)
+    notify("圣奥里预设: 位移限速 12 studs/0.6s · 飞行关 · 走速 16", "ok", 4)
+    notify("AC: 只建议开①③；②会掐车辆/起身；飞行会被 600 封禁", "warn", 4)
+end)
+addToggle(pGuard, "位移限速器（0.6s 内最多走 12 studs）", false, function(v)
+    S.govEnabled = v
+    notify(v and "限速器开启：任何速度类功能都会被压在服务端容忍内" or "限速器已关闭（飞行/加速不再被限制）",
+        v and "ok" or "warn", 3)
+end)
+addSlider(pGuard, "限速窗口内允许位移 studs", 6, 40, 12, function(v) S.govMax = v end)
 addToggle(pGuard, "线程 + 连接 + marker", false, function(v) if v then acRun() end end)
 addButton(pGuard, "重新执行基础压制", function() acRun() end)
 
