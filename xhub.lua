@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v5.3"
-local BUILD   = "2026-11-01 02:35"
+local VERSION = "v5.4"
+local BUILD   = "2026-11-01 02:48"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -44,6 +44,7 @@ local S = {
     autoDoor = false, doorRadius = 28, autoWalk = false, pulse = false,
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
+    hideOnlyRush = true, invertY = true, fastScan = true,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -1573,9 +1574,15 @@ local ENT_KW = { "Rush", "Ambush", "Eyes", "Screech", "Figure", "Hide", "Seek", 
                  "NPC", "Entity", "Bot", "Zombie", "Ghost" }
 local entStore = {}
 
+local ENT_IGNORE = { "baserig", "humanoidrig", "dummy", "template", "rig" }
+
 local function isEntityModel(m)
     if not m:IsA("Model") then return false end
     if Players:GetPlayerFromCharacter(m) then return false end
+    local nm0 = m.Name:lower()
+    for _, k in ipairs(ENT_IGNORE) do
+        if nm0:find(k, 1, true) then return false end
+    end
     if m:FindFirstChildOfClass("Humanoid") then return true end
     if m:FindFirstChild("HumanoidRootPart", true) then return true end
     local nm = m.Name:lower()
@@ -1583,6 +1590,18 @@ local function isEntityModel(m)
         if nm:find(k:lower(), 1, true) then return true end
     end
     return false
+end
+
+local function scanTargets()
+    local out = {}
+    local cr = workspace:FindFirstChild("CurrentRooms")
+    if cr then
+        for _, d in ipairs(cr:GetDescendants()) do out[#out + 1] = d end
+    end
+    for _, d in ipairs(workspace:GetChildren()) do
+        if d ~= cr then out[#out + 1] = d end
+    end
+    return out
 end
 
 local function destroyEnt(o)
@@ -1662,12 +1681,12 @@ end
 
 task.spawn(function()
     while true do
-        task.wait(0.3)
+        task.wait(S.fastScan and 0.8 or 0.3)
         if S.entityEsp then
             local n = 0
-            for _, d in ipairs(workspace:GetDescendants()) do
+            for _, d in ipairs(scanTargets()) do
                 n = n + 1
-                if n > 8000 then break end
+                if n > 3000 then break end
                 if d:IsA("Model") and isEntityModel(d) then
                     pcall(ensureEnt, d)
                 end
@@ -1778,7 +1797,13 @@ local function autoPrompts(radius)
             elseif pp and pp:IsA("Attachment") and pp.Parent and pp.Parent:IsA("BasePart") then
                 pos = pp.Parent.Position
             end
-            if pos and (pos - hrp.Position).Magnitude <= radius
+            local pn = (p.Parent and p.Parent.Name or ""):lower()
+            local act = (p.ActionText or ""):lower()
+            local blocked = pn:find("seat", 1, true) or pn:find("chair", 1, true)
+                         or pn:find("sofa", 1, true) or pn:find("bench", 1, true)
+                         or pn:find("坐", 1, true)
+                         or act:find("sit", 1, true) or act:find("坐", 1, true)
+            if pos and not blocked and (pos - hrp.Position).Magnitude <= radius
                and (now - (promptCool[p] or 0)) > 0.25 then
                 promptCool[p] = now
                 n = n + 1
@@ -1910,19 +1935,14 @@ end
 
 task.spawn(function()
     while true do
-        task.wait(0.35)
+        task.wait(S.fastScan and 1.0 or 0.35)
         if S.itemEsp then
             local n = 0
-            local roots = { workspace, workspace:FindFirstChild("CurrentRooms") }
-            for _, root in ipairs(roots) do
-                if root then
-                    for _, v in ipairs(root:GetDescendants()) do
-                        n = n + 1
-                        if n > 8000 then break end
-                        if (v:IsA("Tool") or v:IsA("Model")) and isItemInst(v) then
-                            pcall(ensureItem, v)
-                        end
-                    end
+            for _, v in ipairs(scanTargets()) do
+                n = n + 1
+                if n > 3000 then break end
+                if (v:IsA("Tool") or v:IsA("Model")) and isItemInst(v) then
+                    pcall(ensureItem, v)
                 end
             end
             local dead = {}
@@ -1990,7 +2010,8 @@ RS:BindToRenderStep("XHubCam", Enum.RenderPriority.Camera.Value + 20, function()
     if not S.thirdPerson then return end
     local d = UIS:GetMouseDelta()
     orbit.yaw = orbit.yaw - d.X * 0.0035
-    orbit.pitch = math.clamp(orbit.pitch + d.Y * 0.0035, -1.2, 1.2)
+    local dy = S.invertY and -d.Y or d.Y
+    orbit.pitch = math.clamp(orbit.pitch + dy * 0.0035, -1.2, 1.2)
     local c = charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
@@ -2099,16 +2120,27 @@ local function hideNow()
     end)
 end
 
+local HIDE_TRIGGER = { "rushmoving", "rush", "ambush", "seek", "glitch" }
+
 task.spawn(function()
     while true do
         task.wait(0.4)
         if S.autoHide then
-            local bestD = math.huge
+            local bestD, bestN = math.huge, nil
             for m in pairs(entStore) do
-                local d = distTo(m)
-                if d and d < bestD then bestD = d end
+                local nm = m.Name:lower()
+                local ok = not S.hideOnlyRush
+                if not ok then
+                    for _, k in ipairs(HIDE_TRIGGER) do
+                        if nm:find(k, 1, true) then ok = true; break end
+                    end
+                end
+                if ok then
+                    local d = distTo(m)
+                    if d and d < bestD then bestD, bestN = d, m.Name end
+                end
             end
-            if bestD <= S.hideDist then hideNow() end
+            if bestN and bestD <= S.hideDist then hideNow() end
         end
     end
 end)
@@ -2194,7 +2226,13 @@ addToggle(pVisual, "实体上色（按名字分配颜色）", true, function(v)
 end)
 addSection(pVisual, "视角")
 addToggle(pVisual, "强制第三人称", false, function(v) setThirdPerson(v) end)
+addToggle(pVisual, "第三人称 Y 轴反转", true, function(v) S.invertY = v end)
 addButton(pVisual, "恢复默认视角", function() setThirdPerson(false) end)
+addSection(pVisual, "性能")
+addToggle(pVisual, "优化模式（降低扫描频率）", true, function(v)
+    S.fastScan = v
+    notify(v and "优化模式: 实体 0.8s / 物品 1.0s 扫描" or "优化模式关闭: 0.3s 扫描（更卡）", "info", 2.4)
+end)
 
 addSection(pCombat, "AIMBOT")
 addToggle(pCombat, "启用自瞄", false, function(v)
@@ -2250,6 +2288,7 @@ setHideModeBtn = addButton(pAuto, "躲避方式: 高空传送", function()
     notify("躲避方式 = " .. S.hideMode, "info", 1.6)
 end)
 addSlider(pAuto, "触发距离", 30, 200, S.hideDist, function(v) S.hideDist = v end)
+addToggle(pAuto, "只对 Rush/Ambush/Seek 触发", true, function(v) S.hideOnlyRush = v end)
 addSlider(pAuto, "高空高度 studs", 50, 800, S.skyHeight, function(v) S.skyHeight = v end)
 addSlider(pAuto, "高空停留 秒", 3, 20, S.skyTime, function(v) S.skyTime = v end)
 
