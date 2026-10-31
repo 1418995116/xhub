@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v5.6"
-local BUILD   = "2026-11-01 03:20"
+local VERSION = "v5.7"
+local BUILD   = "2026-11-01 03:35"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -1723,7 +1723,23 @@ task.spawn(function()
                 n = n + 1
                 if n > 4000 then break end
                 if d:IsA("Model") then
-                    if isEntityModel(d) then pcall(ensureEnt, d) end
+                    if isEntityModel(d) then
+                        pcall(ensureEnt, d)
+                    else
+                        -- 模型名不是关键词、但内部部件叫 RushMoving 之类
+                        local k2 = 0
+                        for _, sub in ipairs(d:GetDescendants()) do
+                            k2 = k2 + 1
+                            if k2 > 60 then break end
+                            local sn = sub.Name:lower()
+                            for _, k in ipairs(ENT_KW) do
+                                if sn:find(k:lower(), 1, true) then
+                                    pcall(ensureEnt, d)
+                                    break
+                                end
+                            end
+                        end
+                    end
                 elseif d:IsA("BasePart") or d:IsA("BillboardGui") then
                     -- 有些实体不是 Model 包裹的，直接按名字兜底
                     local nm = d.Name:lower()
@@ -2089,7 +2105,17 @@ local function simWalk(pos, timeoutSec)
         local t0 = os.clock()
         local c, h = charOf(lp), humOf(lp)
         local hrp = c and c:FindFirstChild("HumanoidRootPart")
-        if not (h and hrp) then PF.running = false; return end
+        if not (h and hrp) then
+            PF.running = false
+            notify("没有角色（可能已死亡/加载中）", "err", 3)
+            return
+        end
+        if h.Health <= 0 then
+            PF.running = false
+            notify("角色已死亡，无法移动", "err", 3)
+            return
+        end
+        if h.WalkSpeed < 1 then pcall(function() h.WalkSpeed = 16 end) end
         while PF.running and PF.gen == gen and os.clock() - t0 < (timeoutSec or 20) do
             if not hrp.Parent then break end
             if (hrp.Position - pos).Magnitude < 3.5 then break end
@@ -2291,12 +2317,22 @@ addToggle(pVisual, "优化模式（降低扫描频率）", true, function(v)
     S.fastScan = v
     notify(v and "优化模式: 实体 1.0s / 物品 1.5s 扫描" or "优化模式关闭: 扫描更频繁（更卡）", "info", 2.4)
 end)
-addButton(pVisual, "打印候选实体到 F9（调试）", function()
+addButton(pVisual, "诊断扫描（F9 + 弹窗）", function()
+    local wsKids = #workspace:GetChildren()
+    local cr = workspace:FindFirstChild("CurrentRooms")
     local list = scanAll(6000)
     local mcount, hits = 0, 0
-    print(("[dbg] 扫描对象 %d 个"):format(#list))
+    print(("[dbg] workspace 子对象=%d  CurrentRooms=%s  扫描=%d")
+        :format(wsKids, tostring(cr ~= nil), #list))
+    local shown = 0
     for _, d in ipairs(list) do
-        if d:IsA("Model") then mcount = mcount + 1 end
+        if d:IsA("Model") then
+            mcount = mcount + 1
+            if shown < 12 then
+                shown = shown + 1
+                print(("[dbg] model: %s"):format(d.Name))
+            end
+        end
         local nm = d.Name:lower()
         if nm:find("rush", 1, true) or nm:find("ambush", 1, true)
            or nm:find("seek", 1, true) or nm:find("figure", 1, true) then
@@ -2307,7 +2343,8 @@ addButton(pVisual, "打印候选实体到 F9（调试）", function()
         end
     end
     print(("[dbg] Model=%d  名字命中=%d"):format(mcount, hits))
-    notify(("扫描 %d / Model %d / 命中 %d（详见 F9）"):format(#list, mcount, hits), "info", 3)
+    notify(("ws=%d CR=%s 扫=%d M=%d 命中=%d")
+        :format(wsKids, cr and "有" or "无", #list, mcount, hits), "info", 5)
 end)
 
 addSection(pCombat, "AIMBOT")
@@ -2541,7 +2578,18 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
     TextSize = 10, TextColor3 = Color3.fromRGB(140, 148, 162), TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = rowOrder }, pMisc)
 
--- 菜单打开时持续把鼠标交还出来（有些游戏每帧锁 MouseBehavior）
+-- 菜单打开时每帧把鼠标交还出来（游戏通常在相机回调里锁回去，必须抢在它后面）
+pcall(function() RS:UnbindFromRenderStep("XHubMouse") end)
+RS:BindToRenderStep("XHubMouse", Enum.RenderPriority.Last.Value - 1, function()
+    if not main.Visible then return end
+    if UIS.MouseBehavior ~= Enum.MouseBehavior.Default then
+        pcall(function() UIS.MouseBehavior = Enum.MouseBehavior.Default end)
+    end
+    if not UIS.MouseIconEnabled then
+        pcall(function() UIS.MouseIconEnabled = true end)
+    end
+end)
+
 task.spawn(function()
     while true do
         task.wait(0.25)
