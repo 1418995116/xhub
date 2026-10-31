@@ -37,10 +37,10 @@ local S = {
     aimOnFire = true, vehicleSafe = true, antiFall = true,
     flyMode = "cframe", antiSnap = true,
     noclip = false, walkSpeed = 20, safeMode = false, autoTune = true, ghost = false,
-    night = false, entityEsp = false,
-    itemEsp = false, pickup = false, pickupRadius = 25,
+    night = false, entityEsp = false, entNotify = true, hudNearest = true,
+    itemEsp = false, pickup = false, pickupRadius = 25, pickupInterval = 0.12,
     autoPrompt = false, promptRadius = 20,
-    autoDoor = false, doorRadius = 28, autoWalk = false,
+    autoDoor = false, doorRadius = 28, autoWalk = false, pulse = false,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -534,6 +534,7 @@ RS.RenderStepped:Connect(function(dt)
     end
 
     local moving = dir.Magnitude > 0
+    if S.pulse and moving and (os.clock() % 0.6) >= 0.36 then moving = false end
     if S.ghost then
         local h2 = humOf(lp)
         if h2 then pcall(function() h2.WalkSpeed = 16 end) end
@@ -1557,11 +1558,9 @@ local entStore = {}
 
 local function isEntityModel(m)
     if not m:IsA("Model") then return false end
-    local h = m:FindFirstChildOfClass("Humanoid")
-    if h then
-        if Players:GetPlayerFromCharacter(m) then return false end
-        return true
-    end
+    if Players:GetPlayerFromCharacter(m) then return false end
+    if m:FindFirstChildOfClass("Humanoid") then return true end
+    if m:FindFirstChild("HumanoidRootPart", true) then return true end
     local nm = m.Name:lower()
     for _, k in ipairs(ENT_KW) do
         if nm:find(k:lower(), 1, true) then return true end
@@ -1571,6 +1570,18 @@ end
 
 local function destroyEnt(o)
     for _, v in pairs(o) do if typeof(v) == "Instance" then v:Destroy() end end
+end
+
+local entHud
+local entSeen = {}
+
+local function distTo(m)
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    local p = m.PrimaryPart or m:FindFirstChild("HumanoidRootPart", true)
+                 or m:FindFirstChildWhichIsA("BasePart", true)
+    if not (hrp and p) then return nil end
+    return (p.Position - hrp.Position).Magnitude
 end
 
 local function ensureEnt(m)
@@ -1583,18 +1594,30 @@ local function ensureEnt(m)
             DepthMode = Enum.HighlightDepthMode.AlwaysOnTop }, m)
     end
     o.hl.Parent = m
-    local head = m:FindFirstChild("Head") or m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
-    if head then
-        if not (o.tag and o.tag.Parent) then
-            o.tag = mk("BillboardGui", { Name = "XHubEntTag", Size = UDim2.fromOffset(170, 18),
-                AlwaysOnTop = true, Adornee = head, StudsOffset = Vector3.new(0, 2.2, 0) }, head)
-            o.lbl = mk("TextLabel", { Text = m.Name, BackgroundTransparency = 1,
-                Size = UDim2.fromScale(1, 1), Font = Enum.Font.GothamBold, TextSize = 12,
-                TextColor3 = Color3.fromRGB(255, 195, 125), TextStrokeTransparency = 0.35 }, o.tag)
+    local head = m:FindFirstChild("Head") or m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart", true)
+    if not head then return end
+    if not (o.tag and o.tag.Parent) then
+        o.tag = mk("BillboardGui", { Name = "XHubEntTag", Size = UDim2.fromOffset(190, 32),
+            AlwaysOnTop = true, Adornee = head, StudsOffset = Vector3.new(0, 2.2, 0) }, head)
+        o.lbl = mk("TextLabel", { Text = m.Name, BackgroundTransparency = 1,
+            Size = UDim2.new(1, 0, 0, 16), Font = Enum.Font.GothamBold, TextSize = 12,
+            TextColor3 = Color3.fromRGB(255, 195, 125), TextStrokeTransparency = 0.35 }, o.tag)
+        o.dlbl = mk("TextLabel", { Text = "", BackgroundTransparency = 1,
+            Position = UDim2.new(0, 0, 0, 14), Size = UDim2.new(1, 0, 0, 14),
+            Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = Color3.fromRGB(255, 230, 190),
+            TextStrokeTransparency = 0.5 }, o.tag)
+    end
+    o.tag.Adornee = head
+    o.tag.Parent = head
+    if o.lbl then o.lbl.Text = m.Name end
+    local d = distTo(m)
+    if o.dlbl then o.dlbl.Text = d and ("%.0f m"):format(d) or "" end
+
+    if S.entNotify and not entSeen[m] then
+        entSeen[m] = true
+        if d and d < 400 then
+            notify(("发现实体: %s · %.0f m"):format(m.Name, d), "warn", 3)
         end
-        o.tag.Adornee = head
-        o.tag.Parent = head
-        if o.lbl then o.lbl.Text = m.Name end
     end
 end
 
@@ -1605,21 +1628,41 @@ task.spawn(function()
             local n = 0
             for _, d in ipairs(workspace:GetDescendants()) do
                 n = n + 1
-                if n > 4000 then break end
+                if n > 8000 then break end
                 if d:IsA("Model") and isEntityModel(d) then
                     pcall(ensureEnt, d)
                 end
             end
             local dead = {}
             for m, o in pairs(entStore) do
-                if not m.Parent or not S.entityEsp then
-                    destroyEnt(o); dead[#dead + 1] = m
-                end
+                if not m.Parent then destroyEnt(o); dead[#dead + 1] = m end
             end
-            for _, m in ipairs(dead) do entStore[m] = nil end
+            for _, m in ipairs(dead) do entStore[m] = nil; entSeen[m] = nil end
+
+            -- 最近实体 HUD
+            if S.hudNearest then
+                if not (entHud and entHud.Parent) then
+                    entHud = mk("TextLabel", { Name = "XHubEntHud", Size = UDim2.fromOffset(320, 24),
+                        Position = UDim2.new(0.5, -160, 0, 8), BackgroundTransparency = 0.35,
+                        BackgroundColor3 = Color3.fromRGB(20, 22, 28), Text = "",
+                        Font = Enum.Font.GothamBold, TextSize = 13,
+                        TextColor3 = Color3.fromRGB(255, 190, 120), ZIndex = 25 }, gui)
+                    mk("UICorner", { CornerRadius = UDim.new(0, 8) }, entHud)
+                end
+                local bestN, bestD = nil, math.huge
+                for m in pairs(entStore) do
+                    local d = distTo(m)
+                    if d and d < bestD then bestD, bestN = d, m.Name end
+                end
+                entHud.Text = bestN and ("最近实体: %s · %.0f m"):format(bestN, bestD) or "附近没有实体"
+            elseif entHud then
+                entHud:Destroy(); entHud = nil
+            end
         else
             for m, o in pairs(entStore) do destroyEnt(o) end
             entStore = {}
+            entSeen = {}
+            if entHud then entHud:Destroy(); entHud = nil end
         end
     end
 end)
@@ -1661,12 +1704,19 @@ local function rangePickup(radius)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if not hrp then return 0 end
     local n = 0
-    for _, v in ipairs(workspace:GetDescendants()) do
-        if v:IsA("BasePart") and v.Parent and isItemInst(v.Parent) then
-            if (v.Position - hrp.Position).Magnitude <= radius then
-                pcall(firetouchinterest, v, hrp, 0)
-                pcall(firetouchinterest, v, hrp, 1)
-                n = n + 1
+    local roots = { workspace, workspace:FindFirstChild("CurrentRooms") }
+    for _, root in ipairs(roots) do
+        if root then
+            for _, v in ipairs(root:GetDescendants()) do
+                if v:IsA("BasePart") and v.Parent and isItemInst(v.Parent) then
+                    if (v.Position - hrp.Position).Magnitude <= radius then
+                        pcall(firetouchinterest, v, hrp, 0)
+                        pcall(firetouchinterest, v, hrp, 1)
+                        local cd = v:FindFirstChildOfClass("ClickDetector")
+                        if cd and fireclickdetector then pcall(fireclickdetector, cd) end
+                        n = n + 1
+                    end
+                end
             end
         end
     end
@@ -1749,12 +1799,13 @@ local function walkTo(pos, timeoutSec)
             AgentRadius = 2, AgentHeight = 5, AgentCanJump = true,
         })
         local ok = pcall(function() path:ComputeAsync(hrp.Position, pos) end)
-        if not ok or path.Status ~= Enum.PathStatus.Success then
-            notify("寻路失败（目标不可达，试试开 Noclip 再点）", "err", 3)
-            PF.running = false
-            return
+        local wps
+        if ok and path.Status == Enum.PathStatus.Success then
+            wps = path:GetWaypoints()
+        else
+            wps = { { Position = pos } }
+            notify("寻路服务不可用，改为直线前进（可开 Noclip 穿障碍）", "warn", 3)
         end
-        local wps = path:GetWaypoints()
         for _, wp in ipairs(wps) do
             if not PF.running or PF.gen ~= gen or os.clock() - t0 > timeoutSec then break end
             h:MoveTo(wp.Position)
@@ -1787,27 +1838,49 @@ end
 
 task.spawn(function()
     while true do
-        task.wait(0.4)
+        task.wait(0.35)
         if S.itemEsp then
             local n = 0
-            for _, v in ipairs(workspace:GetDescendants()) do
-                n = n + 1
-                if n > 4000 then break end
-                if (v:IsA("Tool") or v:IsA("Model")) and isItemInst(v) then
-                    pcall(ensureItem, v)
+            local roots = { workspace, workspace:FindFirstChild("CurrentRooms") }
+            for _, root in ipairs(roots) do
+                if root then
+                    for _, v in ipairs(root:GetDescendants()) do
+                        n = n + 1
+                        if n > 8000 then break end
+                        if (v:IsA("Tool") or v:IsA("Model")) and isItemInst(v) then
+                            pcall(ensureItem, v)
+                        end
+                    end
                 end
             end
             local dead = {}
             for v, o in pairs(itemStore) do
-                if not v.Parent then destroyEnt(o); dead[#dead + 1] = v end
+                if not v:IsDescendantOf(workspace) then
+                    destroyEnt(o); dead[#dead + 1] = v
+                end
             end
             for _, v in ipairs(dead) do itemStore[v] = nil end
         elseif next(itemStore) ~= nil then
             for v, o in pairs(itemStore) do destroyEnt(o) end
             itemStore = {}
         end
+    end
+end)
+
+-- 拾取 / 交互 / 开门: 独立快速循环
+task.spawn(function()
+    while true do
+        local iv = S.pickupInterval or 0.12
+        if iv < 0.05 then iv = 0.05 end
+        task.wait(iv)
         if S.pickup then pcall(rangePickup, S.pickupRadius) end
         if S.autoPrompt then pcall(autoPrompts, S.promptRadius) end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(0.5)
         if S.autoDoor then pcall(autoDoors, S.doorRadius) end
     end
 end)
@@ -1821,10 +1894,12 @@ local pMisc = addPage("杂项")
 addSection(pMain, "MOVEMENT")
 addToggle(pMain, "飞行 (F)", false, function(v) setFly(v) end)
 addSlider(pMain, "飞行速度", 10, 200, S.flySpeed, function(v) S.flySpeed = v end)
-local setModeBtn = addButton(pMain, "飞行模式: CFrame（防拉回更好）", function()
+local setModeBtn
+setModeBtn = addButton(pMain, "飞行模式: " .. (S.flyMode == "cframe" and "CFrame" or "物理"), function()
     S.flyMode = (S.flyMode == "cframe") and "body" or "cframe"
     setModeBtn("飞行模式: " .. (S.flyMode == "cframe" and "CFrame（防拉回更好）" or "物理 BodyVelocity"))
     if S.fly then setFly(false); setFly(true) end
+    notify("飞行模式 = " .. S.flyMode, "info", 1.6)
 end)
 addToggle(pMain, "反拉回（被拉回自动降速）", true, function(v) S.antiSnap = v end)
 addToggle(pMain, "安全模式（禁飞/禁加速，只留视觉）", false, function(v)
@@ -1837,6 +1912,7 @@ addToggle(pMain, "幽灵位移（伪装走速 + 脉冲前进）", false, functio
     S.ghost = v
     notify(v and "幽灵位移: 走速锁定 16,位移改为脉冲" or "幽灵位移: 已关闭", "info", 2.5)
 end)
+addToggle(pMain, "脉冲位移（每 0.6s 走 0.36s）", false, function(v) S.pulse = v end)
 addSlider(pMain, "走路速度（服务端容忍≈16-22）", 16, 60, S.walkSpeed, function(v) S.walkSpeed = v end)
 addToggle(pMain, "穿墙 Noclip（不改速度,不触发回弹）", false, function(v) setNoclip(v) end)
 addSection(pMain, "菜单背景")
@@ -1877,6 +1953,11 @@ addToggle(pVisual, "实体绘制（怪物/NPC/Entity）", false, function(v)
     S.entityEsp = v
     notify(v and "实体绘制已开启（关键词 + 非玩家 Humanoid）" or "实体绘制已关闭", "info", 2.5)
 end)
+addToggle(pVisual, "实体刷新提示（弹出名字+距离）", true, function(v) S.entNotify = v end)
+addToggle(pVisual, "屏幕顶部显示最近实体距离", true, function(v)
+    S.hudNearest = v
+    if not v and entHud then entHud.Visible = false end
+end)
 
 addSection(pCombat, "AIMBOT")
 addToggle(pCombat, "启用自瞄", false, function(v)
@@ -1911,6 +1992,7 @@ addToggle(pAuto, "物品绘制（钥匙 / 道具 / 箱子）", false, function(v
 end)
 addToggle(pAuto, "范围拾取（touch 模拟）", false, function(v) S.pickup = v end)
 addSlider(pAuto, "拾取半径", 5, 60, S.pickupRadius, function(v) S.pickupRadius = v end)
+addSlider(pAuto, "拾取间隔 ×0.01s（12 = 0.12s）", 5, 50, 12, function(v) S.pickupInterval = v / 100 end)
 
 addSection(pAuto, "交互")
 addToggle(pAuto, "自动交互（ProximityPrompt）", false, function(v) S.autoPrompt = v end)
