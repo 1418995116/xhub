@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v7.3"
-local BUILD   = "2026-11-01 08:20"
+local VERSION = "v7.4"
+local BUILD   = "2026-11-01 08:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -2951,6 +2951,7 @@ addToggle(pVisual, "穿墙可见", true, function(v) S.espOccluded = v end)
 addToggle(pVisual, "彩虹上色", false, function(v) S.espRainbow = v end)
 addSection(pVisual, "环境")
 addToggle(pVisual, "夜视（提亮+去雾，纯客户端）", false, function(v) setNight(v) end)
+if doorsAllowed() then
 addToggle(pVisual, "场景物体绘制（柜子/床/抽屉，青色）", false, function(v)
     S.scenery = v
     notify(v and "场景绘制: 柜子/床/抽屉 会亮青色（纯渲染）" or "场景绘制已关闭", "info", 2.4)
@@ -2968,6 +2969,7 @@ addToggle(pVisual, "自动拉杆（靠近自动点 E）", false, function(v)
     notify(v and "自动拉杆: 14 studs 内会自动触发提示" or "自动拉杆已关闭", "info", 2.4)
 end)
 addToggle(pVisual, "遇到 Eyes 自动背对", true, function(v) S.eyesAway = v end)
+end
 addToggle(pVisual, "实体绘制（怪物/NPC/Entity）", false, function(v)
     S.entityEsp = v
     notify(v and "实体绘制已开启（关键词 + 非玩家 Humanoid）" or "实体绘制已关闭", "info", 2.5)
@@ -3055,6 +3057,7 @@ aimInfo = mk("TextLabel", { Text = "自瞄: 待触发（按住左键 / Q）", Ba
     TextColor3 = Color3.fromRGB(150, 210, 180), TextXAlignment = Enum.TextXAlignment.Left,
     LayoutOrder = rowOrder }, pCombat)
 
+if doorsAllowed() then
 addSection(pAuto, "物品")
 addToggle(pAuto, "物品绘制（钥匙 / 道具 / 箱子）", false, function(v)
     S.itemEsp = v
@@ -3106,6 +3109,7 @@ addButton(pAuto, "A* 寻路到最近的门", function()
     notify(("A* 目标: 最近的门的 (%.0f studs)"):format(d or 0), "info", 2)
     navTo(pos)
 end)
+end
 addSection(pAuto, "寻路")
 addButton(pAuto, "停止寻路", function()
     stopWalk()
