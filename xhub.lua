@@ -3,7 +3,7 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v4.2"
+local VERSION = "v4.3"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -15,6 +15,7 @@ local CONFIG = {
     AC = { Patterns = { "BS_", "最强防御", "防御", "Antikick", "AntiCheat", "Anti_Kick", "AC_" },
            Marker = "BS_Script_Running_Marker" },
     ACG = { Keywords = { "AntiCheat", "Antikick", "AntiKick", "Anti_Kick", "BS_", "防御" },
+            Known    = { "ReplicatedFirst.AntiCheat" },   -- 实测该服的反作弊脚本全名
             RemoteKw = { "AntiCheat", "Antikick", "ReportCheat", "BanPlayer" },
             Hashes   = {} },
     Safe = { "veh", "car", "drive", "input", "control", "sprint", "camera", "mouse",
@@ -33,7 +34,7 @@ local S = {
     espTeam = false, espOccluded = true, espRainbow = false,
     aim = false, aimHold = true, aimSmooth = 12, aimFov = 140,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
-    aimOnFire = true, vehicleSafe = true,
+    aimOnFire = true, vehicleSafe = true, antiFall = true,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -669,13 +670,36 @@ local function characterFix(silent)
 end
 
 -- 车辆安全模式: 上车自动暂停绕过,下车自动复位角色
+local function isSeated()
+    local h = humOf(lp); if not h then return false end
+    local s = false
+    pcall(function() s = h.SeatPart ~= nil end)
+    if s then return true end
+    pcall(function() s = h:GetState() == Enum.HumanoidStateType.Seated end)
+    if s then return true end
+    local c = charOf(lp)
+    if c then
+        for _, v in ipairs(c:GetChildren()) do
+            if v:IsA("Weld") and v.Name:lower():find("seat", 1, true) then return true end
+        end
+    end
+    return false
+end
+
+-- 防遁地守护
+local function groundYAt(pos)
+    local params = RaycastParams.new()
+    params.FilterType = rp.FilterType
+    params.FilterDescendantsInstances = { lp.Character }
+    local res = workspace:Raycast(pos + Vector3.new(0, 40, 0), Vector3.new(0, -400, 0), params)
+    return res and res.Position.Y or nil
+end
+
 local __wasSeated = false
 task.spawn(function()
     while true do
         task.wait(0.2)
-        local h = humOf(lp)
-        local seated = false
-        if h then pcall(function() seated = h.SeatPart ~= nil end) end
+        local seated = isSeated()
         if seated ~= __wasSeated then
             __wasSeated = seated
             if seated then
@@ -689,6 +713,35 @@ task.spawn(function()
                     notify("已下车: 角色已复位（需要绕过请重开 ①②）", "info", 3)
                 end)
             end
+        end
+    end
+end)
+
+task.spawn(function()
+    local airT = 0
+    while true do
+        task.wait(0.3)
+        local c, h = charOf(lp), humOf(lp)
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if c and h and hrp and S.antiFall and not S.fly and not isSeated() then
+            if h.FloorMaterial == Enum.Material.Air then
+                airT = airT + 0.3
+                if airT >= 1.2 then
+                    airT = 0
+                    local gy = groundYAt(hrp.Position)
+                    if gy and hrp.Position.Y < gy + 2 then
+                        pcall(function()
+                            hrp.AssemblyLinearVelocity = Vector3.zero
+                            hrp.CFrame = CFrame.new(hrp.Position.X, gy + 3.2, hrp.Position.Z)
+                        end)
+                        notify("检测到陷地，已抬回地面", "warn", 2)
+                    end
+                end
+            else
+                airT = 0
+            end
+        else
+            airT = 0
         end
     end
 end)
@@ -781,6 +834,9 @@ local function isTarget(s)
     if s == "" or isSafeName(s) then return false end
     if CONFIG.ACG.Hashes[hash(s)] then return true end
     local low = s:lower()
+    for _, k in ipairs(CONFIG.ACG.Known) do
+        if low:find(k:lower(), 1, true) then return true end
+    end
     for _, k in ipairs(CONFIG.ACG.Keywords) do
         if low:find(k:lower(), 1, true) then return true end
     end
@@ -927,6 +983,11 @@ local function scanRemotes()
         end
     end
     pcall(walk, RStorage)
+    pcall(walk, game:GetService("ReplicatedFirst"))
+    pcall(walk, workspace)
+    local ps = lp:FindFirstChild("PlayerScripts")
+    if ps then pcall(walk, ps) end
+    pcall(walk, CoreGui)
     return n
 end
 local function installGlobalHook()
@@ -1327,7 +1388,17 @@ addSection(pGuard, "车辆 / 角色")
 addToggle(pGuard, "车辆安全模式（上下车暂停/恢复绕过）", true, function(v)
     S.vehicleSafe = v
 end)
+addToggle(pGuard, "防遁地守护（陷地自动抬回）", true, function(v)
+    S.antiFall = v
+end)
 addButton(pGuard, "角色复位（起身/解焊/抬升）", function() characterFix(false) end)
+addButton(pGuard, "打印 AC 脚本全名到 F9", function()
+    local by = collectScripts()
+    local n = 0
+    for k in pairs(by) do n = n + 1 end
+    for _, m in ipairs(G.matches) do print(m) end
+    notify(("匹配 %d 个标识 / %d 条记录（见 F9）"):format(n, #G.matches), "info", 3)
+end)
 
 addSection(pMisc, "角色")
 addButton(pMisc, "自杀 / 重生", function() suicide() end)
