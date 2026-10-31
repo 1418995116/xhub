@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v5.9"
-local BUILD   = "2026-11-01 03:55"
+local VERSION = "v6.0"
+local BUILD   = "2026-11-01 04:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -44,7 +44,7 @@ local S = {
     autoDoor = false, doorRadius = 28, autoWalk = false, pulse = false,
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
-    hideOnlyRush = true, invertY = true, fastScan = true,
+    hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -1512,19 +1512,7 @@ local function newServer()
     notify(ok and "正在切换到新服务器…" or "切服失败", ok and "info" or "err", 3)
 end
 
--- 实体 / 物品 刷新即时捕获（轮询会漏掉一闪而过的 Rush）
-workspace.DescendantAdded:Connect(function(d)
-    if d:IsA("Model") then
-        if S.entityEsp and isEntityModel(d) then
-            task.defer(function() if d.Parent then pcall(ensureEnt, d) end end)
-        end
-        if S.itemEsp and isItemInst(d) then
-            task.defer(function() if d.Parent then pcall(ensureItem, d) end end)
-        end
-    elseif d:IsA("Tool") and S.itemEsp then
-        task.defer(function() if d.Parent then pcall(ensureItem, d) end end)
-    end
-end)
+-- (实体/物品的即时捕获移到文件后部，等 isEntityModel/ensureEnt 定义好再连; 见 "刷新即时捕获")
 
 --==================== 夜视 ====================
 local NV = { saved = nil, cc = nil }
@@ -1587,12 +1575,9 @@ local function isEntityModel(m)
     for _, k in ipairs(ENT_IGNORE) do
         if nm0:find(k, 1, true) then return false end
     end
+    -- 只认“有活体特征”的模型：Humanoid 或 HumanoidRootPart
     if m:FindFirstChildOfClass("Humanoid") then return true end
     if m:FindFirstChild("HumanoidRootPart", true) then return true end
-    local nm = m.Name:lower()
-    for _, k in ipairs(ENT_KW) do
-        if nm:find(k:lower(), 1, true) then return true end
-    end
     return false
 end
 
@@ -1722,34 +1707,8 @@ task.spawn(function()
             for _, d in ipairs(scanAll(4000)) do
                 n = n + 1
                 if n > 4000 then break end
-                if d:IsA("Model") then
-                    if isEntityModel(d) then
-                        pcall(ensureEnt, d)
-                    else
-                        -- 模型名不是关键词、但内部部件叫 RushMoving 之类
-                        local k2 = 0
-                        for _, sub in ipairs(d:GetDescendants()) do
-                            k2 = k2 + 1
-                            if k2 > 60 then break end
-                            local sn = sub.Name:lower()
-                            for _, k in ipairs(ENT_KW) do
-                                if sn:find(k:lower(), 1, true) then
-                                    pcall(ensureEnt, d)
-                                    break
-                                end
-                            end
-                        end
-                    end
-                elseif d:IsA("BasePart") or d:IsA("BillboardGui") then
-                    -- 有些实体不是 Model 包裹的，直接按名字兜底
-                    local nm = d.Name:lower()
-                    for _, k in ipairs(ENT_KW) do
-                        if nm:find(k:lower(), 1, true) then
-                            local host = d:IsA("BasePart") and (d.Parent or d) or d
-                            pcall(ensureEnt, host)
-                            break
-                        end
-                    end
+                if d:IsA("Model") and isEntityModel(d) then
+                    pcall(ensureEnt, d)
                 end
             end
             local dead = {}
@@ -2128,11 +2087,26 @@ local function simWalk(pos, timeoutSec)
             return
         end
         if h.WalkSpeed < 1 then pcall(function() h.WalkSpeed = 16 end) end
+        local lastPos, stuckT = hrp.Position, os.clock()
         while PF.running and PF.gen == gen and os.clock() - t0 < (timeoutSec or 20) do
             if not hrp.Parent then break end
             if (hrp.Position - pos).Magnitude < 3.5 then break end
             h:MoveTo(pos)
-            task.wait(0.2)
+            if (hrp.Position - lastPos).Magnitude > 2 then
+                lastPos, stuckT = hrp.Position, os.clock()
+            elseif os.clock() - stuckT > 2.5 then
+                -- 卡墙了：跳一下 + 侧移绕开
+                pcall(function() h.Jump = true end)
+                local dir = (pos - hrp.Position)
+                if dir.Magnitude > 0.1 then
+                    dir = dir.Unit
+                    local right = Vector3.new(dir.Z, 0, -dir.X) * ((math.random() > 0.5) and 6 or -6)
+                    h:MoveTo(hrp.Position + right + dir * 3)
+                end
+                task.wait(0.6)
+                stuckT = os.clock()
+            end
+            task.wait(0.15)
         end
         pcall(function() h:MoveTo(hrp.Position) end)
         PF.running = false
@@ -2261,6 +2235,75 @@ task.spawn(function()
     end
 end)
 
+--==================== 刷新即时捕获 + 声音线索（放在所有定义之后） ====================
+local SOUND_HINT = { "rush", "ambush", "seek", "figure", "screech" }
+
+workspace.DescendantAdded:Connect(function(d)
+    if d:IsA("Model") and S.entityEsp and isEntityModel(d) then
+        task.defer(function() if d.Parent then pcall(ensureEnt, d) end end)
+    end
+    if (d:IsA("Tool") or d:IsA("Model")) and S.itemEsp and isItemInst(d) then
+        task.defer(function() if d.Parent then pcall(ensureItem, d) end end)
+    end
+    if d:IsA("Sound") then
+        local sn = d.Name:lower()
+        for _, k in ipairs(SOUND_HINT) do
+            if sn:find(k, 1, true) then
+                notify(("声音线索: %s"):format(d.Name), "warn", 3)
+                if S.autoHide then pcall(hideNow) end
+                break
+            end
+        end
+    end
+end)
+
+--==================== 场景物体绘制（柜子/床/抽屉，纯渲染，不计入实体） ====================
+local SCENE_KW = { "closet", "wardrobe", "bed", "locker", "drawer", "dresser",
+                   "crate", "柜", "床", "抽屉" }
+local sceneStore = {}
+
+local function ensureScene(m)
+    local o = sceneStore[m]
+    if not o then o = {}; sceneStore[m] = o end
+    if not (o.hl and o.hl.Parent) then
+        o.hl = mk("Highlight", { Name = "XHubScene",
+            FillColor = Color3.fromRGB(120, 255, 200), FillTransparency = 0.65,
+            OutlineColor = Color3.fromRGB(190, 255, 230), OutlineTransparency = 0.2,
+            DepthMode = Enum.HighlightDepthMode.AlwaysOnTop }, m)
+    end
+    o.hl.Parent = m
+end
+
+task.spawn(function()
+    while true do
+        task.wait(S.fastScan and 1.5 or 0.6)
+        if S.scenery then
+            local n = 0
+            for _, m in ipairs(scanAll(4000)) do
+                if m:IsA("Model") then
+                    n = n + 1
+                    if n > 4000 then break end
+                    local nm = m.Name:lower()
+                    for _, k in ipairs(SCENE_KW) do
+                        if nm:find(k:lower(), 1, true) then
+                            pcall(ensureScene, m)
+                            break
+                        end
+                    end
+                end
+            end
+            local dead = {}
+            for m, o in pairs(sceneStore) do
+                if not m.Parent then destroyEnt(o); dead[#dead + 1] = m end
+            end
+            for _, m in ipairs(dead) do sceneStore[m] = nil end
+        elseif next(sceneStore) ~= nil then
+            for _, o in pairs(sceneStore) do destroyEnt(o) end
+            sceneStore = {}
+        end
+    end
+end)
+
 --==================== 页面 ====================
 local pMain, pVisual = addPage("主要"), addPage("视觉")
 local pCombat, pAuto = addPage("战斗"), addPage("自动")
@@ -2325,6 +2368,10 @@ addToggle(pVisual, "穿墙可见", true, function(v) S.espOccluded = v end)
 addToggle(pVisual, "彩虹上色", false, function(v) S.espRainbow = v end)
 addSection(pVisual, "环境")
 addToggle(pVisual, "夜视（提亮+去雾，纯客户端）", false, function(v) setNight(v) end)
+addToggle(pVisual, "场景物体绘制（柜子/床/抽屉，青色）", false, function(v)
+    S.scenery = v
+    notify(v and "场景绘制: 柜子/床/抽屉 会亮青色（纯渲染）" or "场景绘制已关闭", "info", 2.4)
+end)
 addToggle(pVisual, "实体绘制（怪物/NPC/Entity）", false, function(v)
     S.entityEsp = v
     notify(v and "实体绘制已开启（关键词 + 非玩家 Humanoid）" or "实体绘制已关闭", "info", 2.5)
