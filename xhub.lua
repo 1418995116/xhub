@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v5.8"
-local BUILD   = "2026-11-01 03:42"
+local VERSION = "v5.9"
+local BUILD   = "2026-11-01 03:55"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -1773,7 +1773,15 @@ task.spawn(function()
                     local d = distTo(m)
                     if d and d < bestD then bestD, bestN = d, m.Name end
                 end
-                entHud.Text = bestN and ("最近实体: %s · %.0f m"):format(bestN, bestD) or "附近没有实体"
+                local hh = humOf(lp)
+                local dead = (hh == nil) or (hh.Health <= 0)
+                if dead then
+                    entHud.Text = "角色已死亡 · 房间已卸载，实体不可见（正常）"
+                    entHud.TextColor3 = Color3.fromRGB(255, 150, 150)
+                else
+                    entHud.TextColor3 = Color3.fromRGB(255, 190, 120)
+                    entHud.Text = bestN and ("最近实体: %s · %.0f m"):format(bestN, bestD) or "附近没有实体"
+                end
             elseif entHud then
                 entHud:Destroy(); entHud = nil
             end
@@ -2209,6 +2217,26 @@ local function hideNow()
 end
 
 local HIDE_TRIGGER = { "rushmoving", "rush", "ambush", "seek", "glitch" }
+
+task.spawn(function()
+    local wasAlive = true
+    while true do
+        task.wait(0.5)
+        local h = humOf(lp)
+        local aliveNow = (h ~= nil) and (h.Health > 0)
+        if wasAlive and not aliveNow then
+            -- 刚死亡: 关飞行、交还相机、清 HUD 噪音
+            if S.fly then setFly(false) end
+            if S.thirdPerson then
+                pcall(function() cam.CameraType = Enum.CameraType.Custom end)
+            end
+            notify("你已死亡：实体/物品不可见是正常的，复活后自动恢复", "warn", 4)
+        elseif (not wasAlive) and aliveNow then
+            if S.entityEsp then notify("已复活，实体绘制恢复", "ok", 2) end
+        end
+        wasAlive = aliveNow
+    end
+end)
 
 task.spawn(function()
     while true do
