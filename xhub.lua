@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v8.2"
-local BUILD   = "2026-11-01 12:40"
+local VERSION = "v8.3"
+local BUILD   = "2026-11-01 13:05"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -830,6 +830,7 @@ local function installRemoteAim()
     old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local m = getnamecallmethod()
         local inWindow = os.clock() < fireUntil
+        -- 注意：不能要求 checkcaller()，因为开火是游戏脚本发起的（caller 不是我们）
         if (m == "FireServer" or m == "InvokeServer") and inWindow then
             local okName, nm = pcall(function() return tostring(self.Name):lower() end)
             local args = { ... }
@@ -868,6 +869,9 @@ local function installRemoteAim()
                             end
                         end
                         if changed then
+                            if S.remoteProbe then
+                                print(("[probe]   >>> 已改写 %s 的方向参数"):format(tostring(self.Name)))
+                            end
                             return old(self, table.unpack(args))
                         end
                     end
