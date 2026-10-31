@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v7.0"
-local BUILD   = "2026-11-01 07:15"
+local VERSION = "v7.1"
+local BUILD   = "2026-11-01 07:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -35,7 +35,7 @@ local S = {
     espTeam = false, espOccluded = true, espRainbow = false,
     aim = false, aimHold = true, aimSmooth = 12, aimFov = 140,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
-    aimOnFire = true, vehicleSafe = true, antiFall = true,
+    aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "cframe", antiSnap = true,
     noclip = false, walkSpeed = 20, safeMode = false, autoTune = true, ghost = false,
     night = false, entityEsp = false, entNotify = true, hudNearest = true,
@@ -45,7 +45,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "zoom", doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "auto",
+    tpMode = "zoom", doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky",
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -1767,7 +1767,7 @@ end)
 --==================== 物品绘制 / 拾取 / 自动交互 ====================
 local ITEM_KW = { "key", "钥匙", "loot", "item", "coin", "chest", "drawer", "pickup",
                   "gem", "gold", "cash", "money", "bandage", "flashlight", "lighter",
-                  "candle", "crucifix", "lockpick", "vitamin", "potion", "weapon" }
+                  "candle", "crucifix", "lockpick", "vitamin", "potion", "weapon", "barrel", "crate", "sack", "bag", "pot", "box", "桶", "箱", "袋" }
 local itemStore = {}
 
 local function nameHits(v, list)
@@ -1991,11 +1991,16 @@ local function nearestDoorPos()
         for _, d in ipairs(root:GetDescendants()) do
             -- 名字里带 door 的模型/部件都算候选（Door / DoorFrame / Doorway …）
             local nm = d.Name:lower()
-            if nm:find("door", 1, true) then
+            local isModel = d:IsA("Model")
+            local realDoor = isModel and isRealDoor(nm)
+            local hasOpen = isModel and d:FindFirstChild("ClientOpen", true) ~= nil
+            if realDoor or hasOpen then
                 local part = d:IsA("BasePart") and d or d:FindFirstChildWhichIsA("BasePart", true)
                 if part and part.Parent then
                     local dd = (part.Position - hrp.Position).Magnitude
-                    if dd < bestD then best, bestD = part, dd end
+                    -- 真门(带 ClientOpen)优先：距离打 8 折，避免选到门框
+                    if hasOpen then dd = dd * 0.8 end
+                    if dd < bestD then best, bestD = part, (part.Position - hrp.Position).Magnitude end
                 end
             end
             if bestD < 6 then break end
@@ -2697,6 +2702,7 @@ local function ensureDoor(m)
     o.hl.Parent = m
     local part = firstPart(m)
     if not part then return end
+    if not o.cf0 then o.cf0 = part.CFrame end
     if not (o.tag and o.tag.Parent) then
         o.tag = mk("BillboardGui", { Name = "XHubDoorTag", Size = UDim2.fromOffset(160, 28),
             AlwaysOnTop = true, Adornee = part, StudsOffset = Vector3.new(0, 2, 0) }, part)
@@ -2730,7 +2736,7 @@ task.spawn(function()
                     if n > 4000 then break end
                     local nm = m.Name:lower()
                     local d = hrp0 and distTo(m) or nil
-                    if d and d > 260 then
+                    if d and d > 90 then
                         -- 远处的不要，过会儿再处理
                     elseif S.doors and isRealDoor(nm) then
                         pcall(ensureDoor, m)
@@ -2759,7 +2765,13 @@ task.spawn(function()
             for _, m in ipairs(dead) do sceneStore[m] = nil end
             local dead2 = {}
             for m, o in pairs(doorStore) do
-                if not m.Parent then destroyEnt(o); dead2[#dead2 + 1] = m end
+                local p2 = m.Parent and firstPart(m)
+                local opened = false
+                if o.cf0 and p2 then
+                    if p2.CFrame.LookVector:Dot(o.cf0.LookVector) < 0.94 then opened = true end
+                    if (p2.Position - o.cf0.Position).Magnitude > 3 then opened = true end
+                end
+                if (not m.Parent) or opened then destroyEnt(o); dead2[#dead2 + 1] = m end
             end
             for _, m in ipairs(dead2) do doorStore[m] = nil end
             local dead3 = {}
@@ -3078,21 +3090,6 @@ addButton(pAuto, "A* 寻路到最近的门", function()
     notify(("A* 目标: 最近的门的 (%.0f studs)"):format(d or 0), "info", 2)
     navTo(pos)
 end)
-addButton(pAuto, "A* 寻路到最近物品", function()
-    local c = charOf(lp)
-    local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    local best, bestD = nil, math.huge
-    for _, v in ipairs(scanAll(3000)) do
-        if v:IsA("BasePart") and v.Parent and isItemInst(v.Parent) then
-            local d = (v.Position - hrp.Position).Magnitude
-            if d < bestD then best, bestD = v, d end
-        end
-    end
-    if not best then return notify("附近没有可识别物品", "warn", 3) end
-    navTo(best.Position)
-end)
-
 addSection(pAuto, "寻路")
 addButton(pAuto, "走向最近的门（模拟移动）", function()
     local pos, d = nearestDoorPos()
