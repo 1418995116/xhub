@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v7.2"
-local BUILD   = "2026-11-01 08:00"
+local VERSION = "v7.3"
+local BUILD   = "2026-11-01 08:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -45,7 +45,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "zoom", doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky",
+    tpMode = "zoom", doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", forceDoors = false,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -167,6 +167,14 @@ local function flyCapNow()
 end
 
 applyProfile(currentProfileKey)
+
+-- 非 DOORS 服务器：默认关掉 DOORS 专属模块（可在杂项强制开启）
+local function doorsAllowed()
+    return currentProfileKey == "doors" or S.forceDoors
+end
+if not doorsAllowed() then
+    S.doors, S.lever, S.leverAuto, S.eyesAway, S.autoHide, S.scenery = false, false, false, false, false, false
+end
 
 --==================== 界面骨架 ====================
 local gui = mk("ScreenGui", { Name = "XHub", ResetOnSpawn = false, IgnoreGuiInset = true,
@@ -3192,6 +3200,10 @@ addButton(pMisc, "打印 PlaceId / 识别结果", function()
     print(("[profile] PlaceId=%d  JobId=%s  识别=%s")
         :format(game.PlaceId, tostring(game.JobId), currentProfileKey))
     notify(("PlaceId %d · 档位 %s"):format(game.PlaceId, PROFILES[currentProfileKey].label), "info", 4)
+end)
+addToggle(pMisc, "强制启用 DOORS 专属模块（门/拉杆/Eyes/躲避）", false, function(v)
+    S.forceDoors = v
+    notify(v and "已强制启用 DOORS 模块（任何服务器都会跑）" or "已恢复：非 DOORS 服务器关闭 DOORS 模块", v and "warn" or "info", 3)
 end)
 local setProfileBtn
 setProfileBtn = addButton(pMisc, "当前档位: " .. PROFILES[currentProfileKey].label, function()
