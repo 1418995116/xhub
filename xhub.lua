@@ -1,9 +1,9 @@
 --=====================================================================
---  XHub v4 · Fly / ESP / Aimbot / AC压制 / AC-Guard / ThreadCleaner
+--  XHub v4.1 · Fly / ESP / Aimbot / AC压制 / AC-Guard / ThreadCleaner
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
---  修复: 不再拦 Connect(保住车辆/疾跑按键) + 可回滚 + 白名单
+--  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v4"
+local VERSION = "v4.1"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -17,7 +17,6 @@ local CONFIG = {
     ACG = { Keywords = { "AntiCheat", "Antikick", "AntiKick", "Anti_Kick", "BS_", "防御" },
             RemoteKw = { "AntiCheat", "Antikick", "ReportCheat", "BanPlayer" },
             Hashes   = {} },
-    -- 永不触碰的脚本关键字（车辆/输入/疾跑/相机/角色）
     Safe = { "veh", "car", "drive", "input", "control", "sprint", "camera", "mouse",
              "key", "player", "character", "anim", "tool", "seat", "vehicle" },
 }
@@ -150,11 +149,11 @@ mk("TextLabel", { Text = "XHub", BackgroundTransparency = 1, TextXAlignment = En
     TextSize = 15, TextColor3 = Color3.fromRGB(235, 241, 250) }, bar)
 mk("TextLabel", { Text = VERSION .. "  universal", BackgroundTransparency = 1,
     TextXAlignment = Enum.TextXAlignment.Left, Position = UDim2.new(0, 68, 0, 0),
-    Size = UDim2.fromOffset(120, 42), Font = Enum.Font.Gotham, TextSize = 11,
+    Size = UDim2.fromOffset(130, 42), Font = Enum.Font.Gotham, TextSize = 11,
     TextColor3 = Color3.fromRGB(120, 130, 148) }, bar)
 
 local icon
-local function setVisible(v)
+local function setVisible(v, silent)
     main.Visible = v
     if backdrop then backdrop.Visible = v and S.dim end
     if blurFx then
@@ -162,7 +161,7 @@ local function setVisible(v)
         blurFx.Size = (v and S.blur) and 14 or 0
     end
     if icon then icon.BackgroundColor3 = v and CONFIG.Accent or Color3.fromRGB(30, 34, 44) end
-    notify(v and "菜单已打开" or "菜单已隐藏", "info", 1.1)
+    if not silent then notify(v and "菜单已打开" or "菜单已隐藏", "info", 1.1) end
 end
 
 do
@@ -173,9 +172,9 @@ do
     mk("UICorner", { CornerRadius = UDim.new(1, 0) }, icon)
     mk("UIStroke", { Color = CONFIG.Accent, Thickness = 1, Transparency = 0.4 }, icon)
 
-    local keyBtn = mk("TextButton", { Name = "XHubKeyBtn", Text = "⌨", Size = UDim2.fromOffset(36, 30),
+    local keyBtn = mk("TextButton", { Name = "XHubKeyBtn", Text = "K", Size = UDim2.fromOffset(36, 30),
         Position = UDim2.new(0, 10, 0.5, 22), BackgroundColor3 = Color3.fromRGB(30, 34, 44),
-        TextColor3 = Color3.fromRGB(200, 208, 220), Font = Enum.Font.GothamBold, TextSize = 16,
+        TextColor3 = Color3.fromRGB(200, 208, 220), Font = Enum.Font.GothamBold, TextSize = 14,
         AutoButtonColor = false, ZIndex = 10 }, gui)
     mk("UICorner", { CornerRadius = UDim.new(0, 8) }, keyBtn)
 
@@ -681,37 +680,6 @@ local function collectScripts()
     end
     return byName
 end
-local function noop() end
-local function hookClosures(byName)
-    if not (getgc and hookfunction) then return 0 end
-    local n = 0
-    for _, v in ipairs(getgc()) do
-        if type(v) == "function" then
-            if islclosure == nil or islclosure(v) then
-                local src = ""
-                pcall(function() src = debug.info(v, "s") or "" end)
-                if src ~= "" and not isSafeName(src) then
-                    local hit = isTarget(src)
-                    if not hit then
-                        local low = src:lower()
-                        for nm in pairs(byName) do
-                            if low:find(nm, 1, true) then hit = true; break end
-                        end
-                    end
-                    if hit then
-                        local okh, old = pcall(hookfunction, v, noop)
-                        if okh and old then
-                            FIX.hooks[#FIX.hooks + 1] = { f = v, old = old }
-                            n = n + 1
-                        end
-                    end
-                end
-            end
-        end
-    end
-    G.hookedFns = G.hookedFns + n
-    return n
-end
 local function killACGThreads(byName)
     if not (getreg and coroutine and coroutine.close) then return 0 end
     local n = 0
@@ -734,41 +702,66 @@ local function killACGThreads(byName)
     G.killedThreads = G.killedThreads + n
     return n
 end
-local function disableACGConns(byName)
-    if not getconnections then return 0 end
-    local n = 0
-    local sigs = {}
-    for _, nm in ipairs({ "Heartbeat", "RenderStepped", "PreRender", "Stepped" }) do
-        local ok, sig = pcall(function() return RS[nm] end)
-        if ok and sig then sigs[#sigs + 1] = sig end
-    end
-    for _, sig in ipairs(sigs) do
-        local ok, conns = pcall(getconnections, sig)
-        if ok and conns then
-            for _, c in ipairs(conns) do
-                local sn, src = "", ""
-                pcall(function() if c.Script then sn = c.Script:GetFullName() end end)
-                pcall(function() src = debug.info(c.Function, "s") or "" end)
-                if (isTarget(sn) or isTarget(src))
-                   and not isSafeName(sn) and not isSafeName(src) then
-                    FIX.conns[#FIX.conns + 1] = c
-                    pcall(function() c:Disable() end)
-                    pcall(function() c:Disconnect() end)
-                    n = n + 1
+
+-- v4.1 精准挂钩: 只处理 AC 自己挂在渲染/心跳上的回调,不扫全量闭包
+local function hookConnFns()
+    if not (getconnections and hookfunction) then return 0, 0 end
+    local connN, hookN = 0, 0
+    for _, sigName in ipairs({ "Heartbeat", "RenderStepped", "Stepped", "PreRender" }) do
+        local ok, sig = pcall(function() return RS[sigName] end)
+        if ok and sig then
+            local okc, conns = pcall(getconnections, sig)
+            if okc and conns then
+                for _, c in ipairs(conns) do
+                    local sn, src = "", ""
+                    pcall(function() if c.Script then sn = c.Script:GetFullName() end end)
+                    pcall(function() src = debug.info(c.Function, "s") or "" end)
+                    if (isTarget(sn) or isTarget(src))
+                       and not isSafeName(sn) and not isSafeName(src) then
+                        FIX.conns[#FIX.conns + 1] = c
+                        pcall(function() c:Disable() end)
+                        if c.Function then
+                            local okh, old = pcall(hookfunction, c.Function, function() end)
+                            if okh and old then
+                                FIX.hooks[#FIX.hooks + 1] = { f = c.Function, old = old }
+                                hookN = hookN + 1
+                            end
+                        end
+                        connN = connN + 1
+                    end
                 end
             end
         end
     end
+    G.hookedFns = G.hookedFns + hookN
+    return connN, hookN
+end
+
+local function countInputConns()
+    if not getconnections then return -1 end
+    local n = 0
+    for _, sig in ipairs({ UIS.InputBegan, UIS.InputChanged, UIS.InputEnded }) do
+        local ok, cs = pcall(getconnections, sig)
+        if ok and cs then n = n + #cs end
+    end
     return n
 end
+
 local function runLayer1()
     G.matches = {}
     local byName = collectScripts()
-    local f = hookClosures(byName)
+    local before = countInputConns()
     local t = killACGThreads(byName)
-    local c = disableACGConns(byName)
-    return f, t, c
+    local c, h = hookConnFns()
+    local after = countInputConns()
+    if before >= 0 and after >= 0 and after < before then
+        repairInput(false)
+        notify(("检测层动到了输入连接(%d→%d)，已自动还原"):format(before, after), "err", 4)
+        return 0, 0, 0
+    end
+    return c, t, h
 end
+
 local function hookRemote(inst)
     if not (hookmetamethod and getnamecallmethod and checkcaller) then return false end
     local ok = pcall(function()
@@ -822,7 +815,7 @@ local function installGlobalHook()
                 G.blocked = G.blocked + 1
                 return nil
             end
-            -- 只切上行；不再拦 Connect(那会掐死车辆/疾跑按键)
+            -- 只切上行;不拦 Connect,避免掐死车辆/疾跑按键
             if m == "FireServer" or m == "InvokeServer" then
                 local cs = getcallingscript and getcallingscript()
                 local sn, short = "", ""
@@ -851,10 +844,10 @@ local function hashSearch(q)
     if q and q ~= "" then CONFIG.ACG.Hashes[hash(q)] = true end
     G.matches = {}
     local byName = collectScripts()
-    local f = hookClosures(byName)
+    local c, h = hookConnFns()
     local t = killACGThreads(byName)
     local n = scanRemotes()
-    return f, t, n
+    return c, t, h, n
 end
 local function acgRestore()
     if G.oldNamecall and getrawmetatable then
@@ -1104,7 +1097,10 @@ end)
 addButton(pMain, "隐藏菜单", function() setVisible(false) end)
 
 addSection(pVisual, "ESP")
-addToggle(pVisual, "启用 ESP", false, function(v) S.esp = v; notify("ESP " .. (v and "开" or "关"), v and "ok" or "info", 1.4) end)
+addToggle(pVisual, "启用 ESP", false, function(v)
+    S.esp = v
+    notify("ESP " .. (v and "开" or "关"), v and "ok" or "info", 1.4)
+end)
 addToggle(pVisual, "方框高亮", true, function(v) S.espBox = v end)
 addToggle(pVisual, "名字", true, function(v) S.espName = v end)
 addToggle(pVisual, "血量条", true, function(v) S.espHp = v end)
@@ -1114,7 +1110,10 @@ addToggle(pVisual, "穿墙可见", true, function(v) S.espOccluded = v end)
 addToggle(pVisual, "彩虹上色", false, function(v) S.espRainbow = v end)
 
 addSection(pCombat, "AIMBOT")
-addToggle(pCombat, "启用自瞄", false, function(v) S.aim = v; notify("自瞄 " .. (v and "开" or "关"), v and "ok" or "info", 1.4) end)
+addToggle(pCombat, "启用自瞄", false, function(v)
+    S.aim = v
+    notify("自瞄 " .. (v and "开" or "关"), v and "ok" or "info", 1.4)
+end)
 addToggle(pCombat, "按住 Q 瞄准 (关=常开)", true, function(v) S.aimHold = v end)
 addToggle(pCombat, "瞄准队友", false, function(v) S.aimTeam = v end)
 addToggle(pCombat, "隔墙忽略", true, function(v) S.aimWall = v end)
@@ -1133,12 +1132,12 @@ addSection(pGuard, "① 基础压制")
 addToggle(pGuard, "线程 + 连接 + marker", false, function(v) if v then acRun() end end)
 addButton(pGuard, "重新执行基础压制", function() acRun() end)
 
-addSection(pGuard, "② 检测层（挂钩本地判定）")
-addToggle(pGuard, "挂钩检测函数 / 杀线程", false, function(v)
+addSection(pGuard, "② 检测层（只动 AC 的渲染/心跳回调）")
+addToggle(pGuard, "挂钩 AC 回调 / 杀线程", false, function(v)
     G.layer1 = v
     if v then
-        local f, t, c = runLayer1()
-        notify(("检测层: 闭包 %d / 线程 %d / 连接 %d"):format(f, t, c), "ok", 3)
+        local c, t, h = runLayer1()
+        notify(("检测层: 连接 %d / 线程 %d / 闭包 %d"):format(c, t, h), "ok", 3)
     end
 end)
 
@@ -1154,8 +1153,9 @@ end)
 addSection(pGuard, "哈希搜索")
 local hashBox = addBox(pGuard, "输入 AntiCheat / 混淆名", "AntiCheat")
 addButton(pGuard, "哈希搜索 + 挂钩", function()
-    local f, t, n = hashSearch(hashBox.Text)
-    notify(("搜索 %s → 闭包 %d / 线程 %d / remote %d"):format(hashBox.Text, f, t, n), "ok", 3)
+    local c, t, h, n = hashSearch(hashBox.Text)
+    notify(("搜索 %s → 连接 %d / 线程 %d / 闭包 %d / remote %d")
+        :format(hashBox.Text, c, t, h, n), "ok", 3)
 end)
 addButton(pGuard, "只加入哈希表", function()
     CONFIG.ACG.Hashes[hash(hashBox.Text)] = true
@@ -1184,7 +1184,7 @@ addButton(pGuard, "修复车辆/疾跑按键", function() repairInput(true) end)
 addButton(pGuard, "还原 ACG 钩子 + 输入", function()
     acgRestore()
     repairInput(true)
-  notify("已还原 __namecall 与所有被改动的闭包", "ok", 3)
+    notify("已还原 __namecall 与所有被改动的回调", "ok", 3)
 end)
 
 addSection(pMisc, "角色")
@@ -1244,8 +1244,8 @@ UIS.InputBegan:Connect(function(i, gp)
     end
 end)
 
-setVisible(false)
-task.delay(0.2, function() setVisible(true) end)
+setVisible(false, true)
+task.delay(0.2, function() setVisible(true, true) end)
 notify("XHub " .. VERSION .. " 已加载", "ok", 3)
 task.delay(0.4, function()
     notify("菜单键 " .. CONFIG.MenuKeys[1].Name .. " · F 飞行 · Q 瞄准", "info", 3)
