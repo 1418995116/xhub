@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v8.1"
-local BUILD   = "2026-11-01 12:15"
+local VERSION = "v8.2"
+local BUILD   = "2026-11-01 12:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -33,7 +33,7 @@ local S = {
     fly = false, flySpeed = 55,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = true,
+    aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = true, remoteAimAll = false, remoteProbe = false,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "cframe", antiSnap = true,
@@ -803,25 +803,55 @@ local function remoteAimPoint()
 end
 
 local remoteHooked = false
+
+local function argSig(args)
+    local parts = {}
+    for i = 1, math.min(#args, 6) do
+        local v = args[i]
+        local tv = typeof(v)
+        if tv == "Vector3" then
+            parts[#parts + 1] = ("V3(%.1f,%.1f,%.1f)"):format(v.X, v.Y, v.Z)
+        elseif tv == "CFrame" then
+            parts[#parts + 1] = "CFrame"
+        else
+            parts[#parts + 1] = tv
+        end
+    end
+    return table.concat(parts, ", ")
+end
+
 local function installRemoteAim()
     if remoteHooked then return end
-    if not (hookmetamethod and getnamecallmethod and checkcaller) then return end
+    if not (hookmetamethod and getnamecallmethod and checkcaller) then
+        notify("执行器不支持 hookmetamethod，远程改写不可用", "err", 3)
+        return
+    end
     local old
     old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local m = getnamecallmethod()
-        if checkcaller() and (m == "FireServer" or m == "InvokeServer") and os.clock() < fireUntil then
+        local inWindow = os.clock() < fireUntil
+        if (m == "FireServer" or m == "InvokeServer") and inWindow then
             local okName, nm = pcall(function() return tostring(self.Name):lower() end)
-            if okName and nm then
-                local hit = false
-                for _, k in ipairs(WEAPON_REMOTE_KW) do
-                    if nm:find(k, 1, true) then hit = true break end
+            local args = { ... }
+
+            -- 探针：把开火窗口内所有远程打出来
+            if S.remoteProbe then
+                print(("[probe] %s  %s  (%d args)"):format(tostring(self.Name), m, #args))
+                print("[probe]   " .. argSig(args))
+            end
+
+            if S.remoteAim then
+                local matched = S.remoteAimAll
+                if not matched and okName and nm then
+                    for _, k in ipairs(WEAPON_REMOTE_KW) do
+                        if nm:find(k, 1, true) then matched = true break end
+                    end
                 end
-                if hit then
+                if matched then
                     local pt = remoteAimPoint()
                     if pt then
                         local c = charOf(lp)
                         local hrp = c and c:FindFirstChild("HumanoidRootPart")
-                        local args = { ... }
                         local changed = false
                         for i, v in ipairs(args) do
                             local tv = typeof(v)
@@ -847,6 +877,7 @@ local function installRemoteAim()
         return old(self, ...)
     end))
     remoteHooked = true
+    print("[XHub] remote hook installed")
 end
 pcall(installRemoteAim)
 --==== 静默瞄准（Silent Aim）：视角不动，只在开火瞬间改写相机方向 1~6 帧 ====
@@ -3265,6 +3296,18 @@ addButton(pVisual, "诊断扫描（F9 + 弹窗）", function()
         :format(wsKids, cr and "有" or "无", #list, mcount, hits), "info", 5)
 end)
 
+addToggle(pCombat, "远程改写：宽松模式（所有带方向的远程都改）", false, function(v)
+    S.remoteAimAll = v
+    notify(v and "宽松改写已开（可能影响交互类远程，谨慎）" or "宽松改写已关（只改武器类远程）", "warn", 3)
+end)
+addButton(pCombat, "开火探针（15 秒，输出到 F9）", function()
+    S.remoteProbe = true
+    notify("探针已开 15 秒：现在开一枪，把 F9 里的 [probe] 行发我", "ok", 4)
+    task.delay(15, function()
+        S.remoteProbe = false
+        notify("探针已关闭", "info", 1.6)
+    end)
+end)
 addToggle(pCombat, "远程弹道改写（静默/子弹追踪真正生效的关键）", true, function(v)
     S.remoteAim = v
     notify(v and "远程改写已开：开火时把方向类参数改成对准目标" or "远程改写已关（只有视角变化，命中不受影响）", v and "ok" or "warn", 3)
