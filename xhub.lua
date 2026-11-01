@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v9.4"
-local BUILD   = "2026-11-01 21:10"
+local VERSION = "v9.5"
+local BUILD   = "2026-11-01 21:45"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -23,6 +23,14 @@ local CONFIG = {
              "key", "player", "character", "anim", "tool", "seat", "vehicle" },
 }
 
+local RUNNING = true          -- shutdown flag
+local shutdownXHub            -- forward decl (UI button references it)
+pcall(function()
+    if _G.XHub and type(_G.XHub) == "table" and _G.XHub.shutdown then
+        _G.XHub.shutdown()
+        task.wait(0.15)
+    end
+end)
 local Players, RS = game:GetService("Players"), game:GetService("RunService")
 local UIS, CoreGui = game:GetService("UserInputService"), game:GetService("CoreGui")
 local RStorage, SC = game:GetService("ReplicatedStorage"), game:GetService("ScriptContext")
@@ -635,7 +643,7 @@ local function ensureESP(p)
     end
 end
 task.spawn(function()
-    while true do
+    while RUNNING do
         task.wait(0.1)
         if S.esp then
             for _, p in ipairs(Players:GetPlayers()) do
@@ -906,6 +914,7 @@ local function installRemoteAim()
     end
     local old
     old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        if not RUNNING then return old(self, ...) end
         local m = getnamecallmethod()
         local inWindow = os.clock() < fireUntil
         if (m == "FireServer" or m == "InvokeServer") and inWindow and (S.remoteAim or S.remoteProbe) then
@@ -1169,7 +1178,7 @@ end
 
 local __wasSeated = false
 task.spawn(function()
-    while true do
+    while RUNNING do
         task.wait(0.2)
         local seated = isSeated()
         if seated ~= __wasSeated then
@@ -1191,7 +1200,7 @@ end)
 
 task.spawn(function()
     local airT = 0
-    while true do
+    while RUNNING do
         task.wait(0.3)
         local c, h = charOf(lp), humOf(lp)
         local hrp = c and c:FindFirstChild("HumanoidRootPart")
@@ -1472,6 +1481,7 @@ local function hookRemote(inst)
     local ok = pcall(function()
         local old
         old = hookmetamethod(inst, "__namecall", newcclosure(function(self, ...)
+        if not RUNNING then return old(self, ...) end
             local m = getnamecallmethod()
             if not checkcaller() and (m == "FireServer" or m == "InvokeServer") then
                 G.blocked = G.blocked + 1
@@ -1589,6 +1599,7 @@ local function blockRemoteSubstr(sub)
                     local ok = pcall(function()
                         local old
                         old = hookmetamethod(d, "__namecall", newcclosure(function(self, ...)
+        if not RUNNING then return old(self, ...) end
                             local m = getnamecallmethod()
                             if m == "FireServer" or m == "InvokeServer" then
                                 G.blocked = G.blocked + 1
@@ -2021,7 +2032,7 @@ local function ensureEnt(m)
 end
 
 task.spawn(function()
-    while true do
+    while RUNNING do
         task.wait(S.fastScan and 1.0 or 0.4)
         if S.entityEsp or S.espNpc then
             local n = 0
@@ -2333,7 +2344,7 @@ local function nearestDoorPos()
 end
 
 task.spawn(function()
-    while true do
+    while RUNNING do
         local boost = (os.clock() - (S.itemPoke or 0)) < 3
         task.wait(S.fastScan and (boost and 0.4 or 1.5) or 0.35)
         if S.itemEsp then
@@ -2370,7 +2381,7 @@ end)
 
 -- 拾取 / 交互 / 开门: 独立快速循环
 task.spawn(function()
-    while true do
+    while RUNNING do
         local iv = S.pickupInterval or 0.12
         if iv < 0.05 then iv = 0.05 end
         task.wait(iv)
@@ -2383,7 +2394,7 @@ task.spawn(function()
 end)
 
 task.spawn(function()
-    while true do
+    while RUNNING do
         task.wait(0.5)
         if S.autoDoor then pcall(autoDoors, S.doorRadius) end
     end
@@ -2487,7 +2498,7 @@ end)
 
 -- 变焦锁定模式：每帧把游戏的视角设置拉回来（不少游戏会锁第一人称）
 task.spawn(function()
-    while true do
+    while RUNNING do
         task.wait(0.15)
         if S.thirdPerson and S.tpMode == "zoom" then
             local P = lp
@@ -2747,7 +2758,7 @@ local HIDE_TRIGGER = { "rushmoving", "rush", "ambush", "seek", "glitch", "glitch
 
 task.spawn(function()
     local wasAlive = true
-    while true do
+    while RUNNING do
         task.wait(0.5)
         local h = humOf(lp)
         local aliveNow = (h ~= nil) and (h.Health > 0)
@@ -2769,7 +2780,7 @@ local nearestTrigger
 
 task.spawn(function()
     local warned = 0
-    while true do
+    while RUNNING do
         task.wait(0.4)
         local ok, err = pcall(function()
             local name, d = nearestTrigger()
@@ -2796,7 +2807,7 @@ end)
 --==== 杀戮光环（Kill Aura）====
 auraTarget = nil
 task.spawn(function()
-    while true do
+    while RUNNING do
         task.wait(S.auraInt or 0.15)
         if S.killAura then
             pcall(function()
@@ -2888,7 +2899,7 @@ local function showHideSource(text)
 end
 
 task.spawn(function()
-    while true do
+    while RUNNING do
         task.wait(0.5)
         if hideHud and hideHud.Parent then
             if os.clock() > hideHudUntil then hideHud.Text = "" end
@@ -2972,7 +2983,7 @@ end
 task.spawn(function()
     local warned = 0
     local dbgT = 0
-    while true do
+    while RUNNING do
         task.wait(0.35)
         if S.hideDebug and os.clock() - dbgT > 2 then
             dbgT = os.clock()
@@ -3301,7 +3312,7 @@ local function ensureDoor(m)
 end
 
 task.spawn(function()
-    while true do
+    while RUNNING do
         task.wait(S.fastScan and 1.2 or 0.5)
         if S.scenery or S.doors or S.lever then
             local c0 = charOf(lp)
@@ -3452,7 +3463,7 @@ local function ensureNpcEsp(m)
 end
 
 task.spawn(function()
-    while true do
+    while RUNNING do
         task.wait(S.fastScan and 0.8 or 0.4)
         if S.espNpc then
             local n = 0
@@ -3479,7 +3490,7 @@ end)
 --==== 遇到 Eyes 自动背对（把角色朝向转成背对它） ====
 task.spawn(function()
     local locked = false
-    while true do
+    while RUNNING do
         task.wait(0.08)
         if S.eyesAway then
             local c, h = charOf(lp), humOf(lp)
@@ -3860,7 +3871,7 @@ end)
 --==== 位移限速器：把 0.6 秒内的位移硬压在该服容忍值以内（服务端永远看不到异常速度） ====
 local govHist = {}
 task.spawn(function()
-    while true do
+    while RUNNING do
         task.wait(0.08)
         if S.govEnabled and not isSeated() then
             local c = charOf(lp)
@@ -4051,15 +4062,10 @@ addSection(pMisc, "服务器")
 addButton(pMisc, "重进本服 (同 JobId)", function() rejoinHere() end)
 addButton(pMisc, "换一个新服务器", function() newServer() end)
 addSection(pMisc, "其他")
-addButton(pMisc, "卸载并恢复全部", function()
-    setFly(false); S.esp = false; S.aim = false
-    acgRestore(); repairInput(false)
-    for _, o in pairs(espStore) do destroyESP(o) end
-    espStore = {}
-    pcall(function() RS:UnbindFromRenderStep("XHubAim") end)
-    if blurFx then blurFx:Destroy() end
-    if notifHolder then notifHolder:Destroy() end
-    gui:Destroy()
+addButton(pMisc, "关闭脚本（完全卸载，可在同服换版本）", function()
+    if _G.XHubShuttingDown then return end
+    notify("正在卸载 XHub…", "warn", 2)
+    task.delay(0.3, function() shutdownXHub() end)
 end)
 addSection(pMisc, "信息")
 rowOrder = rowOrder + 1
@@ -4086,7 +4092,7 @@ RS:BindToRenderStep("XHubMouse", Enum.RenderPriority.Last.Value - 1, function()
 end)
 
 task.spawn(function()
-    while true do
+    while RUNNING do
         task.wait(0.25)
         if main.Visible then
             if UIS.MouseBehavior ~= Enum.MouseBehavior.Default then
@@ -4135,6 +4141,63 @@ task.delay(0.4, function()
     notify(("档位: %s"):format(PROFILES[currentProfileKey].label), "ok", 4)
     notify(PROFILES[currentProfileKey].tip, "info", 5)
 end)
+--==== 关闭脚本（完全卸载，可在同一服务器内换版本重新注入）====
+shutdownXHub = function()
+    if _G.XHubShuttingDown then return end
+    _G.XHubShuttingDown = true
+    RUNNING = false
+
+    -- 1) 解绑全部渲染回调
+    for _, name in ipairs({ "XHubAim", "XHubSilent", "XHubCam", "XHubSky", "XHubSpin", "XHubMouse" }) do
+        pcall(function() RS:UnbindFromRenderStep(name) end)
+    end
+
+    -- 2) 还原角色/相机状态
+    pcall(function() setNoclip(false) end)
+    pcall(function() setFly(false) end)
+    pcall(function()
+        skyHold = nil
+        local c = charOf(lp)
+        local hum = c and c:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.WalkSpeed = 16
+            hum.AutoRotate = true
+            pcall(function() hum.JumpPower = 50 end)
+        end
+        if cam then
+            cam.CameraType = Enum.CameraType.Custom
+            if hum then cam.CameraSubject = hum end
+        end
+    end)
+
+    -- 3) 清掉所有 ESP 绘制对象
+    for _, store in ipairs({ espStore, entStore, npcStore, sceneStore, doorStore, leverStore, itemStore }) do
+        pcall(function()
+            for k, v in pairs(store) do
+                if type(v) == "table" then
+                    for _, f in pairs(v) do
+                        if typeof(f) == "Instance" then pcall(function() f:Destroy() end) end
+                    end
+                end
+            end
+            for k in pairs(store) do store[k] = nil end
+        end)
+    end
+
+    -- 4) 销毁 GUI
+    pcall(function() if gui then gui:Destroy() end end)
+    pcall(function() if camDbg then camDbg:Destroy() end end)
+    pcall(function() if navHud then navHud:Destroy() end end)
+    pcall(function() if hideHud then hideHud:Destroy() end end)
+    pcall(function() if auraHud then auraHud:Destroy() end end)
+
+    -- 5) 摘掉全局注册
+    _G.XHub = nil
+    _G.XHubShuttingDown = false
+    print("[XHub] 已卸载。可以在同一服务器内注入其它版本。")
+end
+
+_G.XHub = { version = VERSION, build = BUILD, shutdown = shutdownXHub, running = function() return RUNNING end }
 if S.noclip then
     task.delay(0.6, function() pcall(function() setNoclip(true) end) end)
 end
