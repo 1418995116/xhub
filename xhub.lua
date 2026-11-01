@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v11.5"
-local BUILD   = "2026-11-02 08:40"
+local VERSION = "v11.6"
+local BUILD   = "2026-11-02 09:15"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -3122,7 +3122,105 @@ local function ensureAuraPanel()
 end
 
 local auraLogOrder = 0
+--==== 日志 Hub（专属大窗口）====
+local hub, hubList, hubRows, hubOrder, hubPaused = nil, nil, {}, 0, false
+local hubBuf = {}
+
+local function hubPush(text, color)
+    if not (hub and hub.Parent) then return end
+    if hubPaused then
+        hubBuf[#hubBuf + 1] = { text = text, color = color }
+        if #hubBuf > 200 then table.remove(hubBuf, 1) end
+        return
+    end
+    hubOrder = hubOrder + 1
+    local row = mk("TextLabel", { Text = os.date("%H:%M:%S ") .. text, BackgroundTransparency = 1,
+        Size = UDim2.new(1, -8, 0, 16), TextXAlignment = Enum.TextXAlignment.Left,
+        Font = Enum.Font.Code, TextSize = 11, TextColor3 = color or Color3.fromRGB(210, 214, 224),
+        LayoutOrder = hubOrder, ZIndex = 52 }, hubList)
+    hubRows[#hubRows + 1] = row
+    if #hubRows > 200 then
+        local old = table.remove(hubRows, 1)
+        if old then old:Destroy() end
+    end
+    pcall(function() hubList.CanvasPosition = Vector2.new(0, math.max(0, hubList.AbsoluteCanvasSize.Y)) end)
+end
+
+local function ensureHub()
+    if hub and hub.Parent then return hub end
+    hub = mk("Frame", { Name = "XHubLogHub", Size = UDim2.fromOffset(520, 400),
+        Position = UDim2.new(0.5, -260, 0.5, -200), BackgroundColor3 = Color3.fromRGB(12, 14, 19),
+        BorderSizePixel = 0, ZIndex = 50 }, gui)
+    mk("UICorner", { CornerRadius = UDim.new(0, 10) }, hub)
+    mk("UIStroke", { Color = Color3.fromRGB(70, 90, 120), Thickness = 1 }, hub)
+
+    local head = mk("Frame", { Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = Color3.fromRGB(22, 26, 34),
+        BorderSizePixel = 0, ZIndex = 51 }, hub)
+    local title = mk("TextLabel", { Text = "XHub 日志 Hub", BackgroundTransparency = 1,
+        Position = UDim2.new(0, 10, 0, 0), Size = UDim2.new(1, -220, 1, 0),
+        TextXAlignment = Enum.TextXAlignment.Left, Font = Enum.Font.GothamBold, TextSize = 13,
+        TextColor3 = Color3.fromRGB(140, 200, 255), ZIndex = 52 }, head)
+
+    local function miniBtn(text, x, w, cb, col)
+        local b = mk("TextButton", { Text = text, BackgroundTransparency = 1,
+            Position = UDim2.new(1, x, 0, 4), Size = UDim2.fromOffset(w, 22),
+            Font = Enum.Font.Gotham, TextSize = 11,
+            TextColor3 = col or Color3.fromRGB(180, 200, 230), ZIndex = 52 }, head)
+        b.MouseButton1Click:Connect(cb)
+        return b
+    end
+
+    miniBtn("清空", -196, 40, function()
+        for _, r in ipairs(hubRows) do pcall(function() r:Destroy() end) end
+        hubRows = {}
+    end)
+    miniBtn("复制", -154, 40, function()
+        local lines = {}
+        for _, r in ipairs(hubRows) do lines[#lines + 1] = r.Text end
+        local txtAll = table.concat(lines, "\n")
+        local ok = pcall(function()
+            if setclipboard then setclipboard(txtAll) elseif toclipboard then toclipboard(txtAll) end
+        end)
+        hubPush(ok and "已复制全部日志" or "本执行器不支持剪贴板", Color3.fromRGB(160, 220, 160))
+    end)
+    miniBtn("暂停", -112, 40, function()
+        hubPaused = not hubPaused
+        hubPush(hubPaused and "日志已暂停" or "日志已恢复", Color3.fromRGB(255, 200, 120))
+        if not hubPaused then
+            local pending = hubBuf
+            hubBuf = {}
+            for _, e in ipairs(pending) do hubPush(e.text, e.color) end
+        end
+    end)
+    miniBtn("×", -30, 22, function() hub.Visible = false end, Color3.fromRGB(255, 120, 120))
+
+    hubList = mk("ScrollingFrame", { Size = UDim2.new(1, -16, 1, -40), Position = UDim2.new(0, 8, 0, 34),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4,
+        CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 51 }, hub)
+    mk("UIListLayout", { Padding = UDim.new(0, 1), SortOrder = Enum.SortOrder.LayoutOrder }, hubList)
+    mk("UIPadding", { PaddingLeft = UDim.new(0, 4), PaddingTop = UDim.new(0, 2) }, hubList)
+
+    -- 拖动
+    local dragging, dragStart, startPos = false, nil, nil
+    head.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging, dragStart, startPos = true, i.Position, hub.Position
+        end
+    end)
+    UIS.InputChanged:Connect(function(i)
+        if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+            local d = i.Position - dragStart
+            hub.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end)
+    UIS.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+    end)
+
+    return hub
+end
 local function auraLog(text, color)
+    pcall(hubPush, text, color)
     local panel = ensureAuraPanel()
     panel.Visible = true
     auraLogOrder = auraLogOrder + 1
@@ -4611,6 +4709,13 @@ M.addSection(pMisc, "服务器")
 M.addButton(pMisc, "重进本服 (同 JobId)", function() M.rejoinHere() end)
 M.addButton(pMisc, "换一个新服务器", function() M.newServer() end)
 M.addSection(pMisc, "其他")
+M.addButton(pMisc, "打开 / 关闭 日志 Hub（可拖动/复制）", function()
+    local h = ensureHub()
+    h.Visible = not h.Visible
+    if h.Visible then
+        hubPush("日志 Hub 已打开", Color3.fromRGB(140, 200, 255))
+    end
+end)
 M.addButton(pMisc, "关闭脚本（完全卸载，可在同服换版本）", function()
     if _G.XHubShuttingDown then return end
     notify("正在卸载 XHub…", "warn", 2)
