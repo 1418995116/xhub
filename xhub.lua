@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v14.4"
-local BUILD   = "2026-11-03 00:45"
+local VERSION = "v14.5"
+local BUILD   = "2026-11-03 01:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -2955,11 +2955,12 @@ function M.diagScan()
     local c = M.charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
     local list = M.scanTargets()
-    local n = 0
+    local humCount, nameSample = 0, {}
     local bestM, bestD = nil, math.huge
     for _, m in ipairs(list) do
         if m ~= c then
-            n = n + 1
+            if m:FindFirstChildOfClass("Humanoid") then humCount = humCount + 1 end
+            if #nameSample < 8 then nameSample[#nameSample + 1] = m.Name end
             local root = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
             if root and hrp then
                 local d = (root.Position - hrp.Position).Magnitude
@@ -2967,26 +2968,20 @@ function M.diagScan()
             end
         end
     end
-    local humCount = 0
-    local nameSample = {}
-    for _, m in ipairs(list) do
-        if m:FindFirstChildOfClass("Humanoid") then humCount = humCount + 1 end
-        if #nameSample < 6 then nameSample[#nameSample + 1] = m.Name end
-    end
-    auraLog(("诊断: 扫描到 %d 个模型 / 其中带 Humanoid %d 个"):format(#list, humCount), Color3.fromRGB(150, 210, 255))
-    auraLog(("最近目标: %s  %.1f m   光环半径 %.1f  打NPC=%s"):format(
+    local t1 = ("诊断: %d 个模型 / 带 Humanoid %d 个"):format(#list, humCount)
+    local t2 = ("最近: %s  %.1f m   半径 %.1f   打NPC=%s"):format(
         bestM and bestM.Name or "无", bestD == math.huge and -1 or bestD,
-        S.auraRadius or 0, tostring(S.auraNpc)), Color3.fromRGB(255, 220, 120))
-    if #nameSample > 0 then
-        auraLog("样本: " .. table.concat(nameSample, ", "), Color3.fromRGB(180, 200, 230))
-    end
-    pcall(function()
-        print(("[diag] models=%d hum=%d nearest=%s %.1f radius=%.1f auraNpc=%s"):format(
-            #list, humCount, bestM and bestM.Name or "none",
-            bestD == math.huge and -1 or bestD, S.auraRadius or 0, tostring(S.auraNpc)))
-    end)
+        S.auraRadius or 0, tostring(S.auraNpc))
+    local t3 = "样本: " .. table.concat(nameSample, ", ")
+    print("[diag] " .. t1)
+    print("[diag] " .. t2)
+    print("[diag] " .. t3)
+    -- 屏幕上直接显示（不依赖日志面板）
+    pcall(function() notify(t1, "info", 8) end)
+    pcall(function() notify(t2, "warn", 8) end)
+    pcall(function() notify(t3, "info", 8) end)
+    S.diagText = t1 .. "\n" .. t2 .. "\n" .. t3
 end
---==== 手持武器攻击距离（自动计算）====
 function M.toolReach()
     local c = M.charOf(lp)
     local tool = c and c:FindFirstChildOfClass("Tool")
