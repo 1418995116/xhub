@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v13.6"
-local BUILD   = "2026-11-02 20:50"
+local VERSION = "v13.7"
+local BUILD   = "2026-11-02 21:25"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -3268,7 +3268,25 @@ function M.replayLearned(model, part)
     for _, rec in ipairs(list) do
         if rec.remote and rec.remote.Parent and isAttackCall(rec) then
             local out = {}
+            local curTool0 = nil
+            pcall(function()
+                local cc0 = M.charOf(lp)
+                curTool0 = cc0 and cc0:FindFirstChildOfClass("Tool")
+            end)
             for i = 1, rec.n do
+                local kind = rec.kinds and rec.kinds[i] or nil
+                if kind then
+                    if kind == "char:h" then out[i] = hum or rec.args[i]
+                    elseif kind == "char:m" then out[i] = model or rec.args[i]
+                    elseif kind == "char:p" then out[i] = part or rec.args[i]
+                    elseif kind == "tool:t" then out[i] = curTool0 or rec.args[i]
+                    elseif kind == "tool:p" then out[i] = curTool0 and (curTool0:FindFirstChild("Handle") or curTool0:FindFirstChildWhichIsA("BasePart")) or rec.args[i]
+                    elseif kind == "vec3" then out[i] = (S.replaySwap and part) and part.Position or rec.args[i]
+                    elseif kind == "cf" then out[i] = (S.replaySwap and part) and CFrame.new(part.Position) or rec.args[i]
+                    elseif kind:sub(1, 4) == "num:" then out[i] = (rec.args[i] or 0) * (S.replayScale or 1)
+                    else out[i] = rec.args[i]
+                    end
+                else
                 local v = rec.args[i]
                 local tv = typeof(v)
                 if tv == "Instance" then
@@ -3293,6 +3311,7 @@ function M.replayLearned(model, part)
                 else
                     out[i] = v
                 end
+                end   -- if kind
             end
             local ok = pcall(function()
                 if rec.remote:IsA("RemoteEvent") or rec.remote:IsA("UnreliableRemoteEvent") then
@@ -3317,38 +3336,43 @@ local function hasFS()
     return (type(writefile) == "function" and type(readfile) == "function")
 end
 
-local function argToTag(v)
+-- 记录参数"种类"，不记录实例本身（实例每个服务器都不一样）
+local function argKind(v)
     local tv = typeof(v)
-    if tv == "Instance" then return "inst" end
-    if tv == "number" then return "num:" .. tostring(v) end
-    if tv == "boolean" then return "bool:" .. tostring(v) end
-    if tv == "string" then return "str:" .. v:gsub("\n", " ") end
-    if tv == "Vector3" then return "vec3" end
-    if tv == "CFrame" then return "cf" end
-    if tv == "nil" then return "nil" end
-    return "skip"
+    if tv == "Instance" then
+        if M.isCharLike(v) then
+            if v:IsA("Humanoid") then return "char:h" end
+            if v:IsA("Model") then return "char:m" end
+            return "char:p"
+        end
+        if v:IsA("Tool") then return "tool:t" end
+        if v:FindFirstAncestorOfClass("Tool") then return "tool:p" end
+        return "inst"
+    elseif tv == "number" then return "num:" .. tostring(v)
+    elseif tv == "boolean" then return "bool:" .. tostring(v)
+    elseif tv == "string" then return "str:" .. v:gsub("\n", " ")
+    elseif tv == "Vector3" then return "vec3"
+    elseif tv == "CFrame" then return "cf"
+    end
+    return "nil"
 end
 
 function M.saveLearned()
-    if not hasFS() then return false end
-    local lines = {}
-    for _, r in ipairs({ S.learnCall or (S.learned or {})[1] }) do
-        if r.remote and r.remote.Parent then
-            local tags = {}
-            for i = 1, r.n do tags[i] = argToTag(r.args[i]) end
-            lines[#lines + 1] = r.remote:GetFullName() .. "|" .. table.concat(tags, ",")
-        end
-    end
-    local ok = pcall(function() writefile(LEARN_FILE, table.concat(lines, "\n")) end)
-    return ok, #lines
+    if not hasFS() then return false, 0 end
+    local rec = S.learnCall or (S.learned or {})[1]
+    if not (rec and rec.remote and rec.remote.Parent) then return false, 0 end
+    local tags = {}
+    for i = 1, rec.n do tags[i] = argKind(rec.args[i]) end
+    local line = rec.remote:GetFullName() .. "|" .. table.concat(tags, ",") .. "|" .. tostring(rec.tool or "")
+    local ok = pcall(function() writefile(LEARN_FILE, line) end)
+    return ok, ok and 1 or 0
 end
 
 local function resolvePath(path)
     local cur = game
     for part in string.gmatch(path, "[^%.]+") do
-        local nxt = cur:FindFirstChild(part)
-        if not nxt then return nil end
-        cur = nxt
+        if not cur then return nil end
+        cur = cur:FindFirstChild(part)
     end
     return cur
 end
@@ -3357,32 +3381,37 @@ function M.loadLearned()
     if not hasFS() then return 0 end
     local ok, data = pcall(function() return readfile(LEARN_FILE) end)
     if not ok or not data or data == "" then return 0 end
-    local out = {}
-    for line in string.gmatch(data, "[^\n]+") do
-        local path, tagstr = line:match("^(.-)|(.+)$")
-        if path and tagstr then
-            local r = resolvePath(path)
-            if r then
-                local tags = {}
-                for t in string.gmatch(tagstr .. ",", "([^,]*),") do tags[#tags + 1] = t end
-                local args, n = {}, 0
-                for i, t in ipairs(tags) do
-                    n = i
-                    if t == "inst" then args[i] = nil
-                    elseif t:sub(1, 4) == "num:" then args[i] = tonumber(t:sub(5)) or 0
-                    elseif t:sub(1, 5) == "bool:" then args[i] = (t:sub(6) == "true")
-                    elseif t:sub(1, 4) == "str:" then args[i] = t:sub(5)
-                    elseif t == "vec3" then args[i] = Vector3.zero
-                    elseif t == "cf" then args[i] = CFrame.new()
-                    else args[i] = nil end
-                end
-                out[#out + 1] = { remote = r, args = args, n = n, name = r.Name, tpl = true }
-            end
-        end
+    local line = data:match("^([^\n]+)")
+    if not line then return 0 end
+    local path, tagstr, toolName = line:match("^(.-)|(.-)|(.*)$")
+    if not path then return 0 end
+    local remote = resolvePath(path)
+    local kinds, args, n = {}, {}, 0
+    for t in string.gmatch(tagstr .. ",", "([^,]*),") do
+        n = n + 1
+        kinds[n] = t
+        if t:sub(1, 4) == "num:" then args[n] = tonumber(t:sub(5)) or 0
+        elseif t:sub(1, 5) == "bool:" then args[n] = (t:sub(6) == "true")
+        elseif t:sub(1, 4) == "str:" then args[n] = t:sub(5)
+        elseif t == "vec3" then args[n] = Vector3.zero
+        elseif t == "cf" then args[n] = CFrame.new()
+        else args[n] = nil end
     end
-    S.learned = out
-    S.learnCall = out[1]
-    return #out
+    S.learnCall = { remote = remote, args = args, kinds = kinds, n = n, name = path:match("([^%.]+)$") or "?", tool = (toolName ~= "" and toolName or nil), path = path }
+    S.learned = { S.learnCall }
+    return remote and 1 or -1   -- -1 = 服务器结构还没加载好，等待重试
+end
+
+-- 远程还没解析出来时，稍后重试
+function M.retryResolve()
+    local rec = S.learnCall
+    if not (rec and rec.path) then return end
+    if rec.remote and rec.remote.Parent then return end
+    local r = resolvePath(rec.path)
+    if r then
+        rec.remote = r
+        pcall(function() auraLog("已重新解析攻击远程: " .. tostring(r.Name), Color3.fromRGB(150, 210, 255)) end)
+    end
 end
 function M.tryKill(model, part)
     if not (model and model.Parent) then return false end
