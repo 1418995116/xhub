@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v11.3"
-local BUILD   = "2026-11-02 07:30"
+local VERSION = "v11.4"
+local BUILD   = "2026-11-02 08:05"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.12, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.12, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 8, auraRanged = false, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -3268,9 +3268,14 @@ task.spawn(function()
                     pcall(M.tryKill, m, p)
                 end
 
+                local meleeOK = S.auraRanged or (d and d <= (S.meleeRange or 8))
+                if not meleeOK and os.clock() - (S.nearWarn or 0) > 4 then
+                    S.nearWarn = os.clock()
+                    auraLog(("目标 %.0f m，超出近战距离 %d m（走近或开远程武器模式）"):format(d or 0, S.meleeRange or 8), Color3.fromRGB(255, 190, 120))
+                end
                 local nowT = os.clock()
                 local fireGap = S.auraFireInt or 0.25
-                if tool and nowT - (S.lastAuraSwing or 0) >= fireGap then
+                if tool and meleeOK and nowT - (S.lastAuraSwing or 0) >= fireGap then
                     S.lastAuraSwing = nowT
                     pcall(function() tool:Activate() end)
                     pcall(M.measureSwing, m)
@@ -4285,6 +4290,11 @@ UIKEYS.setAuraKeyBtn = M.addButton(pCombat, "光环快捷键: " .. S.auraKey.Nam
     notify("按一个新键作为光环开关（Esc 取消）", "warn", 4)
 end)
 M.addSlider(pCombat, "光环半径 studs", 5, 60, 20, function(v) S.auraRadius = v end)
+M.addSlider(pCombat, "近战有效距离 studs（超出不挥）", 2, 20, 8, function(v) S.meleeRange = v end)
+M.addToggle(pCombat, "远程武器模式（不限近战距离）", false, function(v)
+    S.auraRanged = v
+    notify(v and "远程模式：任意距离都会开火" or "近战模式：只在有效距离内挥砍", "info", 2.4)
+end)
 M.addToggle(pCombat, "显示光环范围（白色圆圈）", true, function(v) S.auraRing = v end)
 M.addSlider(pCombat, "光环攻击间隔 ms", 50, 500, 150, function(v) S.auraInt = v / 1000 end)
 M.addToggle(pCombat, "光环调试信息（F9）", false, function(v)
