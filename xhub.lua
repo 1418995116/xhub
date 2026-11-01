@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v8.6"
-local BUILD   = "2026-11-01 14:30"
+local VERSION = "v8.7"
+local BUILD   = "2026-11-01 17:50"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -41,7 +41,7 @@ local S = {
     night = false, entityEsp = false, entNotify = true, hudNearest = true,
     itemEsp = false, pickup = false, pickupRadius = 25, pickupInterval = 0.12,
     autoPrompt = false, promptRadius = 20,
-    autoDoor = false, doorRadius = 28, autoWalk = false, pulse = false,
+    autoDoor = false, doorRadius = 28, autoWalk = false, autoAdvance = false, pulse = false,
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
@@ -728,6 +728,7 @@ end
 
 local aimInfo
 local aimWant, aimGoal = false, nil
+local hitTrack = { part = nil, hp = nil, last = 0 }
 
 local function aimTick(dt)
     aimWant = false
@@ -766,6 +767,21 @@ local function aimTick(dt)
         aimGoal = nil
         if aimInfo then aimInfo.Text = "自瞄: FOV 内无目标" end
         return
+    end
+
+    -- 命中反馈：锁定目标的血量下降 => 打中
+    do
+        local hp = nil
+        local par = t.Parent
+        local hum = par and par:FindFirstChildOfClass("Humanoid")
+        if hum then hp = hum.Health end
+        if hitTrack.part == t and hitTrack.hp and hp and hp < hitTrack.hp - 0.5 then
+            if os.clock() - hitTrack.last > 0.35 then
+                notify(("命中 %s  -%d HP"):format(par.Name, math.floor(hitTrack.hp - hp)), "ok", 1.2)
+                hitTrack.last = os.clock()
+            end
+        end
+        hitTrack.part, hitTrack.hp = t, hp
     end
 
     if cam.CameraType ~= Enum.CameraType.Custom then cam.CameraType = Enum.CameraType.Custom end
@@ -2132,6 +2148,7 @@ local function autoPrompts(radius)
     return n
 end
 
+local navTo   -- forward decl (defined later)
 local doorState = {}
 
 local function autoDoors(radius)
@@ -2168,6 +2185,12 @@ local function autoDoors(radius)
                     st.last = now
                     if re:IsA("RemoteEvent") then
                         pcall(function() re:FireServer() end)
+                        if S.autoAdvance and part then
+                            local target = part.Position
+                            task.delay(0.9, function()
+                                if S.autoAdvance and target then navTo(target) end
+                            end)
+                        end
                     elseif re:IsA("RemoteFunction") then
                         pcall(function() re:InvokeServer() end)
                     end
@@ -2225,6 +2248,7 @@ local function walkTo(pos, timeoutSec)
     end)
 end
 
+local isRealDoor   -- forward decl (defined later with the door layer)
 local function nearestDoorPos()
     local c = charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
@@ -2710,7 +2734,7 @@ nearestTrigger = function()
 end
 
 --==================== A* 网格寻路（类似 Baritone 的思路） ====================
-local NAV = { running = false, gen = 0, cell = 5, radius = 12 }
+local NAV = { running = false, gen = 0, cell = 3, radius = 16 }
 local navHud
 
 local function navLog(txt)
@@ -2813,7 +2837,7 @@ local function navFindPath(startPos, goalPos)
     return nil
 end
 
-local function navTo(pos)
+navTo = function(pos)
     if NAV.running then
         NAV.gen = NAV.gen + 1
         NAV.running = false
@@ -2880,7 +2904,7 @@ local leverStore = {}
 
 local DOOR_BAD = { "frame", "blocked", "fake", "start", "end", "hidden", "lock", "doorway" }
 
-local function isRealDoor(nm)
+isRealDoor = function(nm)
     if not (nm:find("door", 1, true) or nm:find("门", 1, true)) then return false end
     for _, k in ipairs(DOOR_BAD) do
         if nm:find(k, 1, true) then return false end
@@ -3427,6 +3451,10 @@ addSlider(pAuto, "交互半径", 5, 40, S.promptRadius, function(v) S.promptRadi
 addToggle(pAuto, "瞬间交互（去掉长按）", true, function(v) S.instantPrompt = v end)
 addToggle(pAuto, "自动开门（Door.ClientOpen）", false, function(v) S.autoDoor = v end)
 addSlider(pAuto, "开门半径", 5, 50, S.doorRadius, function(v) S.doorRadius = v end)
+addToggle(pAuto, "开门后自动走向该门（推进）", false, function(v)
+    S.autoAdvance = v
+    notify(v and "自动推进已开：开门 0.9 秒后自动 A* 走过去" or "自动推进已关闭", "info", 2.6)
+end)
 
 addSection(pAuto, "躲避")
 addToggle(pAuto, "遇到实体自动躲", false, function(v)
@@ -3518,6 +3546,36 @@ addButton(pGuard, "圣奥里安全预设（限速 + 关飞行 + 开①③）", f
     pcall(function() h = humOf(lp); if h then h.WalkSpeed = 16 end end)
     notify("圣奥里预设: 位移限速 12 studs/0.6s · 飞行关 · 走速 16", "ok", 4)
     notify("AC: 只建议开①③；②会掐车辆/起身；飞行会被 600 封禁", "warn", 4)
+end)
+addButton(pGuard, "标定该服位移上限（自动设限速器）", function()
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return notify("没有角色", "err", 2) end
+    notify("标定中：缓慢前移 6 秒，观察服务端是否拉回…", "info", 3)
+    S.govEnabled = false          -- 标定期间不限制，才能测到边界
+    local startPos = hrp.Position
+    local snaps = 0
+    local last = startPos
+    local t0 = os.clock()
+    local wasFly = S.fly
+    if not S.fly then setFly(true) end
+    S.flySpeed = 40
+    task.spawn(function()
+        while os.clock() - t0 < 6 do
+            task.wait(0.1)
+            if (hrp.Position - last).Magnitude < 0.05 then snaps = snaps + 1 end
+            last = hrp.Position
+        end
+        if wasFly == false then setFly(false) end
+        local moved = (hrp.Position - startPos).Magnitude
+        local speed = moved / 6
+        local allowed = snaps > 0 and math.max(8, math.floor(speed * 0.55)) or math.max(12, math.floor(speed * 0.8))
+        S.govMax = allowed
+        S.govWindow = 0.6
+        S.govEnabled = true
+        notify(("标定完成：6 秒位移 %.0f studs（%.1f/s），被拉回 %d 次 → 限速器设为 %d studs/0.6s")
+            :format(moved, speed, snaps, allowed), "ok", 6)
+    end)
 end)
 addToggle(pGuard, "位移限速器（0.6s 内最多走 12 studs）", false, function(v)
     S.govEnabled = v
