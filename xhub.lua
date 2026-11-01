@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v12.5"
-local BUILD   = "2026-11-02 14:30"
+local VERSION = "v12.6"
+local BUILD   = "2026-11-02 15:05"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = false, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = false, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -3196,7 +3196,72 @@ function M.measureSwing(model)
         end
     end)
 end
--- 重放"学习到的一次攻击"，把目标相关的参数换成当前光环目标
+-- 判断某个参数是不是"角色类实例"（Humanoid / 带 Humanoid 的 Model / 角色部件）
+local function isCharLike(v)
+    local ok, res = pcall(function()
+        if v:IsA("Humanoid") then return true end
+        if v:IsA("Model") then return v:FindFirstChildOfClass("Humanoid") ~= nil end
+        if v:IsA("BasePart") then
+            local anc = v.Parent
+            while anc and anc ~= workspace do
+                if anc:IsA("Model") and anc:FindFirstChildOfClass("Humanoid") then return true end
+                anc = anc.Parent
+            end
+        end
+        return false
+    end)
+    return ok and res
+end
+
+-- 重放"学习到的一次攻击"，把角色类参数换成当前光环目标（只换角色，不换武器）
+function M.replayLearned(model, part)
+    local list = S.learned
+    if not list or #list == 0 then
+        auraLog("还没有学到调用：先点「学习攻击」再手动砍一刀", Color3.fromRGB(255, 160, 120))
+        return 0
+    end
+    local hum = model and model:FindFirstChildOfClass("Humanoid")
+    local fired = 0
+    for _, rec in ipairs(list) do
+        if rec.remote and rec.remote.Parent then
+            local out = {}
+            for i = 1, rec.n do
+                local v = rec.args[i]
+                local tv = typeof(v)
+                if tv == "Instance" then
+                    if S.replaySwap and isCharLike(v) then
+                        if v:IsA("Humanoid") then out[i] = hum or v
+                        elseif v:IsA("Model") then out[i] = model or v
+                        else out[i] = part or v end
+                    else
+                        out[i] = v
+                    end
+                elseif tv == "CFrame" then
+                    out[i] = (S.replaySwap and part) and CFrame.new(part.Position) or v
+                elseif tv == "Vector3" then
+                    out[i] = (S.replaySwap and part) and part.Position or v
+                elseif tv == "number" then
+                    out[i] = v * (S.replayScale or 1)
+                else
+                    out[i] = v
+                end
+            end
+            local ok = pcall(function()
+                if rec.remote:IsA("RemoteEvent") or rec.remote:IsA("UnreliableRemoteEvent") then
+                    rec.remote:FireServer(table.unpack(out, 1, rec.n))
+                else
+                    rec.remote:InvokeServer(table.unpack(out, 1, rec.n))
+                end
+            end)
+            if ok then fired = fired + 1 end
+        end
+    end
+    if S.auraDebug or fired == 0 then
+        auraLog(("重放：%d/%d 个调用 → %s"):format(fired, #list, model and model.Name or "?"),
+            fired > 0 and Color3.fromRGB(150, 220, 150) or Color3.fromRGB(255, 150, 120))
+    end
+    return fired
+end
 --==== 学习记录持久化（跨服务器/重注入）====
 local LEARN_FILE = "xhub_learned.txt"
 
@@ -3269,47 +3334,6 @@ function M.loadLearned()
     end
     S.learned = out
     return #out
-end
-function M.replayLearned(model, part)
-    local list = S.learned
-    if not list or #list == 0 then
-        auraLog("还没有学到调用：先点「学习攻击」再手动砍一刀", Color3.fromRGB(255, 160, 120))
-        return
-    end
-    local hum = model and model:FindFirstChildOfClass("Humanoid")
-    local fired = 0
-    for _, rec in ipairs(list) do
-        if rec.remote and rec.remote.Parent then
-            local out = {}
-            for i = 1, rec.n do
-                local v = rec.args[i]
-                local tv = typeof(v)
-                if tv == "Instance" then
-                    if v:IsA("Humanoid") then out[i] = hum or v
-                    elseif v:IsA("BasePart") then out[i] = part or v
-                    elseif v:IsA("Model") then out[i] = model or v
-                    else out[i] = v end
-                elseif tv == "CFrame" then
-                    out[i] = part and CFrame.new(part.Position) or v
-                elseif tv == "Vector3" then
-                    out[i] = part and part.Position or v
-                elseif tv == "number" then
-                    out[i] = v * (S.replayScale or 1)
-                else
-                    out[i] = v
-                end
-            end
-            pcall(function()
-                if rec.remote:IsA("RemoteEvent") or rec.remote:IsA("UnreliableRemoteEvent") then
-                    rec.remote:FireServer(table.unpack(out, 1, rec.n))
-                else
-                    rec.remote:InvokeServer(table.unpack(out, 1, rec.n))
-                end
-            end)
-            fired = fired + 1
-        end
-    end
-    auraLog(("重放完成：%d 个调用 → %s"):format(fired, model and model.Name or "?"), Color3.fromRGB(150, 220, 150))
 end
 function M.tryKill(model, part)
     if not (model and model.Parent) then return false end
@@ -3678,15 +3702,19 @@ task.spawn(function()
                         if hh and tool.Parent ~= cc then hh:EquipTool(tool) end
                     end)
                     if S.useLearned and S.learned and #S.learned > 0 then
+                        local okCount = 0
                         if S.auraMulti then
                             for _, tgt in ipairs(targets) do
-                                if tgt.p and tgt.p.Parent then pcall(M.replayLearned, tgt.m, tgt.p) end
+                                if tgt.p and tgt.p.Parent then
+                                    okCount = okCount + (M.replayLearned(tgt.m, tgt.p) or 0)
+                                end
                             end
                         else
-                            pcall(M.replayLearned, m, p)
+                            okCount = M.replayLearned(m, p) or 0
                         end
+                        if okCount == 0 then pcall(function() tool:Activate() end) end
                     else
-                    pcall(function() tool:Activate() end)
+                        pcall(function() tool:Activate() end)
                     end
                     -- 工具内远程只打一次不带参调用（缓存，避免每帧遍历）
                     if not (S._toolCache and S._toolCacheTool == tool) then
@@ -4710,6 +4738,10 @@ M.addSlider(pCombat, "重放数值放大 x（对带伤害数字的远程有效�
 M.addButton(pCombat, "立即保存学习记录", function()
     local okS, cntS = pcall(M.saveLearned)
     notify(okS and ("已保存 " .. tostring(cntS) .. " 个调用") or "保存失败（执行器不支持写文件）", okS and "ok" or "err", 3)
+end)
+M.addToggle(pCombat, "重放时把目标参数换成当前目标", true, function(v)
+    S.replaySwap = v
+    notify(v and "重放会替换角色类参数（推荐）" or "重放使用原始参数（只打原目标）", "info", 3)
 end)
 M.addToggle(pCombat, "光环自动重放学到的攻击（开=不再空刀）", true, function(v)
     S.useLearned = v
