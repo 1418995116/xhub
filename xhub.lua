@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v14.1"
-local BUILD   = "2026-11-02 22:55"
+local VERSION = "v14.2"
+local BUILD   = "2026-11-02 23:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -989,7 +989,7 @@ function M.installRemoteAim()
         if not RUNNING then return old(self, ...) end
         local m = getnamecallmethod()
         local inWindow = os.clock() < fireUntil
-        if false and (m == "FireServer" or m == "InvokeServer") and S.learnActive then
+        if (m == "FireServer" or m == "InvokeServer") and S.learnActive then
             local nL = select("#", ...)
             local aL = { ... }
             local nmL = tostring(self.Name):lower()
@@ -1014,7 +1014,7 @@ function M.installRemoteAim()
                     local tx = ccx and ccx:FindFirstChildOfClass("Tool")
                     curT = tx and tx.Name or nil
                 end)
-                S.learnCall = { remote = self, args = aL, n = nL, name = tostring(self.Name), tool = curT }
+                S.learnCall = { remote = self, args = aL, n = nL, name = tostring(self.Name), tool = curT, raw = aL }
                 S.learnActive = false
                 S.learned = { S.learnCall }
                 pcall(M.saveLearned)
@@ -3832,6 +3832,17 @@ task.spawn(function()
                         end)
                     end
                     pcall(function() if tool then tool:Activate() end end)
+                    -- 关键：把学到的那次调用"原样"再发一遍（这是手动点重放能打中的原因）
+                    if S.learnCall and S.learnCall.remote and S.learnCall.remote.Parent then
+                        pcall(function()
+                            local rc = S.learnCall
+                            if rc.remote:IsA("RemoteEvent") or rc.remote:IsA("UnreliableRemoteEvent") then
+                                rc.remote:FireServer(table.unpack(rc.raw or rc.args, 1, rc.n))
+                            else
+                                rc.remote:InvokeServer(table.unpack(rc.raw or rc.args, 1, rc.n))
+                            end
+                        end)
+                    end
                     if os.clock() - (S._swingLog or 0) > 2 then
                         S._swingLog = os.clock()
                         pcall(function()
@@ -4819,6 +4830,18 @@ UIKEYS.setAuraKeyBtn = M.addButton(pCombat, "光环快捷键: " .. S.auraKey.Nam
     S.keyCapture = "aura"
     notify("按一个新键作为光环开关（Esc 取消）", "warn", 4)
 end)
+M.addButton(pCombat, "学习一次攻击（点我开始 → 手动砍一刀）", function()
+    S.learnActive = true
+    S.learnCall = nil
+    auraLog("学习已开：砍一刀就记录（只记第一条攻击调用）", Color3.fromRGB(150, 210, 255))
+    task.delay(15, function()
+        if S.learnActive then
+            S.learnActive = false
+            auraLog("学习超时：没抓到攻击调用", Color3.fromRGB(255, 160, 120))
+        end
+    end)
+end)
+
 M.addToggle(pCombat, "自动算武器攻击距离", true, function(v)
     S.autoReach = v
     notify(v and "已按手持武器自动计算攻击距离" or "使用固定半径", "info", 2.4)
