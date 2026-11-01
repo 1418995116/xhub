@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v9.7"
-local BUILD   = "2026-11-01 22:40"
+local VERSION = "v9.8"
+local BUILD   = "2026-11-01 23:05"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -80,7 +80,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRadius = 20, auraDmg = 20, auraInt = 0.15, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRadius = 20, auraDmg = 20, auraInt = 0.15, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -897,6 +897,7 @@ RS:BindToRenderStep("XHubAim", Enum.RenderPriority.Camera.Value + 1, aimTick)
 --==== 远程弹道改写（Remote Aim）：让静默/子弹追踪真正影响命中 ====
 local WEAPON_REMOTE_KW = { "fire", "shoot", "hit", "damage", "bullet", "gun",
                            "attack", "click", "swing", "melee", "slash", "cast" }
+local auraPart = nil            -- forward decl (kill aura target)
 local fireUntil = 0
 
 UIS.InputBegan:Connect(function(input, gp)
@@ -907,6 +908,10 @@ UIS.InputBegan:Connect(function(input, gp)
 end)
 
 function M.remoteAimPoint()
+    -- 杀戮光环：优先朝光环目标打
+    if S.killAura and auraPart and auraPart.Parent and S.remoteAim then
+        return auraPart.Position
+    end
     if not (S.silentAim or S.btStandalone or S.bulletTrack) then return nil end
     if not S.remoteAim then return nil end
     local ok, t = pcall(M.findTarget)
@@ -2833,45 +2838,58 @@ end)
 --==================== 躲避触发扫描（不依赖 ESP，独立按名字找） ====================
 --==== 杀戮光环（Kill Aura）====
 auraTarget = nil
+
+-- 独立扫描（不依赖 ESP 开关，NPC/玩家都能找到）
+local function auraFindTarget()
+    local c = M.charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    local bestM, bestP, bestD = nil, nil, math.huge
+    for _, m in ipairs(M.scanAll(4000)) do
+        if m:IsA("Model") and m ~= c then
+            local hum = m:FindFirstChildOfClass("Humanoid")
+            local root = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+            if hum and root and hum.Health > 0 then
+                local isP = Players:GetPlayerFromCharacter(m) ~= nil
+                local allowed = (isP and S.auraPlayer) or ((not isP) and S.auraNpc)
+                if allowed then
+                    local d = (root.Position - hrp.Position).Magnitude
+                    if d <= S.auraRadius and d < bestD then
+                        bestM, bestP, bestD = m, root, d
+                    end
+                end
+            end
+        end
+    end
+    return bestP, bestM, bestD
+end
+
 task.spawn(function()
     while RUNNING do
         task.wait(S.auraInt or 0.15)
         if S.killAura then
             pcall(function()
-                local c = M.charOf(lp)
-                local hrp = c and c:FindFirstChild("HumanoidRootPart")
-                if not hrp then return end
-                local bestP, bestM, bestD = nil, nil, math.huge
+                local p, m, d = auraFindTarget()
+                if not p then auraPart = nil auraTarget = nil return end
+                auraPart = p
+                auraTarget = ("%s  %.0fm"):format(m.Name, d)
 
-                if S.auraNpc then
-                    local p, m, d = M.findNpcTarget(S.auraRadius)
-                    if p and d and d < bestD then bestP, bestM, bestD = p, m, d end
-                end
+                -- ① 先把武器远程的改写窗口打开，把射击方向改成目标
+                if S.auraRemote then fireUntil = os.clock() + 0.3 end
 
-                if S.auraPlayer then
-                    for _, pl in ipairs(Players:GetPlayers()) do
-                        if pl ~= lp then
-                            local pc = pl.Character
-                            local ph = pc and pc:FindFirstChild("HumanoidRootPart")
-                            local phum = pc and pc:FindFirstChildOfClass("Humanoid")
-                            if ph and phum and phum.Health > 0 then
-                                local d = (ph.Position - hrp.Position).Magnitude
-                                if d <= S.auraRadius and d < bestD then
-                                    bestP, bestM, bestD = ph, pc, d
-                                end
-                            end
-                        end
-                    end
-                end
-
-                if not bestP then auraTarget = nil return end
-                local hum = bestM:FindFirstChildOfClass("Humanoid")
+                -- ② 本地直伤（仅对客户端拥有的 NPC 生效）
+                local hum = m:FindFirstChildOfClass("Humanoid")
                 if hum and (S.auraDmg or 0) > 0 then
                     pcall(function() hum:TakeDamage(S.auraDmg) end)
                 end
-                local tool = c:FindFirstChildOfClass("Tool")
-                if tool then pcall(function() tool:Activate() end) end
-                auraTarget = ("%s  %.0fm"):format(bestM.Name, bestD)
+
+                -- ③ 真正走游戏判定的攻击：激活手里工具
+                local c = M.charOf(lp)
+                local tool = c and c:FindFirstChildOfClass("Tool")
+                if tool then
+                    pcall(function() tool:Activate() end)
+                end
+
                 if not (auraHud and auraHud.Parent) then
                     auraHud = mk("TextLabel", { Name = "XHubAura", Size = UDim2.fromOffset(300, 22),
                         Position = UDim2.new(0.5, -150, 0, 62), BackgroundTransparency = 0.3,
@@ -2881,6 +2899,7 @@ task.spawn(function()
                 end
             end)
         else
+            auraPart = nil
             auraTarget = nil
         end
     end
@@ -3789,6 +3808,10 @@ M.addToggle(pCombat, "光环打玩家", false, function(v) S.auraPlayer = v end)
 M.addSlider(pCombat, "光环半径 studs", 5, 60, 20, function(v) S.auraRadius = v end)
 M.addSlider(pCombat, "光环每次伤害", 0, 100, 20, function(v) S.auraDmg = v end)
 M.addSlider(pCombat, "光环攻击间隔 ms", 50, 500, 150, function(v) S.auraInt = v / 1000 end)
+addToggle(pCombat, "光环把射击方向改到目标（远程改写）", true, function(v)
+    S.auraRemote = v
+    notify(v and "光环会同时改写武器远程方向（需要开「远程改写」）" or "光环只激活工具，不改写远程", "info", 3)
+end)
 
 M.addToggle(pCombat, "瞄准 NPC / 怪物", false, function(v)
     S.aimNpc = v
