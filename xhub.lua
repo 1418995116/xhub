@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v12.0"
-local BUILD   = "2026-11-02 11:35"
+local VERSION = "v12.1"
+local BUILD   = "2026-11-02 12:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = false, healthLock = false, lowHPFlee = false, fleePct = 0.35, selfHide = false, npcLocalHide = false, lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = false, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -2957,56 +2957,21 @@ local function hideAuraDraw()
     for _, ln in ipairs(auraDraw.lines) do pcall(function() ln.Visible = false end) end
 end
 
---==== 隐身 / 本机隐藏 NPC（只影响你自己的客户端）====
-local hiddenNpc = {}
-
+--==== NPC 碰撞（本地）====
+-- Roblox 的 NPC 是服务器拥有，碰撞判定在服务端；
+-- 但客户端把 NPC 部件的 CanCollide 关掉后，你的角色能直接穿过它们（本地物理）
 task.spawn(function()
     while RUNNING do
-        task.wait(0.4)
-        -- 隐身：把自己所有部件的本地透明度拉满
-        if S.selfHide then
-            local c = M.charOf(lp)
-            if c then
-                for _, d in ipairs(c:GetDescendants()) do
-                    if d:IsA("BasePart") then
-                        pcall(function() d.LocalTransparencyModifier = 1 end)
-                    elseif d:IsA("Decal") or d:IsA("Texture") then
-                        pcall(function() d.Transparency = 1 end)
-                    end
-                end
-            end
-        end
-        -- 本机隐藏 NPC（客户端可见性，不改变服务器 AI）
-        if S.npcLocalHide then
+        task.wait(0.5)
+        if S.npcNoCollide then
             for _, m in ipairs(M.scanTargets()) do
-                if not Players:GetPlayerFromCharacter(m) and not hiddenNpc[m] then
-                    hiddenNpc[m] = true
+                if not Players:GetPlayerFromCharacter(m) then
                     for _, d in ipairs(m:GetDescendants()) do
-                        if d:IsA("BasePart") then
-                            pcall(function()
-                                d.LocalTransparencyModifier = 1
-                                d.CanCollide = false
-                            end)
-                        elseif d:IsA("BillboardGui") or d:IsA("SurfaceGui") then
-                            pcall(function() d.Enabled = false end)
+                        if d:IsA("BasePart") and d.CanCollide then
+                            pcall(function() d.CanCollide = false end)
                         end
                     end
                 end
-            end
-        else
-            for m in pairs(hiddenNpc) do
-                if m.Parent then
-                    for _, d in ipairs(m:GetDescendants()) do
-                        if d:IsA("BasePart") then
-                            pcall(function()
-                                d.LocalTransparencyModifier = 0
-                            end)
-                        elseif d:IsA("BillboardGui") or d:IsA("SurfaceGui") then
-                            pcall(function() d.Enabled = true end)
-                        end
-                    end
-                end
-                hiddenNpc[m] = nil
             end
         end
     end
@@ -4758,19 +4723,15 @@ M.addToggle(pGuard, "锁血 / 无敌（客户端，每 0.1 秒回满）", false,
     notify(v and "锁血已开：客户端血量锁满（服务器判死仍可能生效）" or "锁血已关", v and "warn" or "info", 3.5)
 end)
 M.addSlider(pGuard, "锁血低于多少立刻拉满", 1, 100, 20, function(v) S.lockKeep = v end)
-M.addToggle(pGuard, "隐身（本机视角，角色全透明）", false, function(v)
-    S.selfHide = v
-    notify(v and "隐身已开（只影响你的客户端）" or "隐身已关", "info", 2.6)
-end)
-M.addToggle(pGuard, "本机隐藏 NPC（只是看不见，AI 仍运行）", false, function(v)
-    S.npcLocalHide = v
-    notify(v and "NPC 已在本机隐藏（服务器 AI 不受影响）" or "NPC 已恢复显示", "info", 3)
-end)
 M.addToggle(pGuard, "低血自动脱离（升空后退 + 穿墙）", false, function(v)
     S.lowHPFlee = v
     notify(v and "低血脱离已开：血量低于阈值会自动升空后退" or "低血脱离已关", "info", 3)
 end)
 M.addSlider(pGuard, "自动脱离触发血量 %", 5, 90, 35, function(v) S.fleePct = v / 100 end)
+M.addToggle(pGuard, "NPC 碰撞关闭（可穿过 NPC / 部分障碍）", false, function(v)
+    S.npcNoCollide = v
+    notify(v and "已关闭 NPC 碰撞：本地可穿过它们" or "NPC 碰撞已恢复", "info", 3)
+end)
 M.addToggle(pGuard, "位移限速器（0.6s 内最多走 12 studs）", false, function(v)
     S.govEnabled = v
     notify(v and "限速器开启：任何速度类功能都会被压在服务端容忍内" or "限速器已关闭（飞行/加速不再被限制）",
