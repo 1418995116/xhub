@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v10.3"
-local BUILD   = "2026-11-02 01:40"
+local VERSION = "v10.4"
+local BUILD   = "2026-11-02 02:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -2843,37 +2843,116 @@ end)
 auraTarget = nil
 
 -- 独立扫描（不依赖 ESP 开关，NPC/玩家都能找到）
--- 光环半径可视：白色半透明圆盘，跟着角色
-local auraRing
+--==== 光环范围：白色圆环（纯描边，用 Drawing 画 48 段折线）====
+local auraDraw = { lines = {}, ok = false }
+local function ensureAuraDraw()
+    if auraDraw.ok then return true end
+    if not Drawing then
+        if not S.auraNoDrawing then
+            S.auraNoDrawing = true
+            pcall(function() print("[aura] 本执行器没有 Drawing，范围圈不可用") end)
+        end
+        return false
+    end
+    for i = 1, 48 do
+        local ln = Drawing.new("Line")
+        ln.Thickness = 2
+        ln.Color = Color3.fromRGB(255, 255, 255)
+        ln.Transparency = 0.9
+        ln.Visible = false
+        auraDraw.lines[i] = ln
+    end
+    auraDraw.ok = true
+    return true
+end
+local function hideAuraDraw()
+    for _, ln in ipairs(auraDraw.lines) do pcall(function() ln.Visible = false end) end
+end
+
+--==== 光环日志面板（右侧，关闭即停光环）====
+local auraPanel, auraLogFrame, auraLogRows = nil, nil, {}
+
+local function ensureAuraPanel()
+    if auraPanel and auraPanel.Parent then return auraPanel end
+    auraPanel = mk("Frame", { Name = "XHubAuraPanel", Size = UDim2.fromOffset(330, 240),
+        Position = UDim2.new(1, -346, 0, 120), BackgroundColor3 = Color3.fromRGB(14, 16, 22),
+        BorderSizePixel = 0, ZIndex = 30 }, gui)
+    mk("UICorner", { CornerRadius = UDim.new(0, 8) }, auraPanel)
+    mk("UIStroke", { Color = Color3.fromRGB(120, 40, 40), Thickness = 1 }, auraPanel)
+
+    local head = mk("Frame", { Size = UDim2.new(1, 0, 0, 28), BackgroundColor3 = Color3.fromRGB(28, 16, 16),
+        BorderSizePixel = 0, ZIndex = 31 }, auraPanel)
+    mk("TextLabel", { Text = "杀戮光环", BackgroundTransparency = 1, Position = UDim2.new(0, 10, 0, 0),
+        Size = UDim2.new(1, -60, 1, 0), TextXAlignment = Enum.TextXAlignment.Left,
+        Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Color3.fromRGB(255, 170, 170), ZIndex = 32 }, head)
+    local closeBtn = mk("TextButton", { Text = "×", BackgroundTransparency = 1, Position = UDim2.new(1, -28, 0, 0),
+        Size = UDim2.fromOffset(28, 28), Font = Enum.Font.GothamBold, TextSize = 16,
+        TextColor3 = Color3.fromRGB(255, 120, 120), ZIndex = 32 }, head)
+    closeBtn.MouseButton1Click:Connect(function()
+        S.killAura = false
+        auraPanel.Visible = false
+        hideAuraDraw()
+        notify("杀戮光环已关闭（日志窗口）", "info", 2)
+    end)
+
+    auraLogFrame = mk("ScrollingFrame", { Size = UDim2.new(1, -12, 1, -38), Position = UDim2.new(0, 6, 0, 32),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+        CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 31 }, auraPanel)
+    mk("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, auraLogFrame)
+    mk("UIPadding", { PaddingLeft = UDim.new(0, 4), PaddingTop = UDim.new(0, 2) }, auraLogFrame)
+
+    return auraPanel
+end
+
+local auraLogOrder = 0
+local function auraLog(text, color)
+    local panel = ensureAuraPanel()
+    panel.Visible = true
+    auraLogOrder = auraLogOrder + 1
+    local row = mk("TextLabel", { Text = os.date("%H:%M:%S ") .. text, BackgroundTransparency = 1,
+        Size = UDim2.new(1, -6, 0, 16), TextXAlignment = Enum.TextXAlignment.Left,
+        Font = Enum.Font.Code, TextSize = 11,
+        TextColor3 = color or Color3.fromRGB(210, 210, 220), LayoutOrder = auraLogOrder, ZIndex = 32 }, auraLogFrame)
+    table.insert(auraLogRows, row)
+    if #auraLogRows > 40 then
+        local old = table.remove(auraLogRows, 1)
+        if old then old:Destroy() end
+    end
+end
+
 task.spawn(function()
     while RUNNING do
         local dt = task.wait()
         if S.killAura and (S.auraRing ~= false) then
-            local c = M.charOf(lp)
-            local hrp = c and c:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                if not (auraRing and auraRing.Parent) then
-                    auraRing = Instance.new("Part")
-                    auraRing.Name = "XHubAuraRing"
-                    auraRing.Shape = Enum.PartType.Cylinder
-                    auraRing.Anchored = true
-                    auraRing.CanCollide = false
-                    auraRing.CanQuery = false
-                    auraRing.CanTouch = false
-                    auraRing.Material = Enum.Material.SmoothPlastic
-                    auraRing.Color = Color3.fromRGB(255, 255, 255)
-                    auraRing.Transparency = 0.82
-                    auraRing.TopSurface = Enum.SurfaceType.Smooth
-                    auraRing.BottomSurface = Enum.SurfaceType.Smooth
-                    auraRing.Parent = workspace
+            if ensureAuraDraw() then
+                local c = M.charOf(lp)
+                local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local r = S.auraRadius or 20
+                    local center = hrp.Position - Vector3.new(0, 2.6, 0)
+                    local n = 48
+                    for i = 1, n do
+                        local a1 = (i - 1) / n * math.pi * 2
+                        local a2 = i / n * math.pi * 2
+                        local p1 = center + Vector3.new(math.cos(a1) * r, 0, math.sin(a1) * r)
+                        local p2 = center + Vector3.new(math.cos(a2) * r, 0, math.sin(a2) * r)
+                        local s1, on1 = cam:WorldToViewportPoint(p1)
+                        local s2, on2 = cam:WorldToViewportPoint(p2)
+                        local ln = auraDraw.lines[i]
+                        if on1 and on2 and s1.Z > 0 and s2.Z > 0 then
+                            ln.From = Vector2.new(s1.X, s1.Y)
+                            ln.To = Vector2.new(s2.X, s2.Y)
+                            ln.Visible = true
+                        else
+                            ln.Visible = false
+                        end
+                    end
+                else
+                    hideAuraDraw()
                 end
-                local r = S.auraRadius or 20
-                auraRing.Size = Vector3.new(0.2, r * 2, r * 2)
-                auraRing.CFrame = CFrame.new(hrp.Position - Vector3.new(0, 2.6, 0)) * CFrame.Angles(0, 0, math.rad(90))
             end
-        elseif auraRing and auraRing.Parent then
-            auraRing:Destroy()
-            auraRing = nil
+        else
+            hideAuraDraw()
         end
     end
 end)
@@ -2907,8 +2986,20 @@ task.spawn(function()
         if S.killAura then
             pcall(function()
                 local p, m, d = auraFindTarget()
-                if not p then auraPart = nil auraTarget = nil return end
+                if not p then
+                    auraPart = nil
+                    auraTarget = nil
+                    if os.clock() - (S.auraLogT or 0) > 4 then
+                        S.auraLogT = os.clock()
+                        auraLog(("半径 %d 内无目标"):format(S.auraRadius or 20), Color3.fromRGB(150, 150, 160))
+                    end
+                    return
+                end
                 auraPart = p
+                if S.auraLastTarget ~= m then
+                    S.auraLastTarget = m
+                    auraLog(("锁定 %s  %.0f m"):format(m.Name, d), Color3.fromRGB(255, 190, 120))
+                end
                 auraTarget = ("%s  %.0fm"):format(m.Name, d)
 
                 -- ① 先把武器远程的改写窗口打开，把射击方向改成目标
@@ -2917,6 +3008,10 @@ task.spawn(function()
                 -- ③ 真正走游戏判定的攻击：激活手里工具
                 local c = M.charOf(lp)
                 local tool = c and c:FindFirstChildOfClass("Tool")
+                if not tool and os.clock() - (S.auraNoTool or 0) > 5 then
+                    S.auraNoTool = os.clock()
+                    auraLog("没有手持工具 → 光环无法造成伤害", Color3.fromRGB(255, 120, 120))
+                end
                 if tool then
                     pcall(function() tool:Activate() end)
                     -- 直接打手持物品自带的远程（不同游戏参数不同，全部试一遍）
@@ -2930,6 +3025,10 @@ task.spawn(function()
                             pcall(function() d:InvokeServer(p) end)
                         end
                     end
+                end
+                if S.auraLastTarget and os.clock() - (S.auraFireLog or 0) > 2 then
+                    S.auraFireLog = os.clock()
+                    auraLog(("开火: %s"):format(tool and tool.Name or "无工具"), Color3.fromRGB(190, 230, 190))
                 end
                 if S.auraDebug then
                     print(("[aura] target=%s d=%.0f tool=%s remoteAim=%s")
@@ -3868,6 +3967,14 @@ M.addSlider(pCombat, "NPC 自瞄距离", 20, 400, 200, function(v) S.npcAimDist 
 M.addSection(pCombat, "杀戮光环（Kill Aura）")
 M.addToggle(pCombat, "开启杀戮光环", false, function(v)
     S.killAura = v
+    if v then
+        pcall(ensureAuraPanel)
+        if auraPanel then auraPanel.Visible = true end
+        auraLog("光环启动 · 半径 " .. tostring(S.auraRadius), Color3.fromRGB(255, 170, 170))
+    else
+        if auraPanel then auraPanel.Visible = false end
+        hideAuraDraw()
+    end
     notify(v and ("杀戮光环已开：半径 " .. tostring(S.auraRadius) .. " studs") or "杀戮光环已关", "info", 2.2)
 end)
 M.addToggle(pCombat, "光环打 NPC / 怪物", true, function(v) S.auraNpc = v end)
