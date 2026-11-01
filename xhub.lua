@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v11.1"
-local BUILD   = "2026-11-02 06:20"
+local VERSION = "v11.2"
+local BUILD   = "2026-11-02 06:55"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.12, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.12, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -2987,7 +2987,7 @@ function M.tryKill(model, part)
     local hum = model:FindFirstChildOfClass("Humanoid")
     if not hum then return false end
     local hp0 = hum.Health
-    local big = S.killDamage or 1e6
+    local big = math.floor((S.killDamage or 1000000) * (S.dmgMult or 1))
 
     -- ① 客户端直伤（仅客户端拥有的 NPC 有效）
     pcall(function() hum:TakeDamage(big) end)
@@ -3249,7 +3249,10 @@ task.spawn(function()
                         S._toolCache, S._toolCacheTool = list, tool
                     end
                     local hitList = S.auraMulti and targets or { { m = m, p = p, d = d } }
-                    for _, tgt in ipairs(hitList) do
+                    local dmg = math.floor((S.baseDamage or 20) * (S.dmgMult or 1))
+                    local reps = math.max(1, S.dmgRepeat or 1)
+                    for _rep = 1, reps do
+                      for _, tgt in ipairs(hitList) do
                         if tgt.p and tgt.p.Parent then
                             for _, dd in ipairs(S._toolCache or {}) do
                                 if dd:IsA("RemoteEvent") then
@@ -3257,11 +3260,15 @@ task.spawn(function()
                                     pcall(function() dd:FireServer(tgt.m) end)
                                     pcall(function() dd:FireServer(tgt.p) end)
                                     pcall(function() dd:FireServer(tgt.p.Position) end)
+                                    pcall(function() dd:FireServer(tgt.p, dmg) end)
+                                    pcall(function() dd:FireServer(tgt.m, dmg) end)
+                                    pcall(function() dd:FireServer(tgt.p.Position, dmg) end)
                                 else
-                                    pcall(function() dd:InvokeServer(tgt.m) end)
+                                    pcall(function() dd:InvokeServer(tgt.m, dmg) end)
                                 end
                             end
                         end
+                      end
                     end
                     if S.auraMulti then auraLog(("一刀多砍: %d 个目标"):format(#hitList), Color3.fromRGB(255, 220, 140)) end
                 end
@@ -4231,6 +4238,9 @@ M.addToggle(pCombat, "一刀多砍（同一次挥手打多个目标）", true, f
     notify(v and "一刀多砍已开：每次挥手打范围内全部目标" or "一刀多砍已关：只打最近的一个", "info", 2.6)
 end)
 M.addSlider(pCombat, "多砍目标数", 1, 15, 5, function(v) S.auraMax = v end)
+M.addSlider(pCombat, "伤害倍率 x", 1, 20, 2, function(v) S.dmgMult = v end)
+M.addSlider(pCombat, "连击次数（同一目标重复发）", 1, 5, 2, function(v) S.dmgRepeat = v end)
+M.addSlider(pCombat, "武器基础伤害（用于倍率）", 1, 200, 20, function(v) S.baseDamage = v end)
 M.addSlider(pCombat, "挥手间隔 ms（越小越快）", 50, 800, 120, function(v) S.auraFireInt = v / 1000 end)
 UIKEYS.setAuraKeyBtn = M.addButton(pCombat, "光环快捷键: " .. S.auraKey.Name .. "（点我改键）", function()
     S.keyCapture = "aura"
