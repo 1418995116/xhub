@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v13.5"
-local BUILD   = "2026-11-02 20:15"
+local VERSION = "v13.6"
+local BUILD   = "2026-11-02 20:50"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -1008,7 +1008,13 @@ function M.installRemoteAim()
                 end
             end
             if atk then
-                S.learnCall = { remote = self, args = aL, n = nL, name = tostring(self.Name) }
+                local curT = nil
+                pcall(function()
+                    local ccx = M.charOf(lp)
+                    local tx = ccx and ccx:FindFirstChildOfClass("Tool")
+                    curT = tx and tx.Name or nil
+                end)
+                S.learnCall = { remote = self, args = aL, n = nL, name = tostring(self.Name), tool = curT }
                 S.learnActive = false
                 S.learned = { S.learnCall }
                 pcall(M.saveLearned)
@@ -3270,8 +3276,13 @@ function M.replayLearned(model, part)
                         if v:IsA("Humanoid") then out[i] = hum or v
                         elseif v:IsA("Model") then out[i] = model or v
                         else out[i] = part or v end
-                    else
-                        out[i] = v
+                    elseif S.replaySwap and (v:IsA("Tool") or v:FindFirstAncestorOfClass("Tool")) then
+                        local cc2 = M.charOf(lp)
+                        local curTool = cc2 and cc2:FindFirstChildOfClass("Tool")
+                        if curTool then
+                            if v:IsA("Tool") then out[i] = curTool
+                            else out[i] = curTool:FindFirstChild("Handle") or curTool:FindFirstChildWhichIsA("BasePart") or curTool end
+                        else out[i] = v end
                     end
                 elseif tv == "CFrame" then
                     out[i] = (S.replaySwap and part) and CFrame.new(part.Position) or v
@@ -3739,6 +3750,18 @@ task.spawn(function()
                         local hh = cc and cc:FindFirstChildOfClass("Humanoid")
                         if hh and tool and tool.Parent ~= cc then hh:EquipTool(tool) end
                     end)
+                    local toolChanged = false
+                    if S.learnCall and S.learnCall.tool and tool and S.learnCall.tool ~= tool.Name then
+                        toolChanged = true
+                    end
+                    if toolChanged then
+                        S.learnActive = true
+                        if os.clock() - (S._toolWarn or 0) > 3 then
+                            S._toolWarn = os.clock()
+                            auraLog(("换了武器（%s → %s）：请砍一刀重新学习"):format(tostring(S.learnCall.tool), tool.Name), Color3.fromRGB(255, 220, 120))
+                        end
+                        S.learnCall = nil
+                    end
                     if S.learnCall and S.learnCall.remote and S.learnCall.remote.Parent then
                         -- 已学会：只重放这一条真实攻击
                         pcall(function() if tool then tool:Activate() end end)
