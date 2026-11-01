@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v12.1"
-local BUILD   = "2026-11-02 12:10"
+local VERSION = "v12.2"
+local BUILD   = "2026-11-02 12:45"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = false, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = false, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, npcHitbox = false, hitboxMult = 1.6,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -2957,6 +2957,52 @@ local function hideAuraDraw()
     for _, ln in ipairs(auraDraw.lines) do pcall(function() ln.Visible = false end) end
 end
 
+--==== NPC 碰撞箱放大（本地探针）====
+-- 说明：给每个 NPC 套一个放大的不可见部件，只有"客户端射线/鼠标目标"类判定会用到它，
+-- 服务器自己的命中判定仍按原尺寸（这点无法从客户端改变）。
+local hitProbes = {}
+
+task.spawn(function()
+    while RUNNING do
+        task.wait(0.6)
+        if S.npcHitbox then
+            local mult = S.hitboxMult or 1.6
+            for _, m in ipairs(M.scanTargets()) do
+                if not Players:GetPlayerFromCharacter(m) then
+                    local root = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+                    if root then
+                        local probe = hitProbes[m]
+                        if not (probe and probe.Parent) then
+                            probe = Instance.new("Part")
+                            probe.Name = "XHubHitProbe"
+                            probe.Shape = Enum.PartType.Ball
+                            probe.Transparency = 1
+                            probe.CanCollide = false
+                            probe.CanQuery = true
+                            probe.CanTouch = true
+                            probe.Massless = true
+                            probe.Anchored = false
+                            probe.Parent = m
+                            local weld = Instance.new("WeldConstraint")
+                            weld.Part0 = probe
+                            weld.Part1 = root
+                            weld.Parent = probe
+                            hitProbes[m] = probe
+                        end
+                        local sz = root.Size
+                        probe.Size = Vector3.new(sz.X * mult, sz.Y * mult * 1.6, sz.Z * mult)
+                        probe.CFrame = root.CFrame
+                    end
+                end
+            end
+        else
+            for m, p in pairs(hitProbes) do
+                if p then pcall(function() p:Destroy() end) end
+                hitProbes[m] = nil
+            end
+        end
+    end
+end)
 --==== NPC 碰撞（本地）====
 -- Roblox 的 NPC 是服务器拥有，碰撞判定在服务端；
 -- 但客户端把 NPC 部件的 CanCollide 关掉后，你的角色能直接穿过它们（本地物理）
@@ -4728,6 +4774,11 @@ M.addToggle(pGuard, "低血自动脱离（升空后退 + 穿墙）", false, func
     notify(v and "低血脱离已开：血量低于阈值会自动升空后退" or "低血脱离已关", "info", 3)
 end)
 M.addSlider(pGuard, "自动脱离触发血量 %", 5, 90, 35, function(v) S.fleePct = v / 100 end)
+M.addToggle(pGuard, "NPC 碰撞箱放大（本地探针，方便命中）", false, function(v)
+    S.npcHitbox = v
+    notify(v and "碰撞箱已放大：客户端射线/鼠标判定更容易命中" or "碰撞箱已恢复", "info", 3.2)
+end)
+M.addSlider(pGuard, "碰撞箱放大倍数", 1, 4, 2, function(v) S.hitboxMult = v end)
 M.addToggle(pGuard, "NPC 碰撞关闭（可穿过 NPC / 部分障碍）", false, function(v)
     S.npcNoCollide = v
     notify(v and "已关闭 NPC 碰撞：本地可穿过它们" or "NPC 碰撞已恢复", "info", 3)
