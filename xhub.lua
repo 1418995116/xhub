@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v12.6"
-local BUILD   = "2026-11-02 15:05"
+local VERSION = "v12.7"
+local BUILD   = "2026-11-02 15:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = false, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = false, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = false, replaySwap = true, replayScale = 1, replayFilter = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -3222,8 +3222,16 @@ function M.replayLearned(model, part)
     end
     local hum = model and model:FindFirstChildOfClass("Humanoid")
     local fired = 0
+    local ATK_KW = { "fire", "shoot", "hit", "damage", "attack", "slash", "swing", "melee", "punch", "knock", "grab", "kill", "hurt", "stab", "strike" }
+    local function isAttackCall(rec)
+        if not S.replayFilter then return true end
+        local nm = tostring(rec.remote.Name):lower()
+        for _, k in ipairs(ATK_KW) do if nm:find(k, 1, true) then return true end end
+        for i = 1, rec.n do if isCharLike(rec.args[i]) then return true end end
+        return false
+    end
     for _, rec in ipairs(list) do
-        if rec.remote and rec.remote.Parent then
+        if rec.remote and rec.remote.Parent and isAttackCall(rec) then
             local out = {}
             for i = 1, rec.n do
                 local v = rec.args[i]
@@ -4738,6 +4746,10 @@ M.addSlider(pCombat, "重放数值放大 x（对带伤害数字的远程有效�
 M.addButton(pCombat, "立即保存学习记录", function()
     local okS, cntS = pcall(M.saveLearned)
     notify(okS and ("已保存 " .. tostring(cntS) .. " 个调用") or "保存失败（执行器不支持写文件）", okS and "ok" or "err", 3)
+end)
+M.addToggle(pCombat, "只重放攻击类调用（防误发装备/背包请求）", true, function(v)
+    S.replayFilter = v
+    notify(v and "只重放名字像攻击、或带角色参数的调用" or "重放全部学到的调用（可能误触装备逻辑）", "info", 3.2)
 end)
 M.addToggle(pCombat, "重放时把目标参数换成当前目标", true, function(v)
     S.replaySwap = v
