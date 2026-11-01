@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v14.0"
-local BUILD   = "2026-11-02 22:20"
+local VERSION = "v14.1"
+local BUILD   = "2026-11-02 22:55"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -3822,7 +3822,22 @@ task.spawn(function()
                         local hh = cc and cc:FindFirstChildOfClass("Humanoid")
                         if hh and tool and tool.Parent ~= cc then hh:EquipTool(tool) end
                     end)
+                    if not tool then
+                        pcall(function()
+                            local cc3 = M.charOf(lp)
+                            local bp = lp:FindFirstChild("Backpack")
+                            local t3 = bp and bp:FindFirstChildOfClass("Tool")
+                            local h3 = cc3 and cc3:FindFirstChildOfClass("Humanoid")
+                            if t3 and h3 then h3:EquipTool(t3) end
+                        end)
+                    end
                     pcall(function() if tool then tool:Activate() end end)
+                    if os.clock() - (S._swingLog or 0) > 2 then
+                        S._swingLog = os.clock()
+                        pcall(function()
+                            auraLog(("挥砍: %s  目标 %.1f m  距离上限 %.1f"):format(tool and tool.Name or "空手", d or -1, S.auraRadius or 0), Color3.fromRGB(190, 230, 190))
+                        end)
+                    end
                     -- 工具内远程只打一次不带参调用（缓存，避免每帧遍历）
                     if tool and not (S._toolCache and S._toolCacheTool == tool) then
                         local list = {}
@@ -5317,12 +5332,13 @@ end
 _G.XHubKill = function() RUNNING = false end
 _G.XHub = { version = VERSION, build = BUILD, shutdown = shutdownXHub, running = function() return RUNNING end }
 
--- 自动载入上次学习到的攻击调用
+-- 学习功能已移除：清空历史存档，避免旧数据干扰
 task.delay(1.0, function()
-    local okL, cntL = pcall(M.loadLearned)
-    if okL and cntL and cntL > 0 then
-        pcall(function() auraLog(("已载入历史学习记录 %d 个调用"):format(cntL), Color3.fromRGB(150, 210, 255)) end)
-    end
+    pcall(function()
+        if type(writefile) == "function" then writefile("xhub_learned.txt", "") end
+    end)
+    S.learnCall = nil
+    S.learned = nil
 end)
 if S.noclip then
     task.delay(0.6, function() pcall(function() M.setNoclip(true) end) end)
