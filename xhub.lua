@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v11.8"
-local BUILD   = "2026-11-02 10:25"
+local VERSION = "v11.9"
+local BUILD   = "2026-11-02 11:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = false, healthLock = false, lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = false, healthLock = false, lowHPFlee = false, fleePct = 0.35, lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -2957,6 +2957,39 @@ local function hideAuraDraw()
     for _, ln in ipairs(auraDraw.lines) do pcall(function() ln.Visible = false end) end
 end
 
+--==== 低血自动脱离（真实可行的"保命"手段）====
+task.spawn(function()
+    while RUNNING do
+        task.wait(0.15)
+        if S.lowHPFlee then
+            local c = M.charOf(lp)
+            local hum = c and c:FindFirstChildOfClass("Humanoid")
+            local hrp = c and c:FindFirstChild("HumanoidRootPart")
+            if hum and hrp and hum.Health > 0 then
+                local pct = hum.Health / math.max(1, hum.MaxHealth)
+                if pct <= (S.fleePct or 0.35) and os.clock() - (S._lastFlee or 0) > 2 then
+                    S._lastFlee = os.clock()
+                    pcall(function() M.setNoclip(true) end)
+                    pcall(function()
+                        hrp.CFrame = hrp.CFrame * CFrame.new(0, 35, -25)
+                        hrp.AssemblyLinearVelocity = Vector3.zero
+                    end)
+                    pcall(function()
+                        auraLog(("血量 %.0f%% → 自动脱离（升空后退）"):format(pct * 100), Color3.fromRGB(255, 190, 120))
+                    end)
+                    task.delay(2.5, function()
+                        if S.healthLock then return end
+                        local c2 = M.charOf(lp)
+                        local h2 = c2 and c2:FindFirstChildOfClass("Humanoid")
+                        if h2 and h2.Health / math.max(1, h2.MaxHealth) > 0.5 then
+                            pcall(function() M.setNoclip(false) end)
+                        end
+                    end)
+                end
+            end
+        end
+    end
+end)
 --==== 锁血 / 无敌（客户端侧）====
 task.spawn(function()
     while RUNNING do
@@ -4671,6 +4704,11 @@ M.addToggle(pGuard, "锁血 / 无敌（客户端，每 0.1 秒回满）", false,
     notify(v and "锁血已开：客户端血量锁满（服务器判死仍可能生效）" or "锁血已关", v and "warn" or "info", 3.5)
 end)
 M.addSlider(pGuard, "锁血低于多少立刻拉满", 1, 100, 20, function(v) S.lockKeep = v end)
+M.addToggle(pGuard, "低血自动脱离（升空后退 + 穿墙）", false, function(v)
+    S.lowHPFlee = v
+    notify(v and "低血脱离已开：血量低于阈值会自动升空后退" or "低血脱离已关", "info", 3)
+end)
+M.addSlider(pGuard, "自动脱离触发血量 %", 5, 90, 35, function(v) S.fleePct = v / 100 end)
 M.addToggle(pGuard, "位移限速器（0.6s 内最多走 12 studs）", false, function(v)
     S.govEnabled = v
     notify(v and "限速器开启：任何速度类功能都会被压在服务端容忍内" or "限速器已关闭（飞行/加速不再被限制）",
