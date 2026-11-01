@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v11.6"
-local BUILD   = "2026-11-02 09:15"
+local VERSION = "v11.7"
+local BUILD   = "2026-11-02 09:50"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.12, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 8, auraRanged = false, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.12, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = false, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -2982,43 +2982,69 @@ local function collectDamageRemotes()
     return list
 end
 
--- 实测武器伤害：挥砍前后轮询血量（1 秒窗口），并给出明确诊断
+-- 伤害/击杀统计：血量掉血 + 死亡事件 + 刀数计量
+local dmgTrack = {}
+
 function M.measureSwing(model)
-    local hum = model and model:FindFirstChildOfClass("Humanoid")
-    if not hum then
-        auraLog("测量失败：目标没有 Humanoid", Color3.fromRGB(255, 150, 120))
-        return
+    if not model or not model.Parent then return end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    local rec = dmgTrack[model]
+    if not rec then
+        rec = { n = 0, t0 = os.clock(), hp0 = hum and hum.Health or 0, hpDrop = 0 }
+        dmgTrack[model] = rec
+        if hum then
+            pcall(function()
+                hum.Died:Connect(function()
+                    local dt = os.clock() - rec.t0
+                    if rec.hpDrop > 0 then
+                        auraLog(("击杀 %s：%d 刀 / %.1f 秒 · 累计掉血 %d HP"):format(model.Name, rec.n, dt, math.floor(rec.hpDrop)),
+                            Color3.fromRGB(140, 255, 160))
+                        S.measuredDmg = math.floor(rec.hpDrop / math.max(1, rec.n))
+                        if S.measureDmg then
+                            S.measureDmg = false
+                            S.baseDamage = S.measuredDmg
+                            pcall(function() if UIKEYS and UIKEYS.measureBtn then UIKEYS.measureBtn(("武器伤害: %d（实测）"):format(S.measuredDmg)) end end)
+                        end
+                    else
+                        auraLog(("击杀 %s：%d 刀 / %.1f 秒 · 血量不可见（该游戏不暴露 Humanoid 血量）"):format(model.Name, rec.n, dt),
+                            Color3.fromRGB(255, 200, 120))
+                        if S.measureDmg then
+                            S.measureDmg = false
+                            pcall(function() if UIKEYS and UIKEYS.measureBtn then UIKEYS.measureBtn(("武器伤害: 不可测（%d 刀击杀）"):format(rec.n)) end end)
+                        end
+                    end
+                    dmgTrack[model] = nil
+                end)
+            end)
+        end
     end
-    local hp0 = hum.Health
-    S._swingModel, S._swingHP0 = model, hp0
+    rec.n = rec.n + 1
+    if hum then rec.hp0 = rec.hp0 or hum.Health end
+
     task.spawn(function()
-        local minHp = hp0
-        for _ = 1, 10 do
+        local minHp = hum and hum.Health or rec.hp0
+        for _ = 1, 8 do
             task.wait(0.1)
-            if not hum.Parent then break end
+            if not (hum and hum.Parent) then break end
             if hum.Health < minHp then minHp = hum.Health end
         end
-        local drop = hp0 - minHp
+        local drop = (rec.hp0 or minHp) - minHp
         if drop > 0.5 then
+            rec.hpDrop = (rec.hpDrop or 0) + drop
             S.measuredDmg = math.floor(drop)
+            auraLog(("本次命中 -%d HP（累计 %d）"):format(math.floor(drop), math.floor(rec.hpDrop)), Color3.fromRGB(170, 220, 170))
             if S.measureDmg then
-                S.baseDamage = S.measuredDmg
                 S.measureDmg = false
+                S.baseDamage = S.measuredDmg
                 auraLog(("实测武器伤害 = %d（已写入基础伤害）"):format(S.measuredDmg), Color3.fromRGB(140, 255, 160))
                 pcall(function() if UIKEYS and UIKEYS.measureBtn then UIKEYS.measureBtn(("武器伤害: %d（实测）"):format(S.measuredDmg)) end end)
-            else
-                auraLog(("本次命中 -%d HP"):format(math.floor(drop)), Color3.fromRGB(170, 220, 170))
             end
-            if (S.dmgMult or 1) > 1 and S.measuredDmg == (S._lastSameDmg or -1) and not S._multIgnored then
-                S._multIgnored = true
-                auraLog("倍率无效：服务器按自己的数值结算伤害", Color3.fromRGB(255, 170, 120))
-            end
-            S._lastSameDmg = S.measuredDmg
+            rec.hp0 = minHp
         else
-            if S.measureDmg and os.clock() - (S._measNoHit or 0) > 2 then
+            if S.measureDmg and rec.n >= 3 and os.clock() - (S._measNoHit or 0) > 3 then
                 S._measNoHit = os.clock()
-                auraLog(("未检测到掉血（HP %.0f 未变）→ 该目标可能不可伤害，或伤害不走 Humanoid"):format(hp0),
-                    Color3.fromRGB(255, 140, 140))
+                auraLog(("已挥 %d 刀但血量不变 → 该游戏可能不暴露血量，继续砍到死会给出刀数"):format(rec.n),
+                    Color3.fromRGB(255, 170, 120))
             end
         end
     end)
@@ -4396,7 +4422,7 @@ UIKEYS.setAuraKeyBtn = M.addButton(pCombat, "光环快捷键: " .. S.auraKey.Nam
     notify("按一个新键作为光环开关（Esc 取消）", "warn", 4)
 end)
 M.addSlider(pCombat, "光环半径 studs", 5, 60, 20, function(v) S.auraRadius = v end)
-M.addSlider(pCombat, "近战有效距离 studs（超出不挥）", 2, 20, 8, function(v) S.meleeRange = v end)
+M.addSlider(pCombat, "近战有效距离 studs（超出不挥）", 2, 30, 12, function(v) S.meleeRange = v end)
 M.addToggle(pCombat, "远程武器模式（不限近战距离）", false, function(v)
     S.auraRanged = v
     notify(v and "远程模式：任意距离都会开火" or "近战模式：只在有效距离内挥砍", "info", 2.4)
