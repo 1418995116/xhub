@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v11.4"
-local BUILD   = "2026-11-02 08:05"
+local VERSION = "v11.5"
+local BUILD   = "2026-11-02 08:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -2982,35 +2982,43 @@ local function collectDamageRemotes()
     return list
 end
 
--- 实测武器伤害：一次挥砍前后对比目标血量
+-- 实测武器伤害：挥砍前后轮询血量（1 秒窗口），并给出明确诊断
 function M.measureSwing(model)
     local hum = model and model:FindFirstChildOfClass("Humanoid")
-    if not hum then return end
+    if not hum then
+        auraLog("测量失败：目标没有 Humanoid", Color3.fromRGB(255, 150, 120))
+        return
+    end
     local hp0 = hum.Health
     S._swingModel, S._swingHP0 = model, hp0
-    task.delay(0.45, function()
-        if model.Parent and hum.Parent then
-            local hp1 = hum.Health
-            local drop = hp0 - hp1
-            if drop > 0.5 then
-                S.measuredDmg = math.floor(drop)
-                if S.measureDmg then
-                    S.baseDamage = S.measuredDmg
-                    S.measureDmg = false
-                    auraLog(("实测武器伤害 = %d（已写入基础伤害）"):format(S.measuredDmg), Color3.fromRGB(140, 255, 160))
-                    pcall(function() if UIKEYS and UIKEYS.measureBtn then UIKEYS.measureBtn(("武器伤害: %d（实测）"):format(S.measuredDmg)) end end)
-                elseif S.measuredDmg ~= S.lastLoggedDmg then
-                    S.lastLoggedDmg = S.measuredDmg
-                    auraLog(("本次命中 -%d HP"):format(S.measuredDmg), Color3.fromRGB(170, 220, 170))
-                end
-                -- 倍率是否被服务器忽略：连击/倍率开启后伤害没变
-                if (S.dmgMult or 1) > 1 and S.measuredDmg == (S._lastSameDmg or -1) then
-                    if not S._multIgnored then
-                        S._multIgnored = true
-                        auraLog("倍率无效：服务器按自己的数值结算伤害", Color3.fromRGB(255, 170, 120))
-                    end
-                end
-                S._lastSameDmg = S.measuredDmg
+    task.spawn(function()
+        local minHp = hp0
+        for _ = 1, 10 do
+            task.wait(0.1)
+            if not hum.Parent then break end
+            if hum.Health < minHp then minHp = hum.Health end
+        end
+        local drop = hp0 - minHp
+        if drop > 0.5 then
+            S.measuredDmg = math.floor(drop)
+            if S.measureDmg then
+                S.baseDamage = S.measuredDmg
+                S.measureDmg = false
+                auraLog(("实测武器伤害 = %d（已写入基础伤害）"):format(S.measuredDmg), Color3.fromRGB(140, 255, 160))
+                pcall(function() if UIKEYS and UIKEYS.measureBtn then UIKEYS.measureBtn(("武器伤害: %d（实测）"):format(S.measuredDmg)) end end)
+            else
+                auraLog(("本次命中 -%d HP"):format(math.floor(drop)), Color3.fromRGB(170, 220, 170))
+            end
+            if (S.dmgMult or 1) > 1 and S.measuredDmg == (S._lastSameDmg or -1) and not S._multIgnored then
+                S._multIgnored = true
+                auraLog("倍率无效：服务器按自己的数值结算伤害", Color3.fromRGB(255, 170, 120))
+            end
+            S._lastSameDmg = S.measuredDmg
+        else
+            if S.measureDmg and os.clock() - (S._measNoHit or 0) > 2 then
+                S._measNoHit = os.clock()
+                auraLog(("未检测到掉血（HP %.0f 未变）→ 该目标可能不可伤害，或伤害不走 Humanoid"):format(hp0),
+                    Color3.fromRGB(255, 140, 140))
             end
         end
     end)
@@ -3277,8 +3285,8 @@ task.spawn(function()
                 local fireGap = S.auraFireInt or 0.25
                 if tool and meleeOK and nowT - (S.lastAuraSwing or 0) >= fireGap then
                     S.lastAuraSwing = nowT
-                    pcall(function() tool:Activate() end)
                     pcall(M.measureSwing, m)
+                    pcall(function() tool:Activate() end)
                     -- 工具内远程只打一次不带参调用（缓存，避免每帧遍历）
                     if not (S._toolCache and S._toolCacheTool == tool) then
                         local list = {}
