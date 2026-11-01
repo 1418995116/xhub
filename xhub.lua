@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v14.3"
-local BUILD   = "2026-11-03 00:10"
+local VERSION = "v14.4"
+local BUILD   = "2026-11-03 00:45"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -2950,6 +2950,42 @@ task.spawn(function()
 end)
 
 --==================== 躲避触发扫描（不依赖 ESP，独立按名字找） ====================
+--==== 目标诊断（一键定位为什么"无目标"）====
+function M.diagScan()
+    local c = M.charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    local list = M.scanTargets()
+    local n = 0
+    local bestM, bestD = nil, math.huge
+    for _, m in ipairs(list) do
+        if m ~= c then
+            n = n + 1
+            local root = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+            if root and hrp then
+                local d = (root.Position - hrp.Position).Magnitude
+                if d < bestD then bestD, bestM = d, m end
+            end
+        end
+    end
+    local humCount = 0
+    local nameSample = {}
+    for _, m in ipairs(list) do
+        if m:FindFirstChildOfClass("Humanoid") then humCount = humCount + 1 end
+        if #nameSample < 6 then nameSample[#nameSample + 1] = m.Name end
+    end
+    auraLog(("诊断: 扫描到 %d 个模型 / 其中带 Humanoid %d 个"):format(#list, humCount), Color3.fromRGB(150, 210, 255))
+    auraLog(("最近目标: %s  %.1f m   光环半径 %.1f  打NPC=%s"):format(
+        bestM and bestM.Name or "无", bestD == math.huge and -1 or bestD,
+        S.auraRadius or 0, tostring(S.auraNpc)), Color3.fromRGB(255, 220, 120))
+    if #nameSample > 0 then
+        auraLog("样本: " .. table.concat(nameSample, ", "), Color3.fromRGB(180, 200, 230))
+    end
+    pcall(function()
+        print(("[diag] models=%d hum=%d nearest=%s %.1f radius=%.1f auraNpc=%s"):format(
+            #list, humCount, bestM and bestM.Name or "none",
+            bestD == math.huge and -1 or bestD, S.auraRadius or 0, tostring(S.auraNpc)))
+    end)
+end
 --==== 手持武器攻击距离（自动计算）====
 function M.toolReach()
     local c = M.charOf(lp)
@@ -3718,7 +3754,16 @@ local function auraFindTargets(maxN)
         if m ~= c then
             local hum = m:FindFirstChildOfClass("Humanoid")
             local root = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
-            if hum and root and hum.Health > 0 then
+            local npcLike = (hum ~= nil and hum.Health > 0)
+            if not npcLike and not Players:GetPlayerFromCharacter(m) then
+                local nm = m.Name:lower()
+                if nm:find("resident", 1, true) or nm:find("officer", 1, true) or nm:find("npc", 1, true)
+                   or nm:find("guard", 1, true) or nm:find("criminal", 1, true) or nm:find("enemy", 1, true)
+                   or m:FindFirstChild("Head") ~= nil then
+                    npcLike = (root ~= nil)
+                end
+            end
+            if npcLike and root then
                 local isP = Players:GetPlayerFromCharacter(m) ~= nil
                 local allowed = (isP and S.auraPlayer) or ((not isP) and S.auraNpc)
                 if allowed then
@@ -3743,7 +3788,16 @@ local function auraFindTarget()
         if m ~= c then
             local hum = m:FindFirstChildOfClass("Humanoid")
             local root = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
-            if hum and root and hum.Health > 0 then
+            local npcLike = (hum ~= nil and hum.Health > 0)
+            if not npcLike and not Players:GetPlayerFromCharacter(m) then
+                local nm = m.Name:lower()
+                if nm:find("resident", 1, true) or nm:find("officer", 1, true) or nm:find("npc", 1, true)
+                   or nm:find("guard", 1, true) or nm:find("criminal", 1, true) or nm:find("enemy", 1, true)
+                   or m:FindFirstChild("Head") ~= nil then
+                    npcLike = (root ~= nil)
+                end
+            end
+            if npcLike and root then
                 local isP = Players:GetPlayerFromCharacter(m) ~= nil
                 local allowed = (isP and S.auraPlayer) or ((not isP) and S.auraNpc)
                 if allowed then
@@ -4796,6 +4850,8 @@ UIKEYS.setAuraKeyBtn = M.addButton(pCombat, "光环快捷键: " .. S.auraKey.Nam
     S.keyCapture = "aura"
     notify("按一个新键作为光环开关（Esc 取消）", "warn", 4)
 end)
+M.addButton(pCombat, "诊断：为什么显示无目标", function() pcall(M.diagScan) end)
+
 M.addToggle(pCombat, "自动算武器攻击距离", true, function(v)
     S.autoReach = v
     notify(v and "已按手持武器自动计算攻击距离" or "使用固定半径", "info", 2.4)
