@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v10.5"
-local BUILD   = "2026-11-02 02:55"
+local VERSION = "v10.6"
+local BUILD   = "2026-11-02 03:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, auraDebug = false, npcEspDist = 150, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.15, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.15, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -2899,6 +2899,94 @@ local function hideAuraDraw()
     for _, ln in ipairs(auraDraw.lines) do pcall(function() ln.Visible = false end) end
 end
 
+--==== 秒杀 NPC（多策略尝试 + 生效校验）====
+local DMG_REMOTE_KW = { "hit", "damage", "attack", "slash", "kill", "hurt", "swing", "melee", "shoot", "fire", "take" }
+local dmgRemotesCache = nil
+
+local function collectDamageRemotes()
+    if dmgRemotesCache then return dmgRemotesCache end
+    local list = {}
+    local roots = { game:GetService("ReplicatedStorage"), workspace }
+    for _, root in ipairs(roots) do
+        local n = 0
+        for _, d in ipairs(root:GetDescendants()) do
+            n = n + 1
+            if n > 8000 then break end
+            if d:IsA("RemoteEvent") or d:IsA("UnreliableRemoteEvent") or d:IsA("RemoteFunction") then
+                local nm = d.Name:lower()
+                for _, k in ipairs(DMG_REMOTE_KW) do
+                    if nm:find(k, 1, true) then list[#list + 1] = d break end
+                end
+            end
+        end
+    end
+    dmgRemotesCache = list
+    return list
+end
+
+function M.tryKill(model, part)
+    if not (model and model.Parent) then return false end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not hum then return false end
+    local hp0 = hum.Health
+    local big = S.killDamage or 1e6
+
+    -- ① 客户端直伤（仅客户端拥有的 NPC 有效）
+    pcall(function() hum:TakeDamage(big) end)
+
+    -- ② 手持工具自带的远程（带伤害数值的各种组合）
+    local c = M.charOf(lp)
+    local tool = c and c:FindFirstChildOfClass("Tool")
+    if tool then
+        for _, d in ipairs(tool:GetDescendants()) do
+            if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then
+                local call = function(...)
+                    local args = { ... }
+                    if d:IsA("RemoteEvent") then
+                        pcall(function() d:FireServer(table.unpack(args)) end)
+                    else
+                        pcall(function() d:InvokeServer(table.unpack(args)) end)
+                    end
+                end
+                call(model)
+                call(hum)
+                call(part)
+                call(part, big)
+                call(model, big)
+                call(hum, big)
+                call(part.Position, big)
+            end
+        end
+    end
+
+    -- ③ 游戏内名字像"伤害"的远程
+    for _, d in ipairs(collectDamageRemotes()) do
+        if d:IsA("RemoteEvent") or d:IsA("UnreliableRemoteEvent") then
+            pcall(function() d:FireServer(model) end)
+            pcall(function() d:FireServer(hum) end)
+            pcall(function() d:FireServer(part, big) end)
+            pcall(function() d:FireServer(model, big) end)
+            pcall(function() d:FireServer(part.Position, big) end)
+        else
+            pcall(function() d:InvokeServer(model, big) end)
+        end
+    end
+
+    -- ④ 校验：0.35 秒后看血有没有掉
+    task.delay(0.35, function()
+        if hum.Parent then
+            local hp1 = hum.Health
+            if hp0 > 0 and hp1 < hp0 then
+                auraLog(("秒杀生效: %s  -%d HP（%.0f→%.0f）"):format(model.Name, math.floor(hp0 - hp1), hp0, hp1),
+                    Color3.fromRGB(140, 255, 140))
+            else
+                auraLog(("秒杀无效: %s（HP 未变，服务端判定）"):format(model.Name),
+                    Color3.fromRGB(255, 140, 140))
+            end
+        end
+    end)
+    return true
+end
 --==== 光环日志面板（右侧，关闭即停光环）====
 local auraPanel, auraLogFrame, auraLogRows = nil, nil, {}
 
@@ -3035,6 +3123,19 @@ task.spawn(function()
                 -- ① 先把武器远程的改写窗口打开，把射击方向改成目标
                 if S.auraRemote then fireUntil = os.clock() + 0.3 end
 
+                -- ②5 先转向目标 + 太远就往前走（空刀多半是没朝向/够不到）
+                local c0 = M.charOf(lp)
+                local hrp0 = c0 and c0:FindFirstChild("HumanoidRootPart")
+                if hrp0 then
+                    pcall(function()
+                        hrp0.CFrame = CFrame.lookAt(hrp0.Position, Vector3.new(p.Position.X, hrp0.Position.Y, p.Position.Z))
+                    end)
+                    if d and d > (S.auraReach or 6) then
+                        local hum0 = c0:FindFirstChildOfClass("Humanoid")
+                        if hum0 then pcall(function() hum0:MoveTo(p.Position) end) end
+                    end
+                end
+
                 -- ③ 真正走游戏判定的攻击：激活手里工具
                 local c = M.charOf(lp)
                 local tool = c and c:FindFirstChildOfClass("Tool")
@@ -3042,6 +3143,11 @@ task.spawn(function()
                     S.auraNoTool = os.clock()
                     auraLog("没有手持工具 → 光环无法造成伤害", Color3.fromRGB(255, 120, 120))
                 end
+                if S.killAura and S.instantKill and os.clock() - (S.lastKillTry or 0) > 0.5 then
+                    S.lastKillTry = os.clock()
+                    pcall(M.tryKill, m, p)
+                end
+
                 if tool then
                     pcall(function() tool:Activate() end)
                     -- 直接打手持物品自带的远程（不同游戏参数不同，全部试一遍）
@@ -4007,6 +4113,17 @@ M.addToggle(pCombat, "开启杀戮光环", false, function(v)
 end)
 M.addToggle(pCombat, "光环打 NPC / 怪物", true, function(v) S.auraNpc = v end)
 M.addToggle(pCombat, "光环打玩家", false, function(v) S.auraPlayer = v end)
+M.addToggle(pCombat, "强制秒杀 NPC（多策略）", false, function(v)
+    S.instantKill = v
+    notify(v and "秒杀已开：光环锁定时会尝试所有伤害通道" or "秒杀已关", v and "warn" or "info", 3)
+end)
+M.addButton(pCombat, "对当前光环目标尝试秒杀", function()
+    local p, m = auraPart, S.auraLastTarget
+    if not (p and m) then notify("先让光环锁定一个目标", "err", 3) return end
+    auraLog(("手动秒杀: %s"):format(m.Name), Color3.fromRGB(255, 220, 120))
+    pcall(M.tryKill, m, p)
+end)
+M.addSlider(pCombat, "近战够到距离", 2, 20, 6, function(v) S.auraReach = v end)
 M.addSlider(pCombat, "光环半径 studs", 5, 60, 20, function(v) S.auraRadius = v end)
 M.addToggle(pCombat, "显示光环范围（白色圆圈）", true, function(v) S.auraRing = v end)
 M.addSlider(pCombat, "光环攻击间隔 ms", 50, 500, 150, function(v) S.auraInt = v / 1000 end)
