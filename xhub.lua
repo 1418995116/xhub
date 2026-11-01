@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v8.9"
-local BUILD   = "2026-11-01 18:40"
+local VERSION = "v9.0"
+local BUILD   = "2026-11-01 19:05"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -45,7 +45,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -2742,6 +2742,28 @@ task.spawn(function()
 end)
 
 --==================== 躲避触发扫描（不依赖 ESP，独立按名字找） ====================
+-- HUD: shows which mob triggered the hide (and why)
+local hideHud, hideHudUntil = nil, 0
+local function showHideSource(text)
+    if not (hideHud and hideHud.Parent) then
+        hideHud = mk("TextLabel", { Name = "XHubHideSrc", Size = UDim2.fromOffset(420, 24),
+            Position = UDim2.new(0.5, -210, 0, 36), BackgroundTransparency = 0.25,
+            BackgroundColor3 = Color3.fromRGB(20, 24, 30), Text = "",
+            Font = Enum.Font.GothamBold, TextSize = 13,
+            TextColor3 = Color3.fromRGB(255, 200, 120), ZIndex = 41 }, gui)
+    end
+    hideHud.Text = text
+    hideHudUntil = os.clock() + 12
+end
+
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        if hideHud and hideHud.Parent then
+            if os.clock() > hideHudUntil then hideHud.Text = "" end
+        end
+    end
+end)
 -- TIER1: deadly mobs (always win, own 8s cooldown)
 local TIER1 = { "rushmoving", "rush", "ambushmoving", "ambush" }
 -- TIER2: chasers / noise (opt-in, 15s cooldown)
@@ -2797,6 +2819,7 @@ task.spawn(function()
                 if os.clock() - warned > 15 then
                     warned = os.clock()
                     notify(("检测到 %s %.0fm（未开启自动躲避）"):format(name, d), "warn", 3.5)
+                    showHideSource(("未躲避（开关关）: %s  ·  %.0f m  ·  T%d"):format(name, d, tier))
                 end
                 return
             end
@@ -2813,6 +2836,8 @@ task.spawn(function()
 
             if tier == 1 then S.lastHideT1 = os.clock() else S.lastHideT2 = os.clock() end
             notify(("触发躲避[T%d]: %s %.0fm"):format(tier, name, d), "ok", 2)
+            showHideSource(("躲避源: %s  ·  %.0f m  ·  T%d    触发于 %s")
+                :format(name, d, tier, os.date("%H:%M:%S")))
             hideSmart(name)
         end)
         if not ok then
@@ -3093,13 +3118,16 @@ task.spawn(function()
             local c0 = charOf(lp)
             local hrp0 = c0 and c0:FindFirstChild("HumanoidRootPart")
             local n = 0
-            for _, m in ipairs(scanAll(4000)) do
+            for _, m in ipairs(scanAll(2500)) do
                 if m:IsA("Model") then
                     n = n + 1
-                    if n > 4000 then break end
+                    if n > 2500 then break end
+                    local known = sceneStore[m] or doorStore[m] or leverStore[m]
                     local nm = m.Name:lower()
                     local d = hrp0 and distTo(m) or nil
-                    if d and d > 90 then
+                    if known then
+                        -- already drawn: just refresh distance cheaply, skip rework
+                    elseif d and d > 150 then
                         -- 远处的不要，过会儿再处理
                     elseif S.doors and isRealDoor(nm) then
                         pcall(ensureDoor, m)
@@ -3180,10 +3208,13 @@ workspace.DescendantAdded:Connect(function(d)
     end
     if d:IsA("Sound") then
         local sn = d.Name:lower()
+        local isFake = sn:find("fake", 1, true) ~= nil
         for _, k in ipairs(SOUND_HINT) do
             if sn:find(k, 1, true) then
-                notify(("声音线索: %s"):format(d.Name), "warn", 3)
-                if S.autoHide then pcall(hideSmart, d.Name) end
+                notify(("声音线索: %s%s"):format(d.Name, isFake and "（假事件，忽略）" or ""), "info", 3)
+                if S.hideSound and S.autoHide and not isFake then
+                    pcall(hideSmart, d.Name)
+                end
                 break
             end
         end
@@ -3562,6 +3593,10 @@ setHideModeBtn = addButton(pAuto, "躲避方式: 高空传送", function()
     notify("躲避方式 = " .. S.hideMode, "info", 1.6)
 end)
 addSlider(pAuto, "触发距离", 30, 200, S.hideDist, function(v) S.hideDist = v end)
+addToggle(pAuto, "声音也触发躲避（默认关，防假 Rush）", false, function(v)
+    S.hideSound = v
+    notify(v and "声音触发已开（FakeoutRush 这类假事件仍会被过滤）" or "声音不再触发躲避（只按实体名字判断）", "info", 3)
+end)
 addToggle(pAuto, "额外躲避 Seek/Glitch 等（二级威胁）", false, function(v)
     S.hideTier2 = v
     notify(v and "二级威胁（Seek/Glitch/Figure/Dupe）也会触发躲避" or "只有 Rush/Ambush 会触发躲避", "info", 3)
