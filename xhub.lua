@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v9.0"
-local BUILD   = "2026-11-01 19:05"
+local VERSION = "v9.1"
+local BUILD   = "2026-11-01 19:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -45,7 +45,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -2026,7 +2026,7 @@ end)
 --==================== 物品绘制 / 拾取 / 自动交互 ====================
 local ITEM_KW = { "key", "钥匙", "loot", "item", "coin", "chest", "drawer", "pickup",
                   "gem", "gold", "cash", "money", "bandage", "flashlight", "lighter",
-                  "candle", "crucifix", "lockpick", "vitamin", "potion", "weapon", "barrel", "crate", "sack", "bag", "box", "桶", "箱", "袋" }
+                  "candle", "crucifix", "lockpick", "vitamin", "potion", "weapon", "crate", "sack", "bag", "box", "箱", "袋" }
 local itemStore = {}
 
 local function nameHits(v, list)
@@ -2038,7 +2038,7 @@ local function nameHits(v, list)
     return false
 end
 
-local ITEM_EXCLUDE = { "candle", "蜡烛", "drawer", "container", "wall", "stool", "chair", "seat", "bench", "table", "sofa", "lamp", "potted", "plant", "tree", "flower", "盆栽" }
+local ITEM_EXCLUDE = { "candle", "蜡烛", "drawer", "container", "wall", "stool", "chair", "seat", "bench", "table", "sofa", "lamp", "potted", "plant", "tree", "flower", "盆栽", "barrel", "cellar", "stack" }
 
 local function isItemInst(v)
     local nm = (v and v.Name or ""):lower()
@@ -2742,6 +2742,24 @@ task.spawn(function()
 end)
 
 --==================== 躲避触发扫描（不依赖 ESP，独立按名字找） ====================
+--==== 玩家旋转（Spin）====
+local spinYaw = 0
+task.spawn(function()
+    local last = os.clock()
+    while true do
+        local dt = task.wait()
+        if S.spin then
+            local c = charOf(lp)
+            local hrp = c and c:FindFirstChild("HumanoidRootPart")
+            if hrp and not isSeated() then
+                spinYaw = (spinYaw + math.rad(S.spinSpeed) * dt) % (math.pi * 2)
+                pcall(function()
+                    hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, spinYaw, 0)
+                end)
+            end
+        end
+    end
+end)
 -- HUD: shows which mob triggered the hide (and why)
 local hideHud, hideHudUntil = nil, 0
 local function showHideSource(text)
@@ -2777,6 +2795,30 @@ nearestTrigger = function()
     local t1D, t1N = math.huge, nil
     local t2D, t2N = math.huge, nil
 
+    local function consider(m)
+        if not m or not m.Parent then return end
+        local nm = m.Name:lower()
+        if nm:find("fake", 1, true) then return end
+        local m1, m2 = false, false
+        for _, k in ipairs(TIER1) do
+            if nm:find(k, 1, true) then m1 = true break end
+        end
+        if not m1 and S.hideTier2 then
+            for _, k in ipairs(TIER2) do
+                if nm:find(k, 1, true) then m2 = true break end
+            end
+        end
+        if not (m1 or m2) then return end
+        local d = distTo(m)
+        if not d then return end
+        if m1 and d < t1D then t1D, t1N = d, m.Name end
+        if m2 and d < t2D then t2D, t2N = d, m.Name end
+    end
+
+    -- ① ESP 已经追踪到的实体（最可靠：标签上能看到就说明它在这里）
+    for m in pairs(entStore) do consider(m) end
+
+    -- ② 再扫全场兜底
     for _, m in ipairs(scanAll(4000)) do
         if m:IsA("Model") then
             local nm = m.Name:lower()
@@ -2808,8 +2850,17 @@ end
 
 task.spawn(function()
     local warned = 0
+    local dbgT = 0
     while true do
         task.wait(0.35)
+        if S.hideDebug and os.clock() - dbgT > 2 then
+            dbgT = os.clock()
+            local n, dd, tr = nearestTrigger()
+            print(("[hide] auto=%s tier2=%s sound=%s dist=%s | 最近=%s %.0fm T%s | hiding=%s cd1=%.0fs entStore=%d")
+                :format(tostring(S.autoHide), tostring(S.hideTier2), tostring(S.hideSound),
+                        tostring(S.hideDist), tostring(n), dd or -1, tostring(tr),
+                        tostring(hiding), os.clock() - (S.lastHideT1 or 0), #({})))
+        end
         local ok, err = pcall(function()
             local name, d, tier = nearestTrigger()
             if not name then return end
@@ -3361,6 +3412,11 @@ end)
 addToggle(pMain, "脉冲位移（每 0.6s 走 0.36s）", false, function(v) S.pulse = v end)
 addSlider(pMain, "走路速度（服务端容忍≈16-22）", 16, 60, S.walkSpeed, function(v) S.walkSpeed = v end)
 addToggle(pMain, "穿墙 Noclip（不改速度,不触发回弹）", false, function(v) setNoclip(v) end)
+addToggle(pMain, "玩家旋转（原地转圈）", false, function(v)
+    S.spin = v
+    notify(v and "旋转已开" or "旋转已关闭", "info", 1.8)
+end)
+addSlider(pMain, "旋转速度 度/秒", 30, 720, 180, function(v) S.spinSpeed = v end)
 addSection(pMain, "菜单背景")
 addToggle(pMain, "压暗游戏背景", true, function(v)
     S.dim = v
@@ -3593,6 +3649,19 @@ setHideModeBtn = addButton(pAuto, "躲避方式: 高空传送", function()
     notify("躲避方式 = " .. S.hideMode, "info", 1.6)
 end)
 addSlider(pAuto, "触发距离", 30, 200, S.hideDist, function(v) S.hideDist = v end)
+addButton(pAuto, "测试躲避（立刻执行一次）", function()
+    notify("测试躲避: 立即执行", "info", 2)
+    hideSmart("TEST")
+end)
+addToggle(pAuto, "躲避调试信息（F9，每 2 秒一行）", false, function(v)
+    S.hideDebug = v
+    if v then
+        local n, d2, tr = nearestTrigger()
+        print(("[hide] 当前最近触发源 = %s  %.0fm  T%s ; autoHide=%s hideDist=%s")
+            :format(tostring(n), d2 or -1, tostring(tr), tostring(S.autoHide), tostring(S.hideDist)))
+    end
+    notify(v and "调试已开：F9 每 2 秒打印躲避判定" or "调试已关", "info", 2.5)
+end)
 addToggle(pAuto, "声音也触发躲避（默认关，防假 Rush）", false, function(v)
     S.hideSound = v
     notify(v and "声音触发已开（FakeoutRush 这类假事件仍会被过滤）" or "声音不再触发躲避（只按实体名字判断）", "info", 3)
