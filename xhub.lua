@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v14.2"
-local BUILD   = "2026-11-02 23:30"
+local VERSION = "v14.3"
+local BUILD   = "2026-11-03 00:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -989,7 +989,7 @@ function M.installRemoteAim()
         if not RUNNING then return old(self, ...) end
         local m = getnamecallmethod()
         local inWindow = os.clock() < fireUntil
-        if (m == "FireServer" or m == "InvokeServer") and S.learnActive then
+        if false and (m == "FireServer" or m == "InvokeServer") and S.learnActive then
             local nL = select("#", ...)
             local aL = { ... }
             local nmL = tostring(self.Name):lower()
@@ -1014,7 +1014,7 @@ function M.installRemoteAim()
                     local tx = ccx and ccx:FindFirstChildOfClass("Tool")
                     curT = tx and tx.Name or nil
                 end)
-                S.learnCall = { remote = self, args = aL, n = nL, name = tostring(self.Name), tool = curT, raw = aL }
+                S.learnCall = { remote = self, args = aL, n = nL, name = tostring(self.Name), tool = curT }
                 S.learnActive = false
                 S.learned = { S.learnCall }
                 pcall(M.saveLearned)
@@ -3816,73 +3816,39 @@ task.spawn(function()
                 local fireGap = S.auraFireInt or 0.25
                 if tool and nowT - (S.lastAuraSwing or 0) >= fireGap then
                     S.lastAuraSwing = nowT
-                    pcall(M.measureSwing, m)
                     pcall(function()
                         local cc = M.charOf(lp)
                         local hh = cc and cc:FindFirstChildOfClass("Humanoid")
-                        if hh and tool and tool.Parent ~= cc then hh:EquipTool(tool) end
+                        if cc and hh and tool.Parent ~= cc then hh:EquipTool(tool) end
                     end)
-                    if not tool then
-                        pcall(function()
-                            local cc3 = M.charOf(lp)
-                            local bp = lp:FindFirstChild("Backpack")
-                            local t3 = bp and bp:FindFirstChildOfClass("Tool")
-                            local h3 = cc3 and cc3:FindFirstChildOfClass("Humanoid")
-                            if t3 and h3 then h3:EquipTool(t3) end
-                        end)
-                    end
-                    pcall(function() if tool then tool:Activate() end end)
-                    -- 关键：把学到的那次调用"原样"再发一遍（这是手动点重放能打中的原因）
-                    if S.learnCall and S.learnCall.remote and S.learnCall.remote.Parent then
-                        pcall(function()
-                            local rc = S.learnCall
-                            if rc.remote:IsA("RemoteEvent") or rc.remote:IsA("UnreliableRemoteEvent") then
-                                rc.remote:FireServer(table.unpack(rc.raw or rc.args, 1, rc.n))
-                            else
-                                rc.remote:InvokeServer(table.unpack(rc.raw or rc.args, 1, rc.n))
-                            end
-                        end)
-                    end
-                    if os.clock() - (S._swingLog or 0) > 2 then
-                        S._swingLog = os.clock()
-                        pcall(function()
-                            auraLog(("挥砍: %s  目标 %.1f m  距离上限 %.1f"):format(tool and tool.Name or "空手", d or -1, S.auraRadius or 0), Color3.fromRGB(190, 230, 190))
-                        end)
-                    end
-                    -- 工具内远程只打一次不带参调用（缓存，避免每帧遍历）
-                    if tool and not (S._toolCache and S._toolCacheTool == tool) then
+                    pcall(function() tool:Activate() end)
+                    if not (S._toolCache and S._toolCacheTool == tool) then
                         local list = {}
                         for _, dd in ipairs(tool:GetDescendants()) do
                             if dd:IsA("RemoteEvent") or dd:IsA("RemoteFunction") then list[#list + 1] = dd end
                         end
                         S._toolCache, S._toolCacheTool = list, tool
                     end
-                    local hitList = S.auraMulti and targets or { { m = m, p = p, d = d } }
-                    local dmg = math.floor((S.baseDamage or 20) * (S.dmgMult or 1))
-                    local reps = math.max(1, S.dmgRepeat or 1)
-                    for _rep = 1, reps do
-                      for _, tgt in ipairs(hitList) do
-                        if tgt.p and tgt.p.Parent then
-                            for _, dd in ipairs(S._toolCache or {}) do
-                                if dd:IsA("RemoteEvent") then
-                                    pcall(function() dd:FireServer() end)
-                                    pcall(function() dd:FireServer(tgt.m) end)
-                                    pcall(function() dd:FireServer(tgt.p) end)
-                                    pcall(function() dd:FireServer(tgt.p.Position) end)
-                                    pcall(function() dd:FireServer(tgt.p, dmg) end)
-                                    pcall(function() dd:FireServer(tgt.m, dmg) end)
-                                    pcall(function() dd:FireServer(tgt.p.Position, dmg) end)
-                                else
-                                    pcall(function() dd:InvokeServer(tgt.m, dmg) end)
-                                end
-                            end
+                    for _, dd in ipairs(S._toolCache or {}) do
+                        if dd:IsA("RemoteEvent") then
+                            pcall(function() dd:FireServer() end)
+                            pcall(function() dd:FireServer(m) end)
+                            pcall(function() dd:FireServer(p) end)
+                            pcall(function() dd:FireServer(p.Position) end)
+                            pcall(function() dd:FireServer(CFrame.new(p.Position)) end)
+                        else
+                            pcall(function() dd:InvokeServer(m) end)
+                            pcall(function() dd:InvokeServer(p) end)
                         end
-                      end
                     end
-                    if S.auraMulti then auraLog(("一刀多砍: %d 个目标"):format(#hitList), Color3.fromRGB(255, 220, 140)) end
+                    if os.clock() - (S._swingLog or 0) > 2 then
+                        S._swingLog = os.clock()
+                        pcall(function()
+                            auraLog(("挥砍: %s  目标 %.1f m  上限 %.1f"):format(tool and tool.Name or "空手", d or -1, S.auraRadius or 0), Color3.fromRGB(190, 230, 190))
+                        end)
+                    end
                 end
                 if S.auraLastTarget and os.clock() - (S.auraFireLog or 0) > 2 then
-                    S.auraFireLog = os.clock()
                     auraLog(("开火: %s"):format(tool and tool.Name or "无工具"), Color3.fromRGB(190, 230, 190))
                 end
                 if S.auraDebug then
@@ -4830,18 +4796,6 @@ UIKEYS.setAuraKeyBtn = M.addButton(pCombat, "光环快捷键: " .. S.auraKey.Nam
     S.keyCapture = "aura"
     notify("按一个新键作为光环开关（Esc 取消）", "warn", 4)
 end)
-M.addButton(pCombat, "学习一次攻击（点我开始 → 手动砍一刀）", function()
-    S.learnActive = true
-    S.learnCall = nil
-    auraLog("学习已开：砍一刀就记录（只记第一条攻击调用）", Color3.fromRGB(150, 210, 255))
-    task.delay(15, function()
-        if S.learnActive then
-            S.learnActive = false
-            auraLog("学习超时：没抓到攻击调用", Color3.fromRGB(255, 160, 120))
-        end
-    end)
-end)
-
 M.addToggle(pCombat, "自动算武器攻击距离", true, function(v)
     S.autoReach = v
     notify(v and "已按手持武器自动计算攻击距离" or "使用固定半径", "info", 2.4)
