@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v13.3"
-local BUILD   = "2026-11-02 19:05"
+local VERSION = "v13.4"
+local BUILD   = "2026-11-02 19:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -992,10 +992,28 @@ function M.installRemoteAim()
         if (m == "FireServer" or m == "InvokeServer") and S.learnActive then
             local nL = select("#", ...)
             local aL = { ... }
-            S.learned = S.learned or {}
-            table.insert(S.learned, { remote = self, args = aL, n = nL, name = tostring(self.Name), at = os.clock() })
-            while #S.learned > 30 do table.remove(S.learned, 1) end
-            pcall(function() auraLog(("学到调用: %s (%d 参)  %s"):format(tostring(self.Name), nL, M.argSig(aL, nL)), Color3.fromRGB(150, 210, 255)) end)
+            local nmL = tostring(self.Name):lower()
+            local atk = false
+            for _, k in ipairs({ "fire", "shoot", "hit", "damage", "attack", "slash", "swing",
+                                 "melee", "punch", "knock", "grab", "kill", "hurt", "stab", "strike", "take" }) do
+                if nmL:find(k, 1, true) then atk = true break end
+            end
+            if not atk then
+                for i = 1, nL do
+                    local v0 = aL[i]
+                    if typeof(v0) == "Instance" then
+                        local okc, isc = pcall(M.isCharLike, v0)
+                        if okc and isc then atk = true break end
+                    end
+                end
+            end
+            if atk then
+                S.learnCall = { remote = self, args = aL, n = nL, name = tostring(self.Name) }
+                S.learnActive = false
+                S.learned = { S.learnCall }
+                pcall(M.saveLearned)
+                pcall(function() auraLog(("已学会攻击: %s (%d 参)  %s"):format(tostring(self.Name), nL, M.argSig(aL, nL)), Color3.fromRGB(140, 255, 160)) end)
+            end
         end
 
         if (m == "FireServer" or m == "InvokeServer") and S.dmgRecord then
@@ -3208,7 +3226,7 @@ function M.measureSwing(model)
     end)
 end
 -- 判断某个参数是不是"角色类实例"（Humanoid / 带 Humanoid 的 Model / 角色部件）
-local function isCharLike(v)
+function M.isCharLike(v)
     local ok, res = pcall(function()
         if v:IsA("Humanoid") then return true end
         if v:IsA("Model") then return v:FindFirstChildOfClass("Humanoid") ~= nil end
@@ -3238,7 +3256,7 @@ function M.replayLearned(model, part)
         if not S.replayFilter then return true end
         local nm = tostring(rec.remote.Name):lower()
         for _, k in ipairs(ATK_KW) do if nm:find(k, 1, true) then return true end end
-        for i = 1, rec.n do if isCharLike(rec.args[i]) then return true end end
+        for i = 1, rec.n do if M.isCharLike(rec.args[i]) then return true end end
         return false
     end
     for _, rec in ipairs(list) do
@@ -3248,7 +3266,7 @@ function M.replayLearned(model, part)
                 local v = rec.args[i]
                 local tv = typeof(v)
                 if tv == "Instance" then
-                    if S.replaySwap and isCharLike(v) then
+                    if S.replaySwap and M.isCharLike(v) then
                         if v:IsA("Humanoid") then out[i] = hum or v
                         elseif v:IsA("Model") then out[i] = model or v
                         else out[i] = part or v end
@@ -3303,7 +3321,7 @@ end
 function M.saveLearned()
     if not hasFS() then return false end
     local lines = {}
-    for _, r in ipairs(S.learned or {}) do
+    for _, r in ipairs({ S.learnCall or (S.learned or {})[1] }) do
         if r.remote and r.remote.Parent then
             local tags = {}
             for i = 1, r.n do tags[i] = argToTag(r.args[i]) end
@@ -3352,6 +3370,7 @@ function M.loadLearned()
         end
     end
     S.learned = out
+    S.learnCall = out[1]
     return #out
 end
 function M.tryKill(model, part)
@@ -3720,19 +3739,16 @@ task.spawn(function()
                         local hh = cc and cc:FindFirstChildOfClass("Humanoid")
                         if hh and tool.Parent ~= cc then hh:EquipTool(tool) end
                     end)
-                    if S.useLearned and S.learned and #S.learned > 0 then
-                        local okCount = 0
-                        if S.auraMulti then
-                            for _, tgt in ipairs(targets) do
-                                if tgt.p and tgt.p.Parent then
-                                    okCount = okCount + (M.replayLearned(tgt.m, tgt.p) or 0)
-                                end
-                            end
-                        else
-                            okCount = M.replayLearned(m, p) or 0
-                        end
-                        if okCount == 0 then pcall(function() tool:Activate() end) end
+                    if S.learnCall and S.learnCall.remote and S.learnCall.remote.Parent then
+                        -- 已学会：只重放这一条真实攻击
+                        local okN = M.replayLearned(m, p) or 0
+                        if okN == 0 then pcall(function() tool:Activate() end) end
                     else
+                        -- 还没学会：第一次开光环自动进入学习
+                        if not S.learnActive then
+                            S.learnActive = true
+                            pcall(function() auraLog("未学习：现在手动砍目标一刀即可（只记这一次）", Color3.fromRGB(255, 220, 120)) end)
+                        end
                         pcall(function() tool:Activate() end)
                     end
                     -- 工具内远程只打一次不带参调用（缓存，避免每帧遍历）
@@ -4706,42 +4722,30 @@ M.addToggle(pCombat, "NPC 自瞄：只在按住左键时锁", true, function(v) 
 M.addToggle(pCombat, "NPC 自瞄：预判移动", true, function(v) S.npcLead = v end)
 M.addSlider(pCombat, "NPC 自瞄距离", 20, 400, 200, function(v) S.npcAimDist = v end)
 
-M.addSection(pCombat, "武器学习（录一次真实攻击，之后自动重放）")
-M.addButton(pCombat, "① 学习攻击（点我开始 → 手动砍一刀）", function()
-    S.learned = {}
-    S.learnActive = true
-    auraLog("学习模式已开：请手动砍目标一刀（10 秒后自动结束并保存）", Color3.fromRGB(150, 210, 255))
-    task.delay(10, function()
-        S.learnActive = false
-        local okS, cntS = pcall(M.saveLearned)
-        auraLog(("学习结束：记录 %d 个调用%s"):format(#(S.learned or {}),
-            (okS and cntS and cntS > 0) and "（已保存）" or "（未保存）"), Color3.fromRGB(150, 210, 255))
-    end)
-end)
-M.addToggle(pCombat, "光环自动重放学到的攻击（不再空刀）", true, function(v)
-    S.useLearned = v
-    notify(v and "光环会用手动学到的攻击自动打目标" or "光环回到原生挥砍（可能空刀）", "info", 2.8)
-end)
-M.addButton(pCombat, "② 重放一次（手动打当前光环目标）", function()
-    local pp, mm = auraPart, S.auraLastTarget
-    if not (pp and mm) then notify("先让光环锁定一个目标", "err", 3) return end
-    pcall(M.replayLearned, mm, pp)
-end)
-
-M.addSection(pCombat, "杀戮光环（Kill Aura）")
-M.addToggle(pCombat, "开启杀戮光环", false, function(v)
+M.addSection(pCombat, "杀戮光环（学习一次真实攻击后自动重放）")
+M.addToggle(pCombat, "开启杀戮光环（未学习时自动进入学习）", false, function(v)
     S.killAura = v
     if v then
         pcall(ensureAuraPanel)
         if auraPanel then auraPanel.Visible = true end
-        auraLog("光环启动 · 半径 " .. tostring(S.auraRadius), Color3.fromRGB(255, 170, 170))
+        if not (S.learnCall and S.learnCall.remote and S.learnCall.remote.Parent) then
+            S.learnActive = true
+            auraLog("未学习：现在手动砍目标一刀即可（只记这一次）", Color3.fromRGB(255, 220, 120))
+        else
+            auraLog("光环启动 · 已学会: " .. tostring(S.learnCall.name), Color3.fromRGB(255, 170, 170))
+        end
     else
         if auraPanel then auraPanel.Visible = false end
-        hideAuraDraw()
     end
-    notify(v and ("杀戮光环已开：半径 " .. tostring(S.auraRadius) .. " studs") or "杀戮光环已关", "info", 2.2)
+    notify(v and "杀戮光环: 开" or "杀戮光环: 关", v and "ok" or "info", 1.8)
 end)
-M.addSlider(pCombat, "挥手间隔 ms（近战建议 300-500）", 50, 900, 350, function(v) S.auraFireInt = v / 1000 end)
+M.addButton(pCombat, "重新学习（清除已学攻击）", function()
+    S.learnCall = nil
+    S.learned = nil
+    S.learnActive = true
+    pcall(function() if hasFS and writefile then writefile(LEARN_FILE, "") end end)
+    auraLog("已清除旧记录：手动砍一刀重新学习", Color3.fromRGB(255, 220, 120))
+end)
 UIKEYS.setAuraKeyBtn = M.addButton(pCombat, "光环快捷键: " .. S.auraKey.Name .. "（点我改键）", function()
     S.keyCapture = "aura"
     notify("按一个新键作为光环开关（Esc 取消）", "warn", 4)
