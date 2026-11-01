@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v9.3"
-local BUILD   = "2026-11-01 20:20"
+local VERSION = "v9.4"
+local BUILD   = "2026-11-01 21:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -45,7 +45,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRadius = 20, auraDmg = 20, auraInt = 0.15, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -728,8 +728,38 @@ end
 
 local aimInfo
 local aimWant, aimGoal = false, nil
+local npcStore = {}          -- forward decl (NPC ESP 会往里塞)
+local lastNpcTarget = nil
 local hitTrack = { part = nil, hp = nil, last = 0 }
 
+-- NPC 专用目标查找（独立自瞄 / 杀戮光环共用）
+local function findNpcTarget(maxDist)
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    maxDist = maxDist or (S.npcAimDist or 200)
+    local bestD, bestP, bestM = math.huge, nil, nil
+    local function consider(m)
+        if not m or not m.Parent or m == c then return end
+        if lp.Character and m == lp.Character then return end
+        local hum = m:FindFirstChildOfClass("Humanoid")
+        local p = m:FindFirstChild("HumanoidRootPart") or firstPart(m)
+        if not (hum and p) then return end
+        if hum.Health <= 0 then return end
+        local d = (p.Position - hrp.Position).Magnitude
+        if d > maxDist or d >= bestD then return end
+        bestD, bestP, bestM = d, p, m
+    end
+    for m in pairs(npcStore) do consider(m) end
+    for m in pairs(entStore) do
+        local nm = m.Name:lower()
+        if nm:find("rig", 1, true) or nm:find("dummy", 1, true) or nm:find("npc", 1, true)
+           or nm:find("monster", 1, true) or nm:find("enemy", 1, true) then
+            consider(m)
+        end
+    end
+    return bestP, bestM, bestD
+end
 local function aimTick(dt)
     aimWant = false
     if S.aim and not main.Visible then
@@ -738,6 +768,27 @@ local function aimTick(dt)
             aimWant = true
         elseif not S.aimOnFire then
             aimWant = true
+        end
+    end
+
+    -- 独立 NPC 自瞄：与玩家自瞄互不影响
+    if S.npcAim and not main.Visible then
+        local np, nm2 = findNpcTarget(S.npcAimDist)
+        if np then
+            local wantFire = (not S.npcAimOnFire) or UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+            if wantFire then
+                local goal = np.Position
+                if S.npcLead then
+                    local v = np.AssemblyLinearVelocity
+                    local dd = (np.Position - cam.CFrame.Position).Magnitude
+                    goal = np.Position + v * (dd / math.max(50, S.leadSpeed)) * (S.leadScale or 1)
+                end
+                pcall(function() cam.CFrame = CFrame.lookAt(cam.CFrame.Position, goal) end)
+                if aimInfo then aimInfo.Text = ("NPC自瞄: %s  %.0fm"):format(nm2.Name, (np.Position - cam.CFrame.Position).Magnitude) end
+                lastNpcTarget = nm2
+            end
+        else
+            if aimInfo and not S.aim then aimInfo.Text = "NPC自瞄: 无目标" end
         end
     end
 
@@ -2742,6 +2793,60 @@ task.spawn(function()
 end)
 
 --==================== 躲避触发扫描（不依赖 ESP，独立按名字找） ====================
+--==== 杀戮光环（Kill Aura）====
+auraTarget = nil
+task.spawn(function()
+    while true do
+        task.wait(S.auraInt or 0.15)
+        if S.killAura then
+            pcall(function()
+                local c = charOf(lp)
+                local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                if not hrp then return end
+                local bestP, bestM, bestD = nil, nil, math.huge
+
+                if S.auraNpc then
+                    local p, m, d = findNpcTarget(S.auraRadius)
+                    if p and d and d < bestD then bestP, bestM, bestD = p, m, d end
+                end
+
+                if S.auraPlayer then
+                    for _, pl in ipairs(Players:GetPlayers()) do
+                        if pl ~= lp then
+                            local pc = pl.Character
+                            local ph = pc and pc:FindFirstChild("HumanoidRootPart")
+                            local phum = pc and pc:FindFirstChildOfClass("Humanoid")
+                            if ph and phum and phum.Health > 0 then
+                                local d = (ph.Position - hrp.Position).Magnitude
+                                if d <= S.auraRadius and d < bestD then
+                                    bestP, bestM, bestD = ph, pc, d
+                                end
+                            end
+                        end
+                    end
+                end
+
+                if not bestP then auraTarget = nil return end
+                local hum = bestM:FindFirstChildOfClass("Humanoid")
+                if hum and (S.auraDmg or 0) > 0 then
+                    pcall(function() hum:TakeDamage(S.auraDmg) end)
+                end
+                local tool = c:FindFirstChildOfClass("Tool")
+                if tool then pcall(function() tool:Activate() end) end
+                auraTarget = ("%s  %.0fm"):format(bestM.Name, bestD)
+                if not (auraHud and auraHud.Parent) then
+                    auraHud = mk("TextLabel", { Name = "XHubAura", Size = UDim2.fromOffset(300, 22),
+                        Position = UDim2.new(0.5, -150, 0, 62), BackgroundTransparency = 0.3,
+                        BackgroundColor3 = Color3.fromRGB(30, 18, 18), Text = "",
+                        Font = Enum.Font.GothamBold, TextSize = 12,
+                        TextColor3 = Color3.fromRGB(255, 140, 140), ZIndex = 41 }, gui)
+                end
+            end)
+        else
+            auraTarget = nil
+        end
+    end
+end)
 --==== 玩家旋转（Spin）：RenderStepped 最高优先级 + 关掉 AutoRotate 才不会被打回 ====
 local spinYaw = 0
 local spinLocked = false
@@ -2766,6 +2871,8 @@ RS:BindToRenderStep("XHubSpin", Enum.RenderPriority.Last.Value - 5, function(dt)
         hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, spinYaw, 0)
     end)
 end)
+local auraTarget = nil        -- forward decl (kill aura fills it)
+local auraHud = nil
 -- HUD: shows which mob triggered the hide (and why)
 local hideHud, hideHudUntil = nil, 0
 local function showHideSource(text)
@@ -2785,6 +2892,13 @@ task.spawn(function()
         task.wait(0.5)
         if hideHud and hideHud.Parent then
             if os.clock() > hideHudUntil then hideHud.Text = "" end
+        end
+        if auraHud and auraHud.Parent then
+            if S.killAura and auraTarget then
+                auraHud.Text = "光环目标: " .. auraTarget
+            else
+                auraHud.Text = ""
+            end
         end
     end
 end)
@@ -3297,7 +3411,7 @@ workspace.DescendantAdded:Connect(function(d)
 end)
 
 --==== NPC / 怪物 ESP（独立模块：方框 + 名字 + 血量 + 距离） ====
-local npcStore = {}
+npcStore = {}
 
 local function ensureNpcEsp(m)
     local o = npcStore[m]
@@ -3618,6 +3732,26 @@ addToggle(pCombat, "预判瞄准（Lead Target，打移动目标）", false, fun
 end)
 addSlider(pCombat, "子弹速度 studs/s（预判用）", 100, 2000, 600, function(v) S.leadSpeed = v end)
 addSlider(pCombat, "提前量倍率 ×0.1（10 = 1.0x）", 1, 25, 10, function(v) S.leadScale = v / 10 end)
+addSection(pCombat, "NPC 自瞄（独立于玩家自瞄）")
+addToggle(pCombat, "开启 NPC 自瞄", false, function(v)
+    S.npcAim = v
+    notify(v and "NPC 自瞄已开（只锁 NPC/怪物）" or "NPC 自瞄已关", "info", 2.2)
+end)
+addToggle(pCombat, "NPC 自瞄：只在按住左键时锁", true, function(v) S.npcAimOnFire = v end)
+addToggle(pCombat, "NPC 自瞄：预判移动", true, function(v) S.npcLead = v end)
+addSlider(pCombat, "NPC 自瞄距离", 20, 400, 200, function(v) S.npcAimDist = v end)
+
+addSection(pCombat, "杀戮光环（Kill Aura）")
+addToggle(pCombat, "开启杀戮光环", false, function(v)
+    S.killAura = v
+    notify(v and ("杀戮光环已开：半径 " .. tostring(S.auraRadius) .. " studs") or "杀戮光环已关", "info", 2.2)
+end)
+addToggle(pCombat, "光环打 NPC / 怪物", true, function(v) S.auraNpc = v end)
+addToggle(pCombat, "光环打玩家", false, function(v) S.auraPlayer = v end)
+addSlider(pCombat, "光环半径 studs", 5, 60, 20, function(v) S.auraRadius = v end)
+addSlider(pCombat, "光环每次伤害", 0, 100, 20, function(v) S.auraDmg = v end)
+addSlider(pCombat, "光环攻击间隔 ms", 50, 500, 150, function(v) S.auraInt = v / 1000 end)
+
 addToggle(pCombat, "瞄准 NPC / 怪物", false, function(v)
     S.aimNpc = v
     notify(v and "自瞄已包含 NPC/怪物" or "自瞄只锁玩家", "info", 2.2)
