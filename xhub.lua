@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v13.4"
-local BUILD   = "2026-11-02 19:40"
+local VERSION = "v13.5"
+local BUILD   = "2026-11-02 20:15"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -3731,18 +3731,19 @@ task.spawn(function()
                 end
                 local nowT = os.clock()
                 local fireGap = S.auraFireInt or 0.25
-                if tool and meleeOK and nowT - (S.lastAuraSwing or 0) >= fireGap then
+                if (tool or S.learnCall) and nowT - (S.lastAuraSwing or 0) >= fireGap then
                     S.lastAuraSwing = nowT
                     pcall(M.measureSwing, m)
                     pcall(function()
                         local cc = M.charOf(lp)
                         local hh = cc and cc:FindFirstChildOfClass("Humanoid")
-                        if hh and tool.Parent ~= cc then hh:EquipTool(tool) end
+                        if hh and tool and tool.Parent ~= cc then hh:EquipTool(tool) end
                     end)
                     if S.learnCall and S.learnCall.remote and S.learnCall.remote.Parent then
                         -- 已学会：只重放这一条真实攻击
+                        pcall(function() if tool then tool:Activate() end end)
                         local okN = M.replayLearned(m, p) or 0
-                        if okN == 0 then pcall(function() tool:Activate() end) end
+                        if okN == 0 and tool then pcall(function() tool:Activate() end) end
                     else
                         -- 还没学会：第一次开光环自动进入学习
                         if not S.learnActive then
@@ -3752,7 +3753,7 @@ task.spawn(function()
                         pcall(function() tool:Activate() end)
                     end
                     -- 工具内远程只打一次不带参调用（缓存，避免每帧遍历）
-                    if not (S._toolCache and S._toolCacheTool == tool) then
+                    if tool and not (S._toolCache and S._toolCacheTool == tool) then
                         local list = {}
                         for _, dd in ipairs(tool:GetDescendants()) do
                             if dd:IsA("RemoteEvent") or dd:IsA("RemoteFunction") then list[#list + 1] = dd end
