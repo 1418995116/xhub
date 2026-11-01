@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v11.2"
-local BUILD   = "2026-11-02 06:55"
+local VERSION = "v11.3"
+local BUILD   = "2026-11-02 07:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -2982,6 +2982,39 @@ local function collectDamageRemotes()
     return list
 end
 
+-- 实测武器伤害：一次挥砍前后对比目标血量
+function M.measureSwing(model)
+    local hum = model and model:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    local hp0 = hum.Health
+    S._swingModel, S._swingHP0 = model, hp0
+    task.delay(0.45, function()
+        if model.Parent and hum.Parent then
+            local hp1 = hum.Health
+            local drop = hp0 - hp1
+            if drop > 0.5 then
+                S.measuredDmg = math.floor(drop)
+                if S.measureDmg then
+                    S.baseDamage = S.measuredDmg
+                    S.measureDmg = false
+                    auraLog(("实测武器伤害 = %d（已写入基础伤害）"):format(S.measuredDmg), Color3.fromRGB(140, 255, 160))
+                    pcall(function() if UIKEYS and UIKEYS.measureBtn then UIKEYS.measureBtn(("武器伤害: %d（实测）"):format(S.measuredDmg)) end end)
+                elseif S.measuredDmg ~= S.lastLoggedDmg then
+                    S.lastLoggedDmg = S.measuredDmg
+                    auraLog(("本次命中 -%d HP"):format(S.measuredDmg), Color3.fromRGB(170, 220, 170))
+                end
+                -- 倍率是否被服务器忽略：连击/倍率开启后伤害没变
+                if (S.dmgMult or 1) > 1 and S.measuredDmg == (S._lastSameDmg or -1) then
+                    if not S._multIgnored then
+                        S._multIgnored = true
+                        auraLog("倍率无效：服务器按自己的数值结算伤害", Color3.fromRGB(255, 170, 120))
+                    end
+                end
+                S._lastSameDmg = S.measuredDmg
+            end
+        end
+    end)
+end
 function M.tryKill(model, part)
     if not (model and model.Parent) then return false end
     local hum = model:FindFirstChildOfClass("Humanoid")
@@ -3240,6 +3273,7 @@ task.spawn(function()
                 if tool and nowT - (S.lastAuraSwing or 0) >= fireGap then
                     S.lastAuraSwing = nowT
                     pcall(function() tool:Activate() end)
+                    pcall(M.measureSwing, m)
                     -- 工具内远程只打一次不带参调用（缓存，避免每帧遍历）
                     if not (S._toolCache and S._toolCacheTool == tool) then
                         local list = {}
@@ -4240,7 +4274,11 @@ end)
 M.addSlider(pCombat, "多砍目标数", 1, 15, 5, function(v) S.auraMax = v end)
 M.addSlider(pCombat, "伤害倍率 x", 1, 20, 2, function(v) S.dmgMult = v end)
 M.addSlider(pCombat, "连击次数（同一目标重复发）", 1, 5, 2, function(v) S.dmgRepeat = v end)
-M.addSlider(pCombat, "武器基础伤害（用于倍率）", 1, 200, 20, function(v) S.baseDamage = v end)
+UIKEYS.measureBtn = M.addButton(pCombat, "武器伤害: 未知（点我自动测量）", function()
+    S.measureDmg = true
+    notify("自动测量已开启：光环打中怪后会自动取真实伤害", "warn", 5)
+    if UIKEYS.measureBtn then UIKEYS.measureBtn("武器伤害: 测量中…（打中怪即可）") end
+end)
 M.addSlider(pCombat, "挥手间隔 ms（越小越快）", 50, 800, 120, function(v) S.auraFireInt = v / 1000 end)
 UIKEYS.setAuraKeyBtn = M.addButton(pCombat, "光环快捷键: " .. S.auraKey.Name .. "（点我改键）", function()
     S.keyCapture = "aura"
