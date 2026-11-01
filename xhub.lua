@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v10.6"
-local BUILD   = "2026-11-02 03:30"
+local VERSION = "v10.7"
+local BUILD   = "2026-11-02 04:05"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.15, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.25, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -1942,7 +1942,9 @@ function M.isEntityModel(m)
 end
 
 -- 目标扫描：专门找"带 Humanoid 的 Model"（不受 scanAll 数量上限影响）
+local _tScan, _tList = 0, nil
 function M.scanTargets()
+    if _tList and os.clock() - _tScan < 0.35 then return _tList end
     local out, seen = {}, {}
     local function add(m)
         if not m or seen[m] then return end
@@ -1968,6 +1970,7 @@ function M.scanTargets()
     for _, pl in ipairs(Players:GetPlayers()) do
         if pl.Character then add(pl.Character) end
     end
+    _tList, _tScan = out, os.clock()
     return out
 end
 function M.scanAll(cap)
@@ -2884,7 +2887,7 @@ local function ensureAuraDraw()
         end
         return false
     end
-    for i = 1, 48 do
+    for i = 1, 24 do
         local ln = Drawing.new("Line")
         ln.Thickness = 2
         ln.Color = Color3.fromRGB(255, 255, 255)
@@ -3041,14 +3044,16 @@ end
 task.spawn(function()
     while RUNNING do
         local dt = task.wait()
+        S._ringFrame = ((S._ringFrame or 0) + 1) % 2
         if S.killAura and (S.auraRing ~= false) then
+            if S._ringFrame == 0 then
             if ensureAuraDraw() then
                 local c = M.charOf(lp)
                 local hrp = c and c:FindFirstChild("HumanoidRootPart")
                 if hrp then
                     local r = S.auraRadius or 20
                     local center = hrp.Position - Vector3.new(0, 2.6, 0)
-                    local n = 48
+                    local n = 24
                     for i = 1, n do
                         local a1 = (i - 1) / n * math.pi * 2
                         local a2 = i / n * math.pi * 2
@@ -3072,6 +3077,7 @@ task.spawn(function()
         else
             hideAuraDraw()
         end
+    end
     end
 end)
 local function auraFindTarget()
@@ -3143,23 +3149,27 @@ task.spawn(function()
                     S.auraNoTool = os.clock()
                     auraLog("没有手持工具 → 光环无法造成伤害", Color3.fromRGB(255, 120, 120))
                 end
-                if S.killAura and S.instantKill and os.clock() - (S.lastKillTry or 0) > 0.5 then
+                if S.killAura and S.instantKill and os.clock() - (S.lastKillTry or 0) > 1.2 then
                     S.lastKillTry = os.clock()
                     pcall(M.tryKill, m, p)
                 end
 
-                if tool then
+                local nowT = os.clock()
+                local fireGap = S.auraFireInt or 0.25
+                if tool and nowT - (S.lastAuraSwing or 0) >= fireGap then
+                    S.lastAuraSwing = nowT
                     pcall(function() tool:Activate() end)
-                    -- 直接打手持物品自带的远程（不同游戏参数不同，全部试一遍）
-                    for _, d in ipairs(tool:GetDescendants()) do
-                        if d:IsA("RemoteEvent") then
-                            pcall(function() d:FireServer() end)
-                            pcall(function() d:FireServer(p) end)
-                            pcall(function() d:FireServer(p.Position) end)
-                            pcall(function() d:FireServer(CFrame.new(p.Position)) end)
-                        elseif d:IsA("RemoteFunction") then
-                            pcall(function() d:InvokeServer(p) end)
+                    -- 工具内远程只打一次不带参调用（缓存，避免每帧遍历）
+                    if not (S._toolCache and S._toolCacheTool == tool) then
+                        local list = {}
+                        for _, dd in ipairs(tool:GetDescendants()) do
+                            if dd:IsA("RemoteEvent") or dd:IsA("RemoteFunction") then list[#list + 1] = dd end
                         end
+                        S._toolCache, S._toolCacheTool = list, tool
+                    end
+                    for _, dd in ipairs(S._toolCache or {}) do
+                        if dd:IsA("RemoteEvent") then pcall(function() dd:FireServer() end)
+                        else pcall(function() dd:InvokeServer() end) end
                     end
                 end
                 if S.auraLastTarget and os.clock() - (S.auraFireLog or 0) > 2 then
