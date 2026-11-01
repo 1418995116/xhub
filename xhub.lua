@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v10.2"
-local BUILD   = "2026-11-02 01:05"
+local VERSION = "v10.3"
+local BUILD   = "2026-11-02 01:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraDebug = false, npcEspDist = 150, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.15, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, auraDebug = false, npcEspDist = 150, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.15, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -2843,6 +2843,40 @@ end)
 auraTarget = nil
 
 -- 独立扫描（不依赖 ESP 开关，NPC/玩家都能找到）
+-- 光环半径可视：白色半透明圆盘，跟着角色
+local auraRing
+task.spawn(function()
+    while RUNNING do
+        local dt = task.wait()
+        if S.killAura and (S.auraRing ~= false) then
+            local c = M.charOf(lp)
+            local hrp = c and c:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                if not (auraRing and auraRing.Parent) then
+                    auraRing = Instance.new("Part")
+                    auraRing.Name = "XHubAuraRing"
+                    auraRing.Shape = Enum.PartType.Cylinder
+                    auraRing.Anchored = true
+                    auraRing.CanCollide = false
+                    auraRing.CanQuery = false
+                    auraRing.CanTouch = false
+                    auraRing.Material = Enum.Material.SmoothPlastic
+                    auraRing.Color = Color3.fromRGB(255, 255, 255)
+                    auraRing.Transparency = 0.82
+                    auraRing.TopSurface = Enum.SurfaceType.Smooth
+                    auraRing.BottomSurface = Enum.SurfaceType.Smooth
+                    auraRing.Parent = workspace
+                end
+                local r = S.auraRadius or 20
+                auraRing.Size = Vector3.new(0.2, r * 2, r * 2)
+                auraRing.CFrame = CFrame.new(hrp.Position - Vector3.new(0, 2.6, 0)) * CFrame.Angles(0, 0, math.rad(90))
+            end
+        elseif auraRing and auraRing.Parent then
+            auraRing:Destroy()
+            auraRing = nil
+        end
+    end
+end)
 local function auraFindTarget()
     local c = M.charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
@@ -2880,17 +2914,22 @@ task.spawn(function()
                 -- ① 先把武器远程的改写窗口打开，把射击方向改成目标
                 if S.auraRemote then fireUntil = os.clock() + 0.3 end
 
-                -- ② 本地直伤（仅对客户端拥有的 NPC 生效）
-                local hum = m:FindFirstChildOfClass("Humanoid")
-                if hum and (S.auraDmg or 0) > 0 then
-                    pcall(function() hum:TakeDamage(S.auraDmg) end)
-                end
-
                 -- ③ 真正走游戏判定的攻击：激活手里工具
                 local c = M.charOf(lp)
                 local tool = c and c:FindFirstChildOfClass("Tool")
                 if tool then
                     pcall(function() tool:Activate() end)
+                    -- 直接打手持物品自带的远程（不同游戏参数不同，全部试一遍）
+                    for _, d in ipairs(tool:GetDescendants()) do
+                        if d:IsA("RemoteEvent") then
+                            pcall(function() d:FireServer() end)
+                            pcall(function() d:FireServer(p) end)
+                            pcall(function() d:FireServer(p.Position) end)
+                            pcall(function() d:FireServer(CFrame.new(p.Position)) end)
+                        elseif d:IsA("RemoteFunction") then
+                            pcall(function() d:InvokeServer(p) end)
+                        end
+                    end
                 end
                 if S.auraDebug then
                     print(("[aura] target=%s d=%.0f tool=%s remoteAim=%s")
@@ -3834,7 +3873,7 @@ end)
 M.addToggle(pCombat, "光环打 NPC / 怪物", true, function(v) S.auraNpc = v end)
 M.addToggle(pCombat, "光环打玩家", false, function(v) S.auraPlayer = v end)
 M.addSlider(pCombat, "光环半径 studs", 5, 60, 20, function(v) S.auraRadius = v end)
-M.addSlider(pCombat, "光环每次伤害", 0, 100, 20, function(v) S.auraDmg = v end)
+M.addToggle(pCombat, "显示光环范围（白色圆圈）", true, function(v) S.auraRing = v end)
 M.addSlider(pCombat, "光环攻击间隔 ms", 50, 500, 150, function(v) S.auraInt = v / 1000 end)
 M.addToggle(pCombat, "光环调试信息（F9）", false, function(v)
     S.auraDebug = v
@@ -3850,8 +3889,6 @@ M.addToggle(pCombat, "瞄准 NPC / 怪物", false, function(v)
     notify(v and "自瞄已包含 NPC/怪物" or "自瞄只锁玩家", "info", 2.2)
 end)
 M.addToggle(pCombat, "隔墙忽略", true, function(v) S.aimWall = v end)
-M.addToggle(pCombat, "显示 FOV", true, function(v) S.showFov = v end)
-M.addSlider(pCombat, "平滑", 1, 30, S.aimSmooth, function(v) S.aimSmooth = v end)
 M.addSlider(pCombat, "FOV 像素", 20, 400, S.aimFov, function(v) S.aimFov = v end)
 local setPartBtn = M.addButton(pCombat, "部位: Head", function()
     local list = { "Head", "Root", "Torso" }
