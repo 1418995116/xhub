@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v8.8"
-local BUILD   = "2026-11-01 18:15"
+local VERSION = "v8.9"
+local BUILD   = "2026-11-01 18:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -45,7 +45,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -2131,6 +2131,7 @@ local function autoPrompts(radius)
             if pos and not blocked and (pos - hrp.Position).Magnitude <= radius
                and (now - (promptCool[p] or 0)) > 0.25 then
                 promptCool[p] = now
+                S.itemPoke = now
                 n = n + 1
                 if S.instantPrompt then
                     pcall(function() p.HoldDuration = 0 end)
@@ -2282,7 +2283,8 @@ end
 
 task.spawn(function()
     while true do
-        task.wait(S.fastScan and 1.5 or 0.35)
+        local boost = (os.clock() - (S.itemPoke or 0)) < 3
+        task.wait(S.fastScan and (boost and 0.4 or 1.5) or 0.35)
         if S.itemEsp then
             local n = 0
             for _, v in ipairs(scanAll(4000)) do
@@ -2569,16 +2571,7 @@ end
 
 local function hideSmart(name)
     if hiding then return end
-    if os.clock() < (S.lastHide or 0) + 15 then
-        if os.clock() - (S.lastHideNotify or 0) > 20 then
-            S.lastHideNotify = os.clock()
-            notify(("躲避冷却中（距上次 %.0f 秒），%s 已到 %.0fm 但未再次触发"):format(os.clock() - (S.lastHide or 0), tostring(name), 0), "info", 3)
-        end
-        return
-    end
-    S.lastHide = os.clock()
     hiding = true
-    notify(("触发躲避: %s"):format(tostring(name)), "ok", 2)
 
     if preferSky(name) then
         skyHide(name)
@@ -2749,34 +2742,85 @@ task.spawn(function()
 end)
 
 --==================== 躲避触发扫描（不依赖 ESP，独立按名字找） ====================
-local TRIGGER_STRICT = { "rushmoving", "rush", "ambush", "ambushmoving", "seekmovingnewclone", "seek", "glitch" }
-local TRIGGER_ALL = { "rushmoving", "rush", "ambush", "ambushmoving",
-                      "seek", "glitch", "glitchcube", "figure", "dupe" }
+-- TIER1: deadly mobs (always win, own 8s cooldown)
+local TIER1 = { "rushmoving", "rush", "ambushmoving", "ambush" }
+-- TIER2: chasers / noise (opt-in, 15s cooldown)
+local TIER2 = { "seekmovingnewclone", "seek", "glitchcube", "glitch", "figure", "dupe" }
 
 nearestTrigger = function()
     local c = charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil end
-    local list = S.hideOnlyRush and TRIGGER_STRICT or TRIGGER_ALL
-    local bestD, bestN = math.huge, nil
-    for _, m in ipairs(scanAll(3000)) do
+
+    local t1D, t1N = math.huge, nil
+    local t2D, t2N = math.huge, nil
+
+    for _, m in ipairs(scanAll(4000)) do
         if m:IsA("Model") then
             local nm = m.Name:lower()
-            local fake = nm:find("cube", 1, true) or nm:find("fake", 1, true) or nm:find("dupe", 1, true) or nm:find("clone", 1, true) and not nm:find("seek", 1, true)
-            if not fake then
-            for _, k in ipairs(list) do
-                if nm:find(k, 1, true) then
-                    local d = distTo(m)
-                    if d and d < bestD then bestD, bestN = d, m.Name end
-                    break
+            if not nm:find("fake", 1, true) then
+                local m1, m2 = false, false
+                for _, k in ipairs(TIER1) do
+                    if nm:find(k, 1, true) then m1 = true break end
                 end
-            end
+                if not m1 and S.hideTier2 then
+                    for _, k in ipairs(TIER2) do
+                        if nm:find(k, 1, true) then m2 = true break end
+                    end
+                end
+                if m1 or m2 then
+                    local d = distTo(m)
+                    if d then
+                        if m1 and d < t1D then t1D, t1N = d, m.Name end
+                        if m2 and d < t2D then t2D, t2N = d, m.Name end
+                    end
+                end
             end
         end
     end
-    return bestN, bestD
+
+    if t1N then return t1N, t1D, 1 end
+    if t2N then return t2N, t2D, 2 end
+    return nil
 end
 
+task.spawn(function()
+    local warned = 0
+    while true do
+        task.wait(0.35)
+        local ok, err = pcall(function()
+            local name, d, tier = nearestTrigger()
+            if not name then return end
+            if d > S.hideDist then return end
+
+            if not S.autoHide then
+                if os.clock() - warned > 15 then
+                    warned = os.clock()
+                    notify(("检测到 %s %.0fm（未开启自动躲避）"):format(name, d), "warn", 3.5)
+                end
+                return
+            end
+
+            local cd = (tier == 1) and 8 or 15
+            local last = (tier == 1) and (S.lastHideT1 or 0) or (S.lastHideT2 or 0)
+            if os.clock() - last < cd then
+                if os.clock() - (S.cdWarn or 0) > 12 then
+                    S.cdWarn = os.clock()
+                    notify(("%s %.0fm：冷却中（剩 %.0fs）"):format(name, d, cd - (os.clock() - last)), "info", 2.5)
+                end
+                return
+            end
+
+            if tier == 1 then S.lastHideT1 = os.clock() else S.lastHideT2 = os.clock() end
+            notify(("触发躲避[T%d]: %s %.0fm"):format(tier, name, d), "ok", 2)
+            hideSmart(name)
+        end)
+        if not ok then
+            notify("躲避循环异常: " .. tostring(err), "err", 4)
+            task.wait(2)
+        end
+    end
+end)
 --==================== A* 网格寻路（类似 Baritone 的思路） ====================
 local NAV = { running = false, gen = 0, cell = 3, radius = 16 }
 local navHud
@@ -3518,7 +3562,10 @@ setHideModeBtn = addButton(pAuto, "躲避方式: 高空传送", function()
     notify("躲避方式 = " .. S.hideMode, "info", 1.6)
 end)
 addSlider(pAuto, "触发距离", 30, 200, S.hideDist, function(v) S.hideDist = v end)
-addToggle(pAuto, "只对 Rush/Ambush/Seek 触发", true, function(v) S.hideOnlyRush = v end)
+addToggle(pAuto, "额外躲避 Seek/Glitch 等（二级威胁）", false, function(v)
+    S.hideTier2 = v
+    notify(v and "二级威胁（Seek/Glitch/Figure/Dupe）也会触发躲避" or "只有 Rush/Ambush 会触发躲避", "info", 3)
+end)
 addSlider(pAuto, "高空高度 studs", 50, 800, S.skyHeight, function(v) S.skyHeight = v end)
 addSlider(pAuto, "高空停留 秒", 3, 20, S.skyTime, function(v) S.skyTime = v end)
 local setPreferBtn
