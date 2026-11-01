@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v11.0"
-local BUILD   = "2026-11-02 05:45"
+local VERSION = "v11.1"
+local BUILD   = "2026-11-02 06:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.12, auraKey = Enum.KeyCode.G, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.12, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -3135,6 +3135,33 @@ task.spawn(function()
     end
     end
 end)
+-- 多目标查找：范围内按距离排序（一刀多砍用）
+local function auraFindTargets(maxN)
+    maxN = maxN or 5
+    local c = M.charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return {} end
+    local list = {}
+    for _, m in ipairs(M.scanTargets()) do
+        if m ~= c then
+            local hum = m:FindFirstChildOfClass("Humanoid")
+            local root = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+            if hum and root and hum.Health > 0 then
+                local isP = Players:GetPlayerFromCharacter(m) ~= nil
+                local allowed = (isP and S.auraPlayer) or ((not isP) and S.auraNpc)
+                if allowed then
+                    local d = (root.Position - hrp.Position).Magnitude
+                    if d <= S.auraRadius then
+                        list[#list + 1] = { m = m, p = root, d = d }
+                    end
+                end
+            end
+        end
+    end
+    table.sort(list, function(a, b) return a.d < b.d end)
+    while #list > maxN do table.remove(list) end
+    return list
+end
 local function auraFindTarget()
     local c = M.charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
@@ -3164,7 +3191,9 @@ task.spawn(function()
         task.wait(S.auraInt or 0.15)
         if S.killAura then
             pcall(function()
-                local p, m, d = auraFindTarget()
+                local targets = auraFindTargets(S.auraMulti and (S.auraMax or 5) or 1)
+                local p, m, d = nil, nil, nil
+                if targets[1] then p, m, d = targets[1].p, targets[1].m, targets[1].d end
                 if not p then
                     auraPart = nil
                     auraTarget = nil
@@ -3219,10 +3248,22 @@ task.spawn(function()
                         end
                         S._toolCache, S._toolCacheTool = list, tool
                     end
-                    for _, dd in ipairs(S._toolCache or {}) do
-                        if dd:IsA("RemoteEvent") then pcall(function() dd:FireServer() end)
-                        else pcall(function() dd:InvokeServer() end) end
+                    local hitList = S.auraMulti and targets or { { m = m, p = p, d = d } }
+                    for _, tgt in ipairs(hitList) do
+                        if tgt.p and tgt.p.Parent then
+                            for _, dd in ipairs(S._toolCache or {}) do
+                                if dd:IsA("RemoteEvent") then
+                                    pcall(function() dd:FireServer() end)
+                                    pcall(function() dd:FireServer(tgt.m) end)
+                                    pcall(function() dd:FireServer(tgt.p) end)
+                                    pcall(function() dd:FireServer(tgt.p.Position) end)
+                                else
+                                    pcall(function() dd:InvokeServer(tgt.m) end)
+                                end
+                            end
+                        end
                     end
+                    if S.auraMulti then auraLog(("一刀多砍: %d 个目标"):format(#hitList), Color3.fromRGB(255, 220, 140)) end
                 end
                 if S.auraLastTarget and os.clock() - (S.auraFireLog or 0) > 2 then
                     S.auraFireLog = os.clock()
@@ -4185,6 +4226,11 @@ M.addButton(pCombat, "对当前光环目标尝试秒杀", function()
     auraLog(("手动秒杀: %s"):format(m.Name), Color3.fromRGB(255, 220, 120))
     pcall(M.tryKill, m, p)
 end)
+M.addToggle(pCombat, "一刀多砍（同一次挥手打多个目标）", true, function(v)
+    S.auraMulti = v
+    notify(v and "一刀多砍已开：每次挥手打范围内全部目标" or "一刀多砍已关：只打最近的一个", "info", 2.6)
+end)
+M.addSlider(pCombat, "多砍目标数", 1, 15, 5, function(v) S.auraMax = v end)
 M.addSlider(pCombat, "挥手间隔 ms（越小越快）", 50, 800, 120, function(v) S.auraFireInt = v / 1000 end)
 UIKEYS.setAuraKeyBtn = M.addButton(pCombat, "光环快捷键: " .. S.auraKey.Name .. "（点我改键）", function()
     S.keyCapture = "aura"
