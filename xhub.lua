@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v11.7"
-local BUILD   = "2026-11-02 09:50"
+local VERSION = "v11.8"
+local BUILD   = "2026-11-02 10:25"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.12, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = false, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = false, healthLock = false, lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -2957,6 +2957,46 @@ local function hideAuraDraw()
     for _, ln in ipairs(auraDraw.lines) do pcall(function() ln.Visible = false end) end
 end
 
+--==== 锁血 / 无敌（客户端侧）====
+task.spawn(function()
+    while RUNNING do
+        task.wait(0.1)
+        if S.healthLock then
+            local c = M.charOf(lp)
+            local hum = c and c:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                pcall(function()
+                    if S.lockMax and hum.MaxHealth > 0 then hum.Health = hum.MaxHealth
+                    else hum.Health = math.max(hum.Health, S.lockHP or 100) end
+                end)
+            end
+        end
+    end
+end)
+
+-- 死亡拦截：血量归零的瞬间立刻拉回（仅客户端）
+task.spawn(function()
+    while RUNNING do
+        task.wait(0.2)
+        if S.healthLock then
+            local c = M.charOf(lp)
+            local hum = c and c:FindFirstChildOfClass("Humanoid")
+            if hum then
+                pcall(function()
+                    if not (S._hpConn and S._hpConnHum == hum) then
+                        if S._hpConn then pcall(function() S._hpConn:Disconnect() end) end
+                        S._hpConn = hum.HealthChanged:Connect(function(hp)
+                            if S.healthLock and hp <= (S.lockKeep or 20) then
+                                pcall(function() hum.Health = hum.MaxHealth end)
+                            end
+                        end)
+                        S._hpConnHum = hum
+                    end
+                end)
+            end
+        end
+    end
+end)
 --==== 秒杀 NPC（多策略尝试 + 生效校验）====
 local DMG_REMOTE_KW = { "hit", "damage", "attack", "slash", "kill", "hurt", "swing", "melee", "shoot", "fire", "take" }
 local dmgRemotesCache = nil
@@ -3410,6 +3450,11 @@ task.spawn(function()
                 if tool and meleeOK and nowT - (S.lastAuraSwing or 0) >= fireGap then
                     S.lastAuraSwing = nowT
                     pcall(M.measureSwing, m)
+                    pcall(function()
+                        local cc = M.charOf(lp)
+                        local hh = cc and cc:FindFirstChildOfClass("Humanoid")
+                        if hh and tool.Parent ~= cc then hh:EquipTool(tool) end
+                    end)
                     pcall(function() tool:Activate() end)
                     -- 工具内远程只打一次不带参调用（缓存，避免每帧遍历）
                     if not (S._toolCache and S._toolCacheTool == tool) then
@@ -4416,7 +4461,7 @@ UIKEYS.measureBtn = M.addButton(pCombat, "武器伤害: 未知（点我自动测
     notify("自动测量已开启：光环打中怪后会自动取真实伤害", "warn", 5)
     if UIKEYS.measureBtn then UIKEYS.measureBtn("武器伤害: 测量中…（打中怪即可）") end
 end)
-M.addSlider(pCombat, "挥手间隔 ms（越小越快）", 50, 800, 120, function(v) S.auraFireInt = v / 1000 end)
+M.addSlider(pCombat, "挥手间隔 ms（近战建议 300-500）", 50, 900, 350, function(v) S.auraFireInt = v / 1000 end)
 UIKEYS.setAuraKeyBtn = M.addButton(pCombat, "光环快捷键: " .. S.auraKey.Name .. "（点我改键）", function()
     S.keyCapture = "aura"
     notify("按一个新键作为光环开关（Esc 取消）", "warn", 4)
@@ -4620,6 +4665,12 @@ M.addButton(pGuard, "标定该服位移上限（自动设限速器）", function
             :format(moved, speed, snaps, allowed), "ok", 6)
     end)
 end)
+M.addToggle(pGuard, "锁血 / 无敌（客户端，每 0.1 秒回满）", false, function(v)
+    S.healthLock = v
+    if not v and S._hpConn then pcall(function() S._hpConn:Disconnect() end); S._hpConn = nil end
+    notify(v and "锁血已开：客户端血量锁满（服务器判死仍可能生效）" or "锁血已关", v and "warn" or "info", 3.5)
+end)
+M.addSlider(pGuard, "锁血低于多少立刻拉满", 1, 100, 20, function(v) S.lockKeep = v end)
 M.addToggle(pGuard, "位移限速器（0.6s 内最多走 12 studs）", false, function(v)
     S.govEnabled = v
     notify(v and "限速器开启：任何速度类功能都会被压在服务端容忍内" or "限速器已关闭（飞行/加速不再被限制）",
