@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v9.9"
-local BUILD   = "2026-11-01 23:35"
+local VERSION = "v10.0"
+local BUILD   = "2026-11-02 00:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -24,6 +24,7 @@ local CONFIG = {
 }
 
 local M = {}                  -- namespace (keeps register count under Luau limit)
+local UIKEYS = {}             -- UI refs used outside the protected page build
 local RUNNING = true          -- shutdown flag
 local shutdownXHub            -- forward decl (UI button references it)
 _G.XHubKill = function() end   -- 占位，稍后赋值
@@ -3599,6 +3600,10 @@ task.spawn(function()
 end)
 
 --==================== 页面 ====================
+local BUILD_UI_ERROR = nil
+local function BUILD_UI()
+    local _ok, _err = pcall(function()
+--[[ protected page build start ]]
 local pMain, pVisual = M.addPage("主要"), M.addPage("视觉")
 local pCombat, pAuto = M.addPage("战斗"), M.addPage("自动")
 local pGuard = M.addPage("防护")
@@ -3647,9 +3652,9 @@ M.addToggle(pMain, "背景模糊 (BlurEffect)", false, function(v)
     if blurFx then blurFx.Size = v and 14 or 0; blurFx.Enabled = v and main.Visible end
 end)
 M.addSection(pMain, "HUB")
-local setKeyBtn = M.addButton(pMain, "菜单键: " .. CONFIG.MenuKeys[1].Name .. " (点我改键)", function()
+UIKEYS.setKeyBtn = M.addButton(pMain, "菜单键: " .. CONFIG.MenuKeys[1].Name .. " (点我改键)", function()
     captureMode = true
-    setKeyBtn("菜单键: 请按键…（Esc 取消）")
+    UIKEYS.setKeyBtn("菜单键: 请按键…（Esc 取消）")
 end)
 M.addButton(pMain, "隐藏菜单", function() setVisible(false) end)
 
@@ -4189,6 +4194,28 @@ local function isMenuKey(code)
     for _, k in ipairs(CONFIG.MenuKeys) do if k == code then return true end end
     return false
 end
+    end)
+    if not _ok then
+        BUILD_UI_ERROR = tostring(_err)
+        print("[XHub][ui] 页面构建失败: " .. tostring(_err))
+    end
+end
+pcall(BUILD_UI)
+if BUILD_UI_ERROR then
+    pcall(function()
+        local t = Instance.new("TextLabel")
+        t.Size = UDim2.new(0, 520, 0, 60)
+        t.Position = UDim2.new(0.5, -260, 0, 90)
+        t.BackgroundColor3 = Color3.fromRGB(60, 18, 18)
+        t.BackgroundTransparency = 0.15
+        t.TextColor3 = Color3.fromRGB(255, 190, 190)
+        t.Font = Enum.Font.Code
+        t.TextSize = 12
+        t.TextWrapped = true
+        t.Text = "UI 构建失败（把这段发给我）: " .. BUILD_UI_ERROR
+        t.Parent = gui
+    end)
+end
 UIS.InputBegan:Connect(function(i, gp) if not RUNNING then return end
     if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
     if UIS:GetFocusedTextBox() then captureMode = false; return end
@@ -4198,7 +4225,7 @@ UIS.InputBegan:Connect(function(i, gp) if not RUNNING then return end
             notify("改键已取消", "warn", 2)
         else
             CONFIG.MenuKeys = { i.KeyCode }
-            setKeyBtn("菜单键: " .. i.KeyCode.Name .. " (点我改键)")
+            if UIKEYS.setKeyBtn then UIKEYS.setKeyBtn("菜单键: " .. i.KeyCode.Name .. " (点我改键)") end
             notify("菜单键 = " .. i.KeyCode.Name, "ok", 2)
         end
         return
