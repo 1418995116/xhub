@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v10.7"
-local BUILD   = "2026-11-02 04:05"
+local VERSION = "v10.8"
+local BUILD   = "2026-11-02 04:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -953,6 +953,15 @@ function M.installRemoteAim()
         if not RUNNING then return old(self, ...) end
         local m = getnamecallmethod()
         local inWindow = os.clock() < fireUntil
+        if (m == "FireServer" or m == "InvokeServer") and S.dmgRecord then
+            local n0 = select("#", ...)
+            local a0 = { ... }
+            S.dmgLast = { remote = self, args = a0, n = n0, name = tostring(self.Name), at = os.clock() }
+            S.dmgRecord = false
+            pcall(function() print(("[dmgcap] %s (%d args)  %s"):format(tostring(self.Name), n0, M.argSig(a0, n0))) end)
+            pcall(function() auraLog(("捕获调用: %s (%d 参)"):format(tostring(self.Name), n0), Color3.fromRGB(140, 200, 255)) end)
+        end
+
         if (m == "FireServer" or m == "InvokeServer") and inWindow and (S.remoteAim or S.remoteProbe) then
             local n = select("#", ...)          -- 关键：保留 nil 参数，不能被 # 截断
             local args = { ... }
@@ -1942,35 +1951,45 @@ function M.isEntityModel(m)
 end
 
 -- 目标扫描：专门找"带 Humanoid 的 Model"（不受 scanAll 数量上限影响）
-local _tScan, _tList = 0, nil
-function M.scanTargets()
-    if _tList and os.clock() - _tScan < 0.35 then return _tList end
-    local out, seen = {}, {}
-    local function add(m)
-        if not m or seen[m] then return end
-        if m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") then
-            seen[m] = true
-            out[#out + 1] = m
-        end
-    end
-    local function walk(inst, depth)
-        if depth > 3 then return end
-        for _, c in ipairs(inst:GetChildren()) do
-            if c:IsA("Model") then add(c) end
-            if c:IsA("Folder") or c:IsA("Model") or c:IsA("Workspace") then
-                walk(c, depth + 1)
-            end
-        end
-    end
-    pcall(walk, workspace, 0)
+-- 目标索引：事件驱动维护，避免周期性全树遍历
+local targetIndex, targetIndexT = {}, 0
+do
     pcall(function()
-        local cr = workspace:FindFirstChild("CurrentRooms")
-        if cr then walk(cr, 0) end
+        workspace.DescendantAdded:Connect(function(d)
+            if d:IsA("Model") and d:FindFirstChildOfClass("Humanoid") then targetIndex[d] = true end
+        end)
+        workspace.DescendantRemoving:Connect(function(d)
+            targetIndex[d] = nil
+        end)
     end)
-    for _, pl in ipairs(Players:GetPlayers()) do
-        if pl.Character then add(pl.Character) end
+end
+
+function M.scanTargets()
+    local now = os.clock()
+    -- 每 6 秒做一次补扫（防止事件漏掉的模型）
+    if now - targetIndexT > 6 then
+        targetIndexT = now
+        for m in pairs(targetIndex) do
+            if not m.Parent then targetIndex[m] = nil end
+        end
+        pcall(function()
+            local cr = workspace:FindFirstChild("CurrentRooms")
+            local roots = { workspace }
+            if cr then roots[#roots + 1] = cr end
+            for _, root in ipairs(roots) do
+                for _, c in ipairs(root:GetChildren()) do
+                    if c:IsA("Model") and c:FindFirstChildOfClass("Humanoid") then targetIndex[c] = true end
+                end
+            end
+        end)
     end
-    _tList, _tScan = out, os.clock()
+    local out = {}
+    for m in pairs(targetIndex) do
+        if m.Parent then out[#out + 1] = m end
+    end
+    for _, pl in ipairs(Players:GetPlayers()) do
+        if pl.Character and pl.Character.Parent then out[#out + 1] = pl.Character end
+    end
     return out
 end
 function M.scanAll(cap)
@@ -2887,7 +2906,7 @@ local function ensureAuraDraw()
         end
         return false
     end
-    for i = 1, 24 do
+    for i = 1, 12 do
         local ln = Drawing.new("Line")
         ln.Thickness = 2
         ln.Color = Color3.fromRGB(255, 255, 255)
@@ -3044,7 +3063,7 @@ end
 task.spawn(function()
     while RUNNING do
         local dt = task.wait()
-        S._ringFrame = ((S._ringFrame or 0) + 1) % 2
+        S._ringFrame = ((S._ringFrame or 0) + 1) % 3
         if S.killAura and (S.auraRing ~= false) then
             if S._ringFrame == 0 then
             if ensureAuraDraw() then
@@ -3053,7 +3072,7 @@ task.spawn(function()
                 if hrp then
                     local r = S.auraRadius or 20
                     local center = hrp.Position - Vector3.new(0, 2.6, 0)
-                    local n = 24
+                    local n = 12
                     for i = 1, n do
                         local a1 = (i - 1) / n * math.pi * 2
                         local a2 = i / n * math.pi * 2
@@ -3812,8 +3831,8 @@ task.spawn(function()
             local refresh = (npcTick % 3 == 0)
             local known = 0
             for mm in pairs(npcStore) do known = known + 1 end
-            for _, m in ipairs(M.scanAll(3000)) do
-                if m:IsA("Model") and not Players:GetPlayerFromCharacter(m) then
+            for _, m in ipairs(M.scanTargets()) do
+                if not Players:GetPlayerFromCharacter(m) then
                     n = n + 1
                     if n > 3000 then break end
                     local o = npcStore[m]
