@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v9.2"
-local BUILD   = "2026-11-01 19:55"
+local VERSION = "v9.3"
+local BUILD   = "2026-11-01 20:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -2898,11 +2898,16 @@ task.spawn(function()
                 return
             end
 
-            if tier == 1 and hiding and (os.clock() - (S.lastHideT1 or 0)) > 3 then
-                -- Rush/Ambush 到来时，即使之前在躲别的怪，也立刻重新升空
-                hiding = false
+            if tier == 1 and hiding then
+                -- 已经在空中：不落地，直接把停留时间往后延
+                if skyHold then
+                    skyHold.exp = math.max(skyHold.exp, os.clock()) + 2.5
+                    if os.clock() - (S.extendWarn or 0) > 2 then
+                        S.extendWarn = os.clock()
+                        notify(("T1 到来，延长升空 +2.5s（%s %.0fm）"):format(name, d), "warn", 2)
+                    end
+                end
                 S.lastHideT1 = os.clock()
-                notify(("T1 抢占：%s %.0fm 优先躲避"):format(name, d), "warn", 2.5)
             end
             if tier == 1 then S.lastHideT1 = os.clock() else S.lastHideT2 = os.clock() end
             notify(("触发躲避[T%d]: %s %.0fm"):format(tier, name, d), "ok", 2)
