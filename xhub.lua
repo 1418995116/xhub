@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v12.2"
-local BUILD   = "2026-11-02 12:45"
+local VERSION = "v12.3"
+local BUILD   = "2026-11-02 13:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -953,6 +953,15 @@ function M.installRemoteAim()
         if not RUNNING then return old(self, ...) end
         local m = getnamecallmethod()
         local inWindow = os.clock() < fireUntil
+        if (m == "FireServer" or m == "InvokeServer") and S.learnActive then
+            local nL = select("#", ...)
+            local aL = { ... }
+            S.learned = S.learned or {}
+            table.insert(S.learned, { remote = self, args = aL, n = nL, name = tostring(self.Name), at = os.clock() })
+            while #S.learned > 30 do table.remove(S.learned, 1) end
+            pcall(function() auraLog(("学到调用: %s (%d 参)  %s"):format(tostring(self.Name), nL, M.argSig(aL, nL)), Color3.fromRGB(150, 210, 255)) end)
+        end
+
         if (m == "FireServer" or m == "InvokeServer") and S.dmgRecord then
             local n0 = select("#", ...)
             local a0 = { ... }
@@ -3187,6 +3196,46 @@ function M.measureSwing(model)
         end
     end)
 end
+-- 重放"学习到的一次攻击"，把目标相关的参数换成当前光环目标
+function M.replayLearned(model, part)
+    local list = S.learned
+    if not list or #list == 0 then
+        auraLog("还没有学到调用：先点「学习攻击」再手动砍一刀", Color3.fromRGB(255, 160, 120))
+        return
+    end
+    local hum = model and model:FindFirstChildOfClass("Humanoid")
+    local fired = 0
+    for _, rec in ipairs(list) do
+        if rec.remote and rec.remote.Parent then
+            local out = {}
+            for i = 1, rec.n do
+                local v = rec.args[i]
+                local tv = typeof(v)
+                if tv == "Instance" then
+                    if v:IsA("Humanoid") then out[i] = hum or v
+                    elseif v:IsA("BasePart") then out[i] = part or v
+                    elseif v:IsA("Model") then out[i] = model or v
+                    else out[i] = v end
+                elseif tv == "CFrame" then
+                    out[i] = part and CFrame.new(part.Position) or v
+                elseif tv == "Vector3" then
+                    out[i] = part and part.Position or v
+                else
+                    out[i] = v
+                end
+            end
+            pcall(function()
+                if rec.remote:IsA("RemoteEvent") or rec.remote:IsA("UnreliableRemoteEvent") then
+                    rec.remote:FireServer(table.unpack(out, 1, rec.n))
+                else
+                    rec.remote:InvokeServer(table.unpack(out, 1, rec.n))
+                end
+            end)
+            fired = fired + 1
+        end
+    end
+    auraLog(("重放完成：%d 个调用 → %s"):format(fired, model and model.Name or "?"), Color3.fromRGB(150, 220, 150))
+end
 function M.tryKill(model, part)
     if not (model and model.Parent) then return false end
     local hum = model:FindFirstChildOfClass("Humanoid")
@@ -4552,8 +4601,6 @@ M.addToggle(pCombat, "一刀多砍（同一次挥手打多个目标）", true, f
     notify(v and "一刀多砍已开：每次挥手打范围内全部目标" or "一刀多砍已关：只打最近的一个", "info", 2.6)
 end)
 M.addSlider(pCombat, "多砍目标数", 1, 15, 5, function(v) S.auraMax = v end)
-M.addSlider(pCombat, "伤害倍率 x", 1, 20, 2, function(v) S.dmgMult = v end)
-M.addSlider(pCombat, "连击次数（同一目标重复发）", 1, 5, 2, function(v) S.dmgRepeat = v end)
 UIKEYS.measureBtn = M.addButton(pCombat, "武器伤害: 未知（点我自动测量）", function()
     S.measureDmg = true
     notify("自动测量已开启：光环打中怪后会自动取真实伤害", "warn", 5)
@@ -4563,6 +4610,20 @@ M.addSlider(pCombat, "挥手间隔 ms（近战建议 300-500）", 50, 900, 350, 
 UIKEYS.setAuraKeyBtn = M.addButton(pCombat, "光环快捷键: " .. S.auraKey.Name .. "（点我改键）", function()
     S.keyCapture = "aura"
     notify("按一个新键作为光环开关（Esc 取消）", "warn", 4)
+end)
+M.addButton(pCombat, "① 学习攻击（点我开始，然后手动砍一刀）", function()
+    S.learned = {}
+    S.learnActive = true
+    auraLog("学习模式已开：请手动砍目标一刀（10 秒后自动结束）", Color3.fromRGB(150, 210, 255))
+    task.delay(10, function()
+        S.learnActive = false
+        auraLog(("学习结束：共记录 %d 个调用"):format(#(S.learned or {})), Color3.fromRGB(150, 210, 255))
+    end)
+end)
+M.addButton(pCombat, "② 重放学习到的攻击（打当前光环目标）", function()
+    local p, m = auraPart, S.auraLastTarget
+    if not (p and m) then notify("先让光环锁定一个目标", "err", 3) return end
+    pcall(M.replayLearned, m, p)
 end)
 M.addSlider(pCombat, "光环半径 studs", 5, 60, 20, function(v) S.auraRadius = v end)
 M.addSlider(pCombat, "近战有效距离 studs（超出不挥）", 2, 30, 12, function(v) S.meleeRange = v end)
@@ -4778,7 +4839,6 @@ M.addToggle(pGuard, "NPC 碰撞箱放大（本地探针，方便命中）", fals
     S.npcHitbox = v
     notify(v and "碰撞箱已放大：客户端射线/鼠标判定更容易命中" or "碰撞箱已恢复", "info", 3.2)
 end)
-M.addSlider(pGuard, "碰撞箱放大倍数", 1, 4, 2, function(v) S.hitboxMult = v end)
 M.addToggle(pGuard, "NPC 碰撞关闭（可穿过 NPC / 部分障碍）", false, function(v)
     S.npcNoCollide = v
     notify(v and "已关闭 NPC 碰撞：本地可穿过它们" or "NPC 碰撞已恢复", "info", 3)
