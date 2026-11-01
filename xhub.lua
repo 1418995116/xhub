@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v13.1"
-local BUILD   = "2026-11-02 17:55"
+local VERSION = "v13.2"
+local BUILD   = "2026-11-02 18:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -1996,76 +1996,37 @@ function M.isEntityModel(m)
 end
 
 -- 目标扫描：专门找"带 Humanoid 的 Model"（不受 scanAll 数量上限影响）
--- 目标索引：事件驱动 + 深扫补全（每 6 秒一次，深度 3）
-local targetIndex, targetIndexT = {}, 0
-do
-    pcall(function()
-        workspace.DescendantAdded:Connect(function(d)
-            if d:IsA("Model") and d:FindFirstChildOfClass("Humanoid") then targetIndex[d] = true end
-            -- Humanoid 常在模型加入后才创建：命中 Humanoid 就把父模型收进索引
-            if d:IsA("Humanoid") and d.Parent and d.Parent:IsA("Model") then targetIndex[d.Parent] = true end
-        end)
-        workspace.DescendantRemoving:Connect(function(d)
-            targetIndex[d] = nil
-        end)
-    end)
-end
-
-local function deepIndex()
-    local seen = 0
-    local function walk(inst, depth)
-        if depth > 6 or seen > 20000 then return end
-        for _, c in ipairs(inst:GetChildren()) do
-            seen = seen + 1
-            if c:IsA("Model") and c:FindFirstChildOfClass("Humanoid") then targetIndex[c] = true end
-            if c:IsA("Model") or c:IsA("Folder") then walk(c, depth + 1) end
-        end
-    end
-    pcall(walk, workspace, 0)
-    pcall(function()
-        local cr = workspace:FindFirstChild("CurrentRooms")
-        if cr then
-            for _, c in ipairs(cr:GetChildren()) do
-                if c:IsA("Model") and c:FindFirstChildOfClass("Humanoid") then targetIndex[c] = true end
-                if c:IsA("Model") or c:IsA("Folder") then walk(c, 1) end
-            end
-        end
-    end)
-end
+-- 目标扫描：回到"直接全量找 Humanoid"（这是之前能正常绘制/锁定的实现），0.6 秒缓存
+local _tgT, _tgList = 0, nil
 
 function M.scanTargets()
     local now = os.clock()
-    -- 兜底：索引为空时用 GetDescendants 直接抓 Humanoid
-    if next(targetIndex) == nil and now - (S._fullScan or 0) > 6 then
-        S._fullScan = now
-        pcall(function()
-            local cnt = 0
-            for _, d in ipairs(workspace:GetDescendants()) do
-                cnt = cnt + 1
-                if cnt > 60000 then break end
-                if d:IsA("Humanoid") and d.Parent and d.Parent:IsA("Model") then targetIndex[d.Parent] = true end
+    if _tgList and (now - _tgT) < 0.6 then return _tgList end
+    _tgT = now
+    local out, seen, n = {}, {}, 0
+    pcall(function()
+        for _, d in ipairs(workspace:GetDescendants()) do
+            n = n + 1
+            if n > 60000 then break end
+            if d:IsA("Humanoid") then
+                local m = d.Parent
+                if m and m:IsA("Model") and not seen[m] then
+                    seen[m] = true
+                    out[#out + 1] = m
+                end
             end
-        end)
-    end
-    if now - targetIndexT > 6 then
-        targetIndexT = now
-        for m in pairs(targetIndex) do
-            if not m.Parent then targetIndex[m] = nil end
         end
-        deepIndex()
-    end
-    local out = {}
-    for m in pairs(targetIndex) do
-        if m.Parent then out[#out + 1] = m end
-    end
+    end)
     for _, pl in ipairs(Players:GetPlayers()) do
-        if pl.Character and pl.Character.Parent then out[#out + 1] = pl.Character end
+        local ch = pl.Character
+        if ch and not seen[ch] then
+            seen[ch] = true
+            out[#out + 1] = ch
+        end
     end
+    _tgList = out
     return out
 end
-
--- 启动时立即建一次索引（别等 6 秒）
-task.spawn(function() task.wait(0.5) pcall(deepIndex) end)
 function M.scanAll(cap)
     local out, n = {}, 0
     cap = cap or 5000
