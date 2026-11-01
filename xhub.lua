@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v10.4"
-local BUILD   = "2026-11-02 02:20"
+local VERSION = "v10.5"
+local BUILD   = "2026-11-02 02:55"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -789,6 +789,7 @@ function M.findNpcTarget(maxDist)
         bestD, bestP, bestM = d, p, m
     end
     for m in pairs(npcStore) do consider(m) end
+    for _, mm in ipairs(M.scanTargets()) do consider(mm) end
     for m in pairs(entStore) do
         local nm = m.Name:lower()
         if nm:find("rig", 1, true) or nm:find("dummy", 1, true) or nm:find("npc", 1, true)
@@ -1940,6 +1941,35 @@ function M.isEntityModel(m)
     return false
 end
 
+-- 目标扫描：专门找"带 Humanoid 的 Model"（不受 scanAll 数量上限影响）
+function M.scanTargets()
+    local out, seen = {}, {}
+    local function add(m)
+        if not m or seen[m] then return end
+        if m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") then
+            seen[m] = true
+            out[#out + 1] = m
+        end
+    end
+    local function walk(inst, depth)
+        if depth > 3 then return end
+        for _, c in ipairs(inst:GetChildren()) do
+            if c:IsA("Model") then add(c) end
+            if c:IsA("Folder") or c:IsA("Model") or c:IsA("Workspace") then
+                walk(c, depth + 1)
+            end
+        end
+    end
+    pcall(walk, workspace, 0)
+    pcall(function()
+        local cr = workspace:FindFirstChild("CurrentRooms")
+        if cr then walk(cr, 0) end
+    end)
+    for _, pl in ipairs(Players:GetPlayers()) do
+        if pl.Character then add(pl.Character) end
+    end
+    return out
+end
 function M.scanAll(cap)
     local out, n = {}, 0
     cap = cap or 5000
@@ -2961,8 +2991,8 @@ local function auraFindTarget()
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil end
     local bestM, bestP, bestD = nil, nil, math.huge
-    for _, m in ipairs(M.scanAll(4000)) do
-        if m:IsA("Model") and m ~= c then
+    for _, m in ipairs(M.scanTargets()) do
+        if m ~= c then
             local hum = m:FindFirstChildOfClass("Humanoid")
             local root = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
             if hum and root and hum.Health > 0 then
@@ -3616,12 +3646,8 @@ npcStore = {}
 
 function M.ensureNpcEsp(m)
     local dNow = M.distTo(m)
-    local maxD = S.npcEspDist or 150
-    if dNow and dNow > maxD then
-        local old = npcStore[m]
-        if old then M.destroyEnt(old); npcStore[m] = nil end
-        return
-    end
+    local maxD = S.npcEspDist or 300
+    local tooFar = dNow and dNow > maxD
     local o = npcStore[m]
     if not o then o = {}; npcStore[m] = o end
     if not (o.hl and o.hl.Parent) then
@@ -3650,6 +3676,8 @@ function M.ensureNpcEsp(m)
     end
     o.tag.Adornee = head
     o.tag.Parent = head
+    if o.tag then o.tag.Enabled = not tooFar end
+    if o.hl then o.hl.Enabled = not tooFar end
     local hum = m:FindFirstChildOfClass("Humanoid")
     local hp = hum and math.floor(hum.Health) or 0
     if o.lbl then o.lbl.Text = m.Name end
@@ -3810,7 +3838,7 @@ M.addToggle(pVisual, "NPC / 怪物 ESP", false, function(v)
     S.espNpc = v
     notify(v and "NPC ESP 已开启（方框+名字+血量+距离）" or "NPC ESP 已关闭", "info", 2.2)
 end)
-M.addSlider(pVisual, "NPC 绘制距离（studs）", 30, 400, 150, function(v) S.npcEspDist = v end)
+M.addSlider(pVisual, "NPC 绘制距离（studs）", 30, 400, 300, function(v) S.npcEspDist = v end)
 M.addSlider(pVisual, "NPC 最多显示数量", 5, 80, 40, function(v) S.npcEspMax = v end)
 M.addToggle(pVisual, "穿墙可见", true, function(v) S.espOccluded = v end)
 M.addToggle(pVisual, "彩虹上色", false, function(v) S.espRainbow = v end)
