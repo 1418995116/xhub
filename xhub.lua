@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v13.0"
-local BUILD   = "2026-11-02 17:20"
+local VERSION = "v13.1"
+local BUILD   = "2026-11-02 17:55"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -2002,6 +2002,8 @@ do
     pcall(function()
         workspace.DescendantAdded:Connect(function(d)
             if d:IsA("Model") and d:FindFirstChildOfClass("Humanoid") then targetIndex[d] = true end
+            -- Humanoid 常在模型加入后才创建：命中 Humanoid 就把父模型收进索引
+            if d:IsA("Humanoid") and d.Parent and d.Parent:IsA("Model") then targetIndex[d.Parent] = true end
         end)
         workspace.DescendantRemoving:Connect(function(d)
             targetIndex[d] = nil
@@ -2012,7 +2014,7 @@ end
 local function deepIndex()
     local seen = 0
     local function walk(inst, depth)
-        if depth > 3 or seen > 12000 then return end
+        if depth > 6 or seen > 20000 then return end
         for _, c in ipairs(inst:GetChildren()) do
             seen = seen + 1
             if c:IsA("Model") and c:FindFirstChildOfClass("Humanoid") then targetIndex[c] = true end
@@ -2033,6 +2035,18 @@ end
 
 function M.scanTargets()
     local now = os.clock()
+    -- 兜底：索引为空时用 GetDescendants 直接抓 Humanoid
+    if next(targetIndex) == nil and now - (S._fullScan or 0) > 6 then
+        S._fullScan = now
+        pcall(function()
+            local cnt = 0
+            for _, d in ipairs(workspace:GetDescendants()) do
+                cnt = cnt + 1
+                if cnt > 60000 then break end
+                if d:IsA("Humanoid") and d.Parent and d.Parent:IsA("Model") then targetIndex[d.Parent] = true end
+            end
+        end)
+    end
     if now - targetIndexT > 6 then
         targetIndexT = now
         for m in pairs(targetIndex) do
