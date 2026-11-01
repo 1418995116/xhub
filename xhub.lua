@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v10.1"
-local BUILD   = "2026-11-02 00:35"
+local VERSION = "v10.2"
+local BUILD   = "2026-11-02 01:05"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -4189,11 +4189,6 @@ end)
 
 pcall(function() tabBtns["主要"]:Fire("MouseButton1Click") end)
 
---==================== 热键 ====================
-local function isMenuKey(code)
-    for _, k in ipairs(CONFIG.MenuKeys) do if k == code then return true end end
-    return false
-end
     end)
     if not _ok then
         BUILD_UI_ERROR = tostring(_err)
@@ -4201,6 +4196,12 @@ end
     end
 end
 pcall(BUILD_UI)
+
+--==================== 热键 ====================
+local function isMenuKey(code)
+    for _, k in ipairs(CONFIG.MenuKeys) do if k == code then return true end end
+    return false
+end
 if BUILD_UI_ERROR then
     pcall(function()
         local t = Instance.new("TextLabel")
