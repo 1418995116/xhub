@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v12.7"
-local BUILD   = "2026-11-02 15:40"
+local VERSION = "v12.8"
+local BUILD   = "2026-11-02 16:15"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -272,6 +272,42 @@ mk("UICorner", { CornerRadius = UDim.new(0, 12) }, main)
 mk("UIStroke", { Color = Color3.fromRGB(58, 64, 78), Thickness = 1 }, main)
 mk("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({
     NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 0.35) }) }, main)
+
+--==== 窗口可拉伸（右边缘 / 下边缘 / 右下角）====
+local MINW, MINH, MAXW, MAXH = 380, 300, 1100, 860
+do
+    local function makeHandle(size, pos, applyX, applyY)
+        local h = mk("Frame", { Size = size, Position = pos, BackgroundTransparency = 1,
+            Active = true, ZIndex = 60 }, main)
+        local dragging, startSize, startPos = false, nil, nil
+        h.InputBegan:Connect(function(inp)
+            if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging, startSize, startPos = true, main.Size, inp.Position
+            end
+        end)
+        UIS.InputChanged:Connect(function(inp)
+            if dragging and inp.UserInputType == Enum.UserInputType.MouseMovement then
+                local d = inp.Position - startPos
+                local w = startSize.X.Offset + (applyX and d.X or 0)
+                local hh = startSize.Y.Offset + (applyY and d.Y or 0)
+                w = math.clamp(w, MINW, MAXW)
+                hh = math.clamp(hh, MINH, MAXH)
+                main.Size = UDim2.fromOffset(w, hh)
+                S.menuSize = { w = w, h = hh }
+            end
+        end)
+        UIS.InputEnded:Connect(function(inp)
+            if inp.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+        end)
+    end
+    makeHandle(UDim2.fromOffset(8, 0), UDim2.new(1, -8, 0, 0), true, false)   -- 右边缘
+    makeHandle(UDim2.new(1, 0, 0, 8), UDim2.new(0, 0, 1, -8), false, true)   -- 下边缘
+    makeHandle(UDim2.fromOffset(16, 16), UDim2.new(1, -16, 1, -16), true, true) -- 右下角
+    if S.menuSize and S.menuSize.w then
+        main.Size = UDim2.fromOffset(math.clamp(S.menuSize.w, MINW, MAXW), math.clamp(S.menuSize.h, MINH, MAXH))
+    end
+end
+
 
 local bar = mk("Frame", { Size = UDim2.new(1, 0, 0, 42), BackgroundColor3 = Color3.fromRGB(27, 30, 39),
     BorderSizePixel = 0, ZIndex = 2 }, main)
@@ -4707,62 +4743,15 @@ M.addToggle(pCombat, "开启杀戮光环", false, function(v)
 end)
 M.addToggle(pCombat, "光环打 NPC / 怪物", true, function(v) S.auraNpc = v end)
 M.addToggle(pCombat, "光环打玩家", false, function(v) S.auraPlayer = v end)
-M.addToggle(pCombat, "强制秒杀 NPC（多策略）", false, function(v)
-    S.instantKill = v
-    notify(v and "秒杀已开：光环锁定时会尝试所有伤害通道" or "秒杀已关", v and "warn" or "info", 3)
-end)
-M.addButton(pCombat, "对当前光环目标尝试秒杀", function()
-    local p, m = auraPart, S.auraLastTarget
-    if not (p and m) then notify("先让光环锁定一个目标", "err", 3) return end
-    auraLog(("手动秒杀: %s"):format(m.Name), Color3.fromRGB(255, 220, 120))
-    pcall(M.tryKill, m, p)
-end)
 M.addToggle(pCombat, "一刀多砍（同一次挥手打多个目标）", true, function(v)
     S.auraMulti = v
     notify(v and "一刀多砍已开：每次挥手打范围内全部目标" or "一刀多砍已关：只打最近的一个", "info", 2.6)
 end)
 M.addSlider(pCombat, "多砍目标数", 1, 15, 5, function(v) S.auraMax = v end)
-UIKEYS.measureBtn = M.addButton(pCombat, "武器伤害: 未知（点我自动测量）", function()
-    S.measureDmg = true
-    notify("自动测量已开启：光环打中怪后会自动取真实伤害", "warn", 5)
-    if UIKEYS.measureBtn then UIKEYS.measureBtn("武器伤害: 测量中…（打中怪即可）") end
-end)
 M.addSlider(pCombat, "挥手间隔 ms（近战建议 300-500）", 50, 900, 350, function(v) S.auraFireInt = v / 1000 end)
 UIKEYS.setAuraKeyBtn = M.addButton(pCombat, "光环快捷键: " .. S.auraKey.Name .. "（点我改键）", function()
     S.keyCapture = "aura"
     notify("按一个新键作为光环开关（Esc 取消）", "warn", 4)
-end)
-M.addButton(pCombat, "① 学习攻击（点我开始，然后手动砍一刀）", function()
-    S.learned = {}
-    S.learnActive = true
-    auraLog("学习模式已开：请手动砍目标一刀（10 秒后自动结束）", Color3.fromRGB(150, 210, 255))
-    task.delay(10, function()
-        S.learnActive = false
-        local okS, cntS = pcall(M.saveLearned)
-        auraLog(("学习结束：共记录 %d 个调用%s"):format(#(S.learned or {}), (okS and cntS and cntS > 0) and "（已保存，下次注入自动载入）" or "（未保存：执行器不支持写文件）"), Color3.fromRGB(150, 210, 255))
-    end)
-end)
-M.addSlider(pCombat, "重放数值放大 x（对带伤害数字的远程有效）", 1, 50, 1, function(v) S.replayScale = v end)
-M.addButton(pCombat, "立即保存学习记录", function()
-    local okS, cntS = pcall(M.saveLearned)
-    notify(okS and ("已保存 " .. tostring(cntS) .. " 个调用") or "保存失败（执行器不支持写文件）", okS and "ok" or "err", 3)
-end)
-M.addToggle(pCombat, "只重放攻击类调用（防误发装备/背包请求）", true, function(v)
-    S.replayFilter = v
-    notify(v and "只重放名字像攻击、或带角色参数的调用" or "重放全部学到的调用（可能误触装备逻辑）", "info", 3.2)
-end)
-M.addToggle(pCombat, "重放时把目标参数换成当前目标", true, function(v)
-    S.replaySwap = v
-    notify(v and "重放会替换角色类参数（推荐）" or "重放使用原始参数（只打原目标）", "info", 3)
-end)
-M.addToggle(pCombat, "光环自动重放学到的攻击（开=不再空刀）", true, function(v)
-    S.useLearned = v
-    notify(v and "光环会用手动学到的攻击自动打目标" or "光环回到通用调用（可能空刀）", "info", 3)
-end)
-M.addButton(pCombat, "② 重放学习到的攻击（打当前光环目标）", function()
-    local p, m = auraPart, S.auraLastTarget
-    if not (p and m) then notify("先让光环锁定一个目标", "err", 3) return end
-    pcall(M.replayLearned, m, p)
 end)
 M.addSlider(pCombat, "光环半径 studs", 5, 60, 20, function(v) S.auraRadius = v end)
 M.addSlider(pCombat, "近战有效距离 studs（超出不挥）", 2, 30, 12, function(v) S.meleeRange = v end)
