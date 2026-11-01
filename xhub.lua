@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v9.8"
-local BUILD   = "2026-11-01 23:05"
+local VERSION = "v9.9"
+local BUILD   = "2026-11-01 23:35"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -26,7 +26,9 @@ local CONFIG = {
 local M = {}                  -- namespace (keeps register count under Luau limit)
 local RUNNING = true          -- shutdown flag
 local shutdownXHub            -- forward decl (UI button references it)
+_G.XHubKill = function() end   -- 占位，稍后赋值
 pcall(function()
+    if _G.XHubKill then pcall(_G.XHubKill) end
     -- ① 让旧实例自己优雅退出
     if _G.XHub and type(_G.XHub) == "table" and _G.XHub.shutdown then
         _G.XHub.shutdown()
@@ -80,7 +82,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRadius = 20, auraDmg = 20, auraInt = 0.15, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraDebug = false, npcEspDist = 150, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.15, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -327,13 +329,13 @@ do
     bar.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging, ds, sp = true, i.Position, main.Position end
     end)
-    UIS.InputChanged:Connect(function(i)
+    UIS.InputChanged:Connect(function(i) if not RUNNING then return end
         if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
             local d = i.Position - ds
             main.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X, sp.Y.Scale, sp.Y.Offset + d.Y)
         end
     end)
-    UIS.InputEnded:Connect(function(i)
+    UIS.InputEnded:Connect(function(i) if not RUNNING then return end
         if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
     end)
 end
@@ -444,10 +446,10 @@ function M.addSlider(page, text, mn, mx, default, cb)
     track.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 then drag = true; fromX(i.Position.X) end
     end)
-    UIS.InputChanged:Connect(function(i)
+    UIS.InputChanged:Connect(function(i) if not RUNNING then return end
         if drag and i.UserInputType == Enum.UserInputType.MouseMovement then fromX(i.Position.X) end
     end)
-    UIS.InputEnded:Connect(function(i)
+    UIS.InputEnded:Connect(function(i) if not RUNNING then return end
         if i.UserInputType == Enum.UserInputType.MouseButton1 then drag = false end
     end)
     set(default)
@@ -900,7 +902,7 @@ local WEAPON_REMOTE_KW = { "fire", "shoot", "hit", "damage", "bullet", "gun",
 local auraPart = nil            -- forward decl (kill aura target)
 local fireUntil = 0
 
-UIS.InputBegan:Connect(function(input, gp)
+UIS.InputBegan:Connect(function(input, gp) if not RUNNING then return end
     if gp then return end
     if input.UserInputType == Enum.UserInputType.MouseButton1 then
         fireUntil = os.clock() + 0.3
@@ -1035,7 +1037,7 @@ function M.silentTarget()
     return M.findTarget()
 end
 
-UIS.InputBegan:Connect(function(input, gp)
+UIS.InputBegan:Connect(function(input, gp) if not RUNNING then return end
     if gp then return end
     if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
     if main.Visible then return end
@@ -1754,13 +1756,13 @@ function M.tcBuild()
     tb.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging, ds, sp = true, i.Position, p.Position end
     end)
-    UIS.InputChanged:Connect(function(i)
+    UIS.InputChanged:Connect(function(i) if not RUNNING then return end
         if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
             local d = i.Position - ds
             p.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X, sp.Y.Scale, sp.Y.Offset + d.Y)
         end
     end)
-    UIS.InputEnded:Connect(function(i)
+    UIS.InputEnded:Connect(function(i) if not RUNNING then return end
         if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
     end)
 
@@ -2889,7 +2891,10 @@ task.spawn(function()
                 if tool then
                     pcall(function() tool:Activate() end)
                 end
-
+                if S.auraDebug then
+                    print(("[aura] target=%s d=%.0f tool=%s remoteAim=%s")
+                        :format(m.Name, d, tool and tool.Name or "none", tostring(S.remoteAim)))
+                end
                 if not (auraHud and auraHud.Parent) then
                     auraHud = mk("TextLabel", { Name = "XHubAura", Size = UDim2.fromOffset(300, 22),
                         Position = UDim2.new(0.5, -150, 0, 62), BackgroundTransparency = 0.3,
@@ -3471,6 +3476,13 @@ end)
 npcStore = {}
 
 function M.ensureNpcEsp(m)
+    local dNow = M.distTo(m)
+    local maxD = S.npcEspDist or 150
+    if dNow and dNow > maxD then
+        local old = npcStore[m]
+        if old then M.destroyEnt(old); npcStore[m] = nil end
+        return
+    end
     local o = npcStore[m]
     if not o then o = {}; npcStore[m] = o end
     if not (o.hl and o.hl.Parent) then
@@ -3513,11 +3525,20 @@ task.spawn(function()
         task.wait(S.fastScan and 0.8 or 0.4)
         if S.espNpc then
             local n = 0
-            for _, m in ipairs(M.scanAll(4000)) do
+            npcTick = (npcTick or 0) + 1
+            local refresh = (npcTick % 3 == 0)
+            local known = 0
+            for mm in pairs(npcStore) do known = known + 1 end
+            for _, m in ipairs(M.scanAll(3000)) do
                 if m:IsA("Model") and not Players:GetPlayerFromCharacter(m) then
                     n = n + 1
-                    if n > 4000 then break end
-                    if m:FindFirstChildOfClass("Humanoid") then
+                    if n > 3000 then break end
+                    local o = npcStore[m]
+                    if o and o.tag and o.tag.Parent and not refresh then
+                        -- 已绘制过，跳过（下一拍再刷新距离）
+                    elseif (not o) and known >= (S.npcEspMax or 40) then
+                        -- 超过上限，不再新增
+                    elseif m:FindFirstChildOfClass("Humanoid") then
                         pcall(M.ensureNpcEsp, m)
                     end
                 end
@@ -3646,6 +3667,8 @@ M.addToggle(pVisual, "NPC / 怪物 ESP", false, function(v)
     S.espNpc = v
     notify(v and "NPC ESP 已开启（方框+名字+血量+距离）" or "NPC ESP 已关闭", "info", 2.2)
 end)
+M.addSlider(pVisual, "NPC 绘制距离（studs）", 30, 400, 150, function(v) S.npcEspDist = v end)
+M.addSlider(pVisual, "NPC 最多显示数量", 5, 80, 40, function(v) S.npcEspMax = v end)
 M.addToggle(pVisual, "穿墙可见", true, function(v) S.espOccluded = v end)
 M.addToggle(pVisual, "彩虹上色", false, function(v) S.espRainbow = v end)
 M.addSection(pVisual, "环境")
@@ -3808,6 +3831,10 @@ M.addToggle(pCombat, "光环打玩家", false, function(v) S.auraPlayer = v end)
 M.addSlider(pCombat, "光环半径 studs", 5, 60, 20, function(v) S.auraRadius = v end)
 M.addSlider(pCombat, "光环每次伤害", 0, 100, 20, function(v) S.auraDmg = v end)
 M.addSlider(pCombat, "光环攻击间隔 ms", 50, 500, 150, function(v) S.auraInt = v / 1000 end)
+addToggle(pCombat, "光环调试信息（F9）", false, function(v)
+    S.auraDebug = v
+    notify(v and "光环调试已开：F9 会打印目标/工具/远程改写状态" or "光环调试已关", "info", 2.5)
+end)
 addToggle(pCombat, "光环把射击方向改到目标（远程改写）", true, function(v)
     S.auraRemote = v
     notify(v and "光环会同时改写武器远程方向（需要开「远程改写」）" or "光环只激活工具，不改写远程", "info", 3)
@@ -4162,7 +4189,7 @@ local function isMenuKey(code)
     for _, k in ipairs(CONFIG.MenuKeys) do if k == code then return true end end
     return false
 end
-UIS.InputBegan:Connect(function(i, gp)
+UIS.InputBegan:Connect(function(i, gp) if not RUNNING then return end
     if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
     if UIS:GetFocusedTextBox() then captureMode = false; return end
     if captureMode then
@@ -4247,6 +4274,7 @@ shutdownXHub = function()
     print("[XHub] 已卸载。可以在同一服务器内注入其它版本。")
 end
 
+_G.XHubKill = function() RUNNING = false end
 _G.XHub = { version = VERSION, build = BUILD, shutdown = shutdownXHub, running = function() return RUNNING end }
 if S.noclip then
     task.delay(0.6, function() pcall(function() M.setNoclip(true) end) end)
