@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v12.8"
-local BUILD   = "2026-11-02 16:15"
+local VERSION = "v12.9"
+local BUILD   = "2026-11-02 16:45"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = false, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = false, replaySwap = true, replayScale = 1, replayFilter = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = false, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -4727,6 +4727,28 @@ end)
 M.addToggle(pCombat, "NPC 自瞄：只在按住左键时锁", true, function(v) S.npcAimOnFire = v end)
 M.addToggle(pCombat, "NPC 自瞄：预判移动", true, function(v) S.npcLead = v end)
 M.addSlider(pCombat, "NPC 自瞄距离", 20, 400, 200, function(v) S.npcAimDist = v end)
+
+M.addSection(pCombat, "武器学习（录一次真实攻击，之后自动重放）")
+M.addButton(pCombat, "① 学习攻击（点我开始 → 手动砍一刀）", function()
+    S.learned = {}
+    S.learnActive = true
+    auraLog("学习模式已开：请手动砍目标一刀（10 秒后自动结束并保存）", Color3.fromRGB(150, 210, 255))
+    task.delay(10, function()
+        S.learnActive = false
+        local okS, cntS = pcall(M.saveLearned)
+        auraLog(("学习结束：记录 %d 个调用%s"):format(#(S.learned or {}),
+            (okS and cntS and cntS > 0) and "（已保存）" or "（未保存）"), Color3.fromRGB(150, 210, 255))
+    end)
+end)
+M.addToggle(pCombat, "光环自动重放学到的攻击（不再空刀）", true, function(v)
+    S.useLearned = v
+    notify(v and "光环会用手动学到的攻击自动打目标" or "光环回到原生挥砍（可能空刀）", "info", 2.8)
+end)
+M.addButton(pCombat, "② 重放一次（手动打当前光环目标）", function()
+    local pp, mm = auraPart, S.auraLastTarget
+    if not (pp and mm) then notify("先让光环锁定一个目标", "err", 3) return end
+    pcall(M.replayLearned, mm, pp)
+end)
 
 M.addSection(pCombat, "杀戮光环（Kill Aura）")
 M.addToggle(pCombat, "开启杀戮光环", false, function(v)
