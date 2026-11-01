@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v9.1"
-local BUILD   = "2026-11-01 19:30"
+local VERSION = "v9.2"
+local BUILD   = "2026-11-01 19:55"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -2026,7 +2026,7 @@ end)
 --==================== 物品绘制 / 拾取 / 自动交互 ====================
 local ITEM_KW = { "key", "钥匙", "loot", "item", "coin", "chest", "drawer", "pickup",
                   "gem", "gold", "cash", "money", "bandage", "flashlight", "lighter",
-                  "candle", "crucifix", "lockpick", "vitamin", "potion", "weapon", "crate", "sack", "bag", "box", "箱", "袋" }
+                  "candle", "crucifix", "lockpick", "vitamin", "potion", "weapon", "sack", "bag", "box", "箱", "袋" }
 local itemStore = {}
 
 local function nameHits(v, list)
@@ -2038,7 +2038,7 @@ local function nameHits(v, list)
     return false
 end
 
-local ITEM_EXCLUDE = { "candle", "蜡烛", "drawer", "container", "wall", "stool", "chair", "seat", "bench", "table", "sofa", "lamp", "potted", "plant", "tree", "flower", "盆栽", "barrel", "cellar", "stack" }
+local ITEM_EXCLUDE = { "candle", "蜡烛", "drawer", "container", "wall", "stool", "chair", "seat", "bench", "table", "sofa", "lamp", "potted", "plant", "tree", "flower", "盆栽", "barrel", "cellar", "stack", "crate", "wooden" }
 
 local function isItemInst(v)
     local nm = (v and v.Name or ""):lower()
@@ -2742,23 +2742,29 @@ task.spawn(function()
 end)
 
 --==================== 躲避触发扫描（不依赖 ESP，独立按名字找） ====================
---==== 玩家旋转（Spin）====
+--==== 玩家旋转（Spin）：RenderStepped 最高优先级 + 关掉 AutoRotate 才不会被打回 ====
 local spinYaw = 0
-task.spawn(function()
-    local last = os.clock()
-    while true do
-        local dt = task.wait()
-        if S.spin then
-            local c = charOf(lp)
-            local hrp = c and c:FindFirstChild("HumanoidRootPart")
-            if hrp and not isSeated() then
-                spinYaw = (spinYaw + math.rad(S.spinSpeed) * dt) % (math.pi * 2)
-                pcall(function()
-                    hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, spinYaw, 0)
-                end)
-            end
+local spinLocked = false
+pcall(function() RS:UnbindFromRenderStep("XHubSpin") end)
+RS:BindToRenderStep("XHubSpin", Enum.RenderPriority.Last.Value - 5, function(dt)
+    local c = charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    local hum = c and c:FindFirstChildOfClass("Humanoid")
+    if not S.spin or not hrp or isSeated() then
+        if spinLocked and hum then
+            pcall(function() hum.AutoRotate = true end)
+            spinLocked = false
         end
+        return
     end
+    if hum and not spinLocked then
+        pcall(function() hum.AutoRotate = false end)
+        spinLocked = true
+    end
+    spinYaw = (spinYaw + math.rad(S.spinSpeed) * dt) % (math.pi * 2)
+    pcall(function()
+        hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, spinYaw, 0)
+    end)
 end)
 -- HUD: shows which mob triggered the hide (and why)
 local hideHud, hideHudUntil = nil, 0
@@ -2785,7 +2791,7 @@ end)
 -- TIER1: deadly mobs (always win, own 8s cooldown)
 local TIER1 = { "rushmoving", "rush", "ambushmoving", "ambush" }
 -- TIER2: chasers / noise (opt-in, 15s cooldown)
-local TIER2 = { "seekmovingnewclone", "seek", "glitchcube", "glitch", "figure", "dupe" }
+local TIER2 = { "seekmovingnewclone", "seek", "figure", "glitch" }
 
 nearestTrigger = function()
     local c = charOf(lp)
@@ -2798,7 +2804,8 @@ nearestTrigger = function()
     local function consider(m)
         if not m or not m.Parent then return end
         local nm = m.Name:lower()
-        if nm:find("fake", 1, true) then return end
+        if nm:find("fake", 1, true) or nm:find("dupe", 1, true)
+           or nm:find("cube", 1, true) or nm:find("sideroom", 1, true) then return end
         local m1, m2 = false, false
         for _, k in ipairs(TIER1) do
             if nm:find(k, 1, true) then m1 = true break end
@@ -2856,10 +2863,16 @@ task.spawn(function()
         if S.hideDebug and os.clock() - dbgT > 2 then
             dbgT = os.clock()
             local n, dd, tr = nearestTrigger()
-            print(("[hide] auto=%s tier2=%s sound=%s dist=%s | 最近=%s %.0fm T%s | hiding=%s cd1=%.0fs entStore=%d")
-                :format(tostring(S.autoHide), tostring(S.hideTier2), tostring(S.hideSound),
-                        tostring(S.hideDist), tostring(n), dd or -1, tostring(tr),
-                        tostring(hiding), os.clock() - (S.lastHideT1 or 0), #({})))
+            local entCount, rushCount = 0, 0
+            for mm in pairs(entStore) do
+                entCount = entCount + 1
+                local mn = mm.Name:lower()
+                if mn:find("rush", 1, true) or mn:find("ambush", 1, true) then rushCount = rushCount + 1 end
+            end
+            print(("[hide] auto=%s tier2=%s dist=%s | 最近=%s %.0fm T%s | hiding=%s cd1=%.0fs | entStore=%d rush=%d")
+                :format(tostring(S.autoHide), tostring(S.hideTier2), tostring(S.hideDist),
+                        tostring(n), dd or -1, tostring(tr),
+                        tostring(hiding), os.clock() - (S.lastHideT1 or 0), entCount, rushCount))
         end
         local ok, err = pcall(function()
             local name, d, tier = nearestTrigger()
@@ -2885,6 +2898,12 @@ task.spawn(function()
                 return
             end
 
+            if tier == 1 and hiding and (os.clock() - (S.lastHideT1 or 0)) > 3 then
+                -- Rush/Ambush 到来时，即使之前在躲别的怪，也立刻重新升空
+                hiding = false
+                S.lastHideT1 = os.clock()
+                notify(("T1 抢占：%s %.0fm 优先躲避"):format(name, d), "warn", 2.5)
+            end
             if tier == 1 then S.lastHideT1 = os.clock() else S.lastHideT2 = os.clock() end
             notify(("触发躲避[T%d]: %s %.0fm"):format(tier, name, d), "ok", 2)
             showHideSource(("躲避源: %s  ·  %.0f m  ·  T%d    触发于 %s")
