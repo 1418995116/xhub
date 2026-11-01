@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v12.9"
-local BUILD   = "2026-11-02 16:45"
+local VERSION = "v13.0"
+local BUILD   = "2026-11-02 17:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -4511,6 +4511,7 @@ local pCombat, pAuto = M.addPage("战斗"), M.addPage("自动")
 local pGuard = M.addPage("防护")
 local pMisc = M.addPage("杂项")
 
+print("[XHub][ui] build pMain")
 M.addSection(pMain, "MOVEMENT")
 M.addToggle(pMain, "飞行 (F)", false, function(v) M.setFly(v) end)
 M.addSlider(pMain, "飞行速度", 10, 200, S.flySpeed, function(v) S.flySpeed = v end)
@@ -4560,6 +4561,7 @@ UIKEYS.setKeyBtn = M.addButton(pMain, "菜单键: " .. CONFIG.MenuKeys[1].Name .
 end)
 M.addButton(pMain, "隐藏菜单", function() setVisible(false) end)
 
+print("[XHub][ui] build pVisual")
 M.addSection(pVisual, "ESP")
 M.addToggle(pVisual, "启用 ESP", false, function(v)
     S.esp = v
@@ -4666,6 +4668,7 @@ M.addButton(pVisual, "诊断扫描（F9 + 弹窗）", function()
         :format(wsKids, cr and "有" or "无", #list, mcount, hits), "info", 5)
 end)
 
+print("[XHub][ui] build pCombat")
 M.addToggle(pCombat, "远程改写：宽松模式（所有带方向的远程都改）", false, function(v)
     S.remoteAimAll = v
     notify(v and "宽松改写已开（可能影响交互类远程，谨慎）" or "宽松改写已关（只改武器类远程）", "warn", 3)
@@ -4813,6 +4816,7 @@ aimInfo = mk("TextLabel", { Text = "自瞄: 待触发（按住左键 / Q）", Ba
     LayoutOrder = rowOrder }, pCombat)
 
 if M.doorsAllowed() then
+print("[XHub][ui] build pAuto")
 M.addSection(pAuto, "物品")
 M.addToggle(pAuto, "物品绘制（钥匙 / 道具 / 箱子）", false, function(v)
     S.itemEsp = v
@@ -4928,6 +4932,7 @@ task.spawn(function()
     end
 end)
 
+print("[XHub][ui] build pGuard")
 M.addSection(pGuard, "① 基础压制")
 M.addButton(pGuard, "圣奥里安全预设（限速 + 关飞行 + 开①③）", function()
     S.safeMode = true
@@ -5081,6 +5086,7 @@ M.addButton(pGuard, "打印 AC 脚本全名到 F9", function()
     notify(("匹配 %d 个标识 / %d 条记录（见 F9）"):format(n, #G.matches), "info", 3)
 end)
 
+print("[XHub][ui] build pMisc")
 M.addSection(pMisc, "服务器档位")
 M.addButton(pMisc, "打印 PlaceId / 识别结果", function()
     print(("[profile] PlaceId=%d  JobId=%s  识别=%s")
@@ -5184,6 +5190,7 @@ if BUILD_UI_ERROR then
         t.Font = Enum.Font.Code
         t.TextSize = 12
         t.TextWrapped = true
+        t.ZIndex = 9999
         t.Text = "UI 构建失败（把这段发给我）: " .. BUILD_UI_ERROR
         t.Parent = gui
     end)
