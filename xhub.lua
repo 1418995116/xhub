@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v10.8"
-local BUILD   = "2026-11-02 04:40"
+local VERSION = "v10.9"
+local BUILD   = "2026-11-02 05:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.25, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.12, auraKey = Enum.KeyCode.G, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -3148,18 +3148,6 @@ task.spawn(function()
                 -- ① 先把武器远程的改写窗口打开，把射击方向改成目标
                 if S.auraRemote then fireUntil = os.clock() + 0.3 end
 
-                -- ②5 先转向目标 + 太远就往前走（空刀多半是没朝向/够不到）
-                local c0 = M.charOf(lp)
-                local hrp0 = c0 and c0:FindFirstChild("HumanoidRootPart")
-                if hrp0 then
-                    pcall(function()
-                        hrp0.CFrame = CFrame.lookAt(hrp0.Position, Vector3.new(p.Position.X, hrp0.Position.Y, p.Position.Z))
-                    end)
-                    if d and d > (S.auraReach or 6) then
-                        local hum0 = c0:FindFirstChildOfClass("Humanoid")
-                        if hum0 then pcall(function() hum0:MoveTo(p.Position) end) end
-                    end
-                end
 
                 -- ③ 真正走游戏判定的攻击：激活手里工具
                 local c = M.charOf(lp)
@@ -4152,7 +4140,11 @@ M.addButton(pCombat, "对当前光环目标尝试秒杀", function()
     auraLog(("手动秒杀: %s"):format(m.Name), Color3.fromRGB(255, 220, 120))
     pcall(M.tryKill, m, p)
 end)
-M.addSlider(pCombat, "近战够到距离", 2, 20, 6, function(v) S.auraReach = v end)
+M.addSlider(pCombat, "挥手间隔 ms（越小越快）", 50, 800, 120, function(v) S.auraFireInt = v / 1000 end)
+UIKEYS.setAuraKeyBtn = M.addButton(pCombat, "光环快捷键: " .. S.auraKey.Name .. "（点我改键）", function()
+    S.keyCapture = "aura"
+    notify("按一个新键作为光环开关（Esc 取消）", "warn", 4)
+end)
 M.addSlider(pCombat, "光环半径 studs", 5, 60, 20, function(v) S.auraRadius = v end)
 M.addToggle(pCombat, "显示光环范围（白色圆圈）", true, function(v) S.auraRing = v end)
 M.addSlider(pCombat, "光环攻击间隔 ms", 50, 500, 150, function(v) S.auraInt = v / 1000 end)
@@ -4538,6 +4530,17 @@ end
 UIS.InputBegan:Connect(function(i, gp) if not RUNNING then return end
     if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
     if UIS:GetFocusedTextBox() then captureMode = false; return end
+    if S.keyCapture == "aura" then
+        S.keyCapture = nil
+        if i.KeyCode == Enum.KeyCode.Escape then
+            notify("光环改键已取消", "warn", 2)
+        else
+            S.auraKey = i.KeyCode
+            if UIKEYS.setAuraKeyBtn then UIKEYS.setAuraKeyBtn("光环快捷键: " .. i.KeyCode.Name .. " (点我改键)") end
+            notify("光环快捷键 = " .. i.KeyCode.Name, "ok", 2)
+        end
+        return
+    end
     if captureMode then
         captureMode = false
         if i.KeyCode == Enum.KeyCode.Escape then
@@ -4547,6 +4550,14 @@ UIS.InputBegan:Connect(function(i, gp) if not RUNNING then return end
             if UIKEYS.setKeyBtn then UIKEYS.setKeyBtn("菜单键: " .. i.KeyCode.Name .. " (点我改键)") end
             notify("菜单键 = " .. i.KeyCode.Name, "ok", 2)
         end
+        return
+    end
+    if S.auraKey and i.KeyCode == S.auraKey and not gp then
+        S.killAura = not S.killAura
+        pcall(function() if S.killAura then ensureAuraPanel() end end)
+        pcall(function() if auraPanel then auraPanel.Visible = S.killAura end end)
+        if S.killAura then pcall(function() auraLog("光环启动 · 快捷键", Color3.fromRGB(255, 170, 170)) end) end
+        notify(S.killAura and "杀戮光环: 开" or "杀戮光环: 关", S.killAura and "ok" or "info", 1.6)
         return
     end
     if isMenuKey(i.KeyCode) then
