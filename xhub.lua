@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v12.4"
-local BUILD   = "2026-11-02 13:55"
+local VERSION = "v12.5"
+local BUILD   = "2026-11-02 14:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -3197,6 +3197,79 @@ function M.measureSwing(model)
     end)
 end
 -- 重放"学习到的一次攻击"，把目标相关的参数换成当前光环目标
+--==== 学习记录持久化（跨服务器/重注入）====
+local LEARN_FILE = "xhub_learned.txt"
+
+local function hasFS()
+    return (type(writefile) == "function" and type(readfile) == "function")
+end
+
+local function argToTag(v)
+    local tv = typeof(v)
+    if tv == "Instance" then return "inst" end
+    if tv == "number" then return "num:" .. tostring(v) end
+    if tv == "boolean" then return "bool:" .. tostring(v) end
+    if tv == "string" then return "str:" .. v:gsub("\n", " ") end
+    if tv == "Vector3" then return "vec3" end
+    if tv == "CFrame" then return "cf" end
+    if tv == "nil" then return "nil" end
+    return "skip"
+end
+
+function M.saveLearned()
+    if not hasFS() then return false end
+    local lines = {}
+    for _, r in ipairs(S.learned or {}) do
+        if r.remote and r.remote.Parent then
+            local tags = {}
+            for i = 1, r.n do tags[i] = argToTag(r.args[i]) end
+            lines[#lines + 1] = r.remote:GetFullName() .. "|" .. table.concat(tags, ",")
+        end
+    end
+    local ok = pcall(function() writefile(LEARN_FILE, table.concat(lines, "\n")) end)
+    return ok, #lines
+end
+
+local function resolvePath(path)
+    local cur = game
+    for part in string.gmatch(path, "[^%.]+") do
+        local nxt = cur:FindFirstChild(part)
+        if not nxt then return nil end
+        cur = nxt
+    end
+    return cur
+end
+
+function M.loadLearned()
+    if not hasFS() then return 0 end
+    local ok, data = pcall(function() return readfile(LEARN_FILE) end)
+    if not ok or not data or data == "" then return 0 end
+    local out = {}
+    for line in string.gmatch(data, "[^\n]+") do
+        local path, tagstr = line:match("^(.-)|(.+)$")
+        if path and tagstr then
+            local r = resolvePath(path)
+            if r then
+                local tags = {}
+                for t in string.gmatch(tagstr .. ",", "([^,]*),") do tags[#tags + 1] = t end
+                local args, n = {}, 0
+                for i, t in ipairs(tags) do
+                    n = i
+                    if t == "inst" then args[i] = nil
+                    elseif t:sub(1, 4) == "num:" then args[i] = tonumber(t:sub(5)) or 0
+                    elseif t:sub(1, 5) == "bool:" then args[i] = (t:sub(6) == "true")
+                    elseif t:sub(1, 4) == "str:" then args[i] = t:sub(5)
+                    elseif t == "vec3" then args[i] = Vector3.zero
+                    elseif t == "cf" then args[i] = CFrame.new()
+                    else args[i] = nil end
+                end
+                out[#out + 1] = { remote = r, args = args, n = n, name = r.Name, tpl = true }
+            end
+        end
+    end
+    S.learned = out
+    return #out
+end
 function M.replayLearned(model, part)
     local list = S.learned
     if not list or #list == 0 then
@@ -3220,6 +3293,8 @@ function M.replayLearned(model, part)
                     out[i] = part and CFrame.new(part.Position) or v
                 elseif tv == "Vector3" then
                     out[i] = part and part.Position or v
+                elseif tv == "number" then
+                    out[i] = v * (S.replayScale or 1)
                 else
                     out[i] = v
                 end
@@ -4627,8 +4702,14 @@ M.addButton(pCombat, "① 学习攻击（点我开始，然后手动砍一刀）
     auraLog("学习模式已开：请手动砍目标一刀（10 秒后自动结束）", Color3.fromRGB(150, 210, 255))
     task.delay(10, function()
         S.learnActive = false
-        auraLog(("学习结束：共记录 %d 个调用"):format(#(S.learned or {})), Color3.fromRGB(150, 210, 255))
+        local okS, cntS = pcall(M.saveLearned)
+        auraLog(("学习结束：共记录 %d 个调用%s"):format(#(S.learned or {}), (okS and cntS and cntS > 0) and "（已保存，下次注入自动载入）" or "（未保存：执行器不支持写文件）"), Color3.fromRGB(150, 210, 255))
     end)
+end)
+M.addSlider(pCombat, "重放数值放大 x（对带伤害数字的远程有效）", 1, 50, 1, function(v) S.replayScale = v end)
+M.addButton(pCombat, "立即保存学习记录", function()
+    local okS, cntS = pcall(M.saveLearned)
+    notify(okS and ("已保存 " .. tostring(cntS) .. " 个调用") or "保存失败（执行器不支持写文件）", okS and "ok" or "err", 3)
 end)
 M.addToggle(pCombat, "光环自动重放学到的攻击（开=不再空刀）", true, function(v)
     S.useLearned = v
@@ -5158,6 +5239,14 @@ end
 
 _G.XHubKill = function() RUNNING = false end
 _G.XHub = { version = VERSION, build = BUILD, shutdown = shutdownXHub, running = function() return RUNNING end }
+
+-- 自动载入上次学习到的攻击调用
+task.delay(1.0, function()
+    local okL, cntL = pcall(M.loadLearned)
+    if okL and cntL and cntL > 0 then
+        pcall(function() auraLog(("已载入历史学习记录 %d 个调用"):format(cntL), Color3.fromRGB(150, 210, 255)) end)
+    end
+end)
 if S.noclip then
     task.delay(0.6, function() pcall(function() M.setNoclip(true) end) end)
 end
