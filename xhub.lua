@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v9.5"
-local BUILD   = "2026-11-01 21:45"
+local VERSION = "v9.6"
+local BUILD   = "2026-11-01 22:05"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -26,9 +26,35 @@ local CONFIG = {
 local RUNNING = true          -- shutdown flag
 local shutdownXHub            -- forward decl (UI button references it)
 pcall(function()
+    -- ① 让旧实例自己优雅退出
     if _G.XHub and type(_G.XHub) == "table" and _G.XHub.shutdown then
         _G.XHub.shutdown()
-        task.wait(0.15)
+        task.wait(0.2)
+    end
+
+    -- ② 兜底：清掉旧实例可能残留的 GUI（即使 shutdown 没跑成功）
+    local targets = {}
+    pcall(function() table.insert(targets, game:GetService("CoreGui")) end)
+    pcall(function() table.insert(targets, Players.LocalPlayer:FindFirstChild("PlayerGui")) end)
+    for _, cont in ipairs(targets) do
+        if cont then
+            for _, g in ipairs(cont:GetChildren()) do
+                if g:IsA("ScreenGui") and tostring(g.Name):find("XHub") then
+                    pcall(function() g:Destroy() end)
+                end
+            end
+        end
+    end
+
+    -- ③ 兜底：清掉残留的 Highlight / Billboard
+    local n = 0
+    for _, d in ipairs(workspace:GetDescendants()) do
+        n = n + 1
+        if n > 6000 then break end
+        if (d:IsA("Highlight") or d:IsA("BillboardGui") or d:IsA("TextLabel") and d.Parent == nil) then
+            local nm = tostring(d.Name)
+            if nm:find("XHub") then pcall(function() d:Destroy() end) end
+        end
     end
 end)
 local Players, RS = game:GetService("Players"), game:GetService("RunService")
