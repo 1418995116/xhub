@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v10.0"
-local BUILD   = "2026-11-02 00:10"
+local VERSION = "v10.1"
+local BUILD   = "2026-11-02 00:35"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -3836,11 +3836,11 @@ M.addToggle(pCombat, "光环打玩家", false, function(v) S.auraPlayer = v end)
 M.addSlider(pCombat, "光环半径 studs", 5, 60, 20, function(v) S.auraRadius = v end)
 M.addSlider(pCombat, "光环每次伤害", 0, 100, 20, function(v) S.auraDmg = v end)
 M.addSlider(pCombat, "光环攻击间隔 ms", 50, 500, 150, function(v) S.auraInt = v / 1000 end)
-addToggle(pCombat, "光环调试信息（F9）", false, function(v)
+M.addToggle(pCombat, "光环调试信息（F9）", false, function(v)
     S.auraDebug = v
     notify(v and "光环调试已开：F9 会打印目标/工具/远程改写状态" or "光环调试已关", "info", 2.5)
 end)
-addToggle(pCombat, "光环把射击方向改到目标（远程改写）", true, function(v)
+M.addToggle(pCombat, "光环把射击方向改到目标（远程改写）", true, function(v)
     S.auraRemote = v
     notify(v and "光环会同时改写武器远程方向（需要开「远程改写」）" or "光环只激活工具，不改写远程", "info", 3)
 end)
