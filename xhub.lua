@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v13.8"
-local BUILD   = "2026-11-02 21:45"
+local VERSION = "v14.0"
+local BUILD   = "2026-11-02 22:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -989,7 +989,7 @@ function M.installRemoteAim()
         if not RUNNING then return old(self, ...) end
         local m = getnamecallmethod()
         local inWindow = os.clock() < fireUntil
-        if (m == "FireServer" or m == "InvokeServer") and S.learnActive then
+        if false and (m == "FireServer" or m == "InvokeServer") and S.learnActive then
             local nL = select("#", ...)
             local aL = { ... }
             local nmL = tostring(self.Name):lower()
@@ -2950,6 +2950,49 @@ task.spawn(function()
 end)
 
 --==================== 躲避触发扫描（不依赖 ESP，独立按名字找） ====================
+--==== 手持武器攻击距离（自动计算）====
+function M.toolReach()
+    local c = M.charOf(lp)
+    local tool = c and c:FindFirstChildOfClass("Tool")
+    if not tool then return 6 end
+    local nm = tool.Name:lower()
+    -- 远程武器：给个大范围
+    for _, k in ipairs({ "gun", "rifle", "sniper", "pistol", "shotgun", "bow", "crossbow", "launcher", "rpg", "枪", "弓" }) do
+        if nm:find(k, 1, true) then return 300 end
+    end
+    -- 近战：按工具最长部件尺寸估算
+    local longest = 0
+    for _, d in ipairs(tool:GetDescendants()) do
+        if d:IsA("BasePart") then
+            longest = math.max(longest, math.max(d.Size.X, math.max(d.Size.Y, d.Size.Z)))
+        end
+    end
+    local reach = 4 + longest * 1.2
+    if not tool:FindFirstChild("Handle") then reach = reach + 1 end
+    return math.clamp(reach, 5, 40)
+end
+
+-- 每 0.5 秒同步一次（换武器自动更新半径）
+task.spawn(function()
+    local lastTool
+    while RUNNING do
+        task.wait(0.5)
+        if S.autoReach and S.killAura then
+            local c = M.charOf(lp)
+            local tool = c and c:FindFirstChildOfClass("Tool")
+            local nm = tool and tool.Name or nil
+            if nm ~= lastTool then
+                lastTool = nm
+                local r = M.toolReach()
+                S.auraRadius = r
+                S.meleeRange = r
+                pcall(function()
+                    auraLog(("武器 %s → 攻击距离 %.1f studs"):format(tostring(nm or "空手"), r), Color3.fromRGB(150, 210, 255))
+                end)
+            end
+        end
+    end
+end)
 --==== 杀戮光环（Kill Aura）====
 auraTarget = nil
 
@@ -3771,7 +3814,7 @@ task.spawn(function()
                 end
                 local nowT = os.clock()
                 local fireGap = S.auraFireInt or 0.25
-                if (tool or S.learnCall) and nowT - (S.lastAuraSwing or 0) >= fireGap then
+                if tool and nowT - (S.lastAuraSwing or 0) >= fireGap then
                     S.lastAuraSwing = nowT
                     pcall(M.measureSwing, m)
                     pcall(function()
@@ -3779,34 +3822,7 @@ task.spawn(function()
                         local hh = cc and cc:FindFirstChildOfClass("Humanoid")
                         if hh and tool and tool.Parent ~= cc then hh:EquipTool(tool) end
                     end)
-                    local toolChanged = false
-                    if S.learnCall and S.learnCall.tool and tool and S.learnCall.tool ~= tool.Name then
-                        toolChanged = true
-                    end
-                    if toolChanged then
-                        S.learnActive = true
-                        if os.clock() - (S._toolWarn or 0) > 3 then
-                            S._toolWarn = os.clock()
-                            auraLog(("换了武器（%s → %s）：请砍一刀重新学习"):format(tostring(S.learnCall.tool), tool.Name), Color3.fromRGB(255, 220, 120))
-                        end
-                        S.learnCall = nil
-                    end
-                    if S.learnCall and not (S.learnCall.remote and S.learnCall.remote.Parent) then
-                        pcall(M.retryResolve)
-                    end
-                    if S.learnCall and S.learnCall.remote and S.learnCall.remote.Parent then
-                        -- 已学会：只重放这一条真实攻击
-                        pcall(function() if tool then tool:Activate() end end)
-                        local okN = M.replayLearned(m, p) or 0
-                        if okN == 0 and tool then pcall(function() tool:Activate() end) end
-                    else
-                        -- 还没学会：第一次开光环自动进入学习
-                        if not S.learnActive then
-                            S.learnActive = true
-                            pcall(function() auraLog("未学习：现在手动砍目标一刀即可（只记这一次）", Color3.fromRGB(255, 220, 120)) end)
-                        end
-                        pcall(function() tool:Activate() end)
-                    end
+                    pcall(function() if tool then tool:Activate() end end)
                     -- 工具内远程只打一次不带参调用（缓存，避免每帧遍历）
                     if tool and not (S._toolCache and S._toolCacheTool == tool) then
                         local list = {}
@@ -4778,35 +4794,21 @@ M.addToggle(pCombat, "NPC 自瞄：只在按住左键时锁", true, function(v) 
 M.addToggle(pCombat, "NPC 自瞄：预判移动", true, function(v) S.npcLead = v end)
 M.addSlider(pCombat, "NPC 自瞄距离", 20, 400, 200, function(v) S.npcAimDist = v end)
 
-M.addSection(pCombat, "杀戮光环（学习一次真实攻击后自动重放）")
-M.addToggle(pCombat, "开启杀戮光环（未学习时自动进入学习）", false, function(v)
+M.addSection(pCombat, "杀戮光环")
+M.addToggle(pCombat, "开启杀戮光环", false, function(v)
     S.killAura = v
-    if v then
-        pcall(ensureAuraPanel)
-        if auraPanel then auraPanel.Visible = true end
-        if not (S.learnCall and S.learnCall.remote and S.learnCall.remote.Parent) then
-            S.learnActive = true
-            auraLog("未学习：现在手动砍目标一刀即可（只记这一次）", Color3.fromRGB(255, 220, 120))
-        else
-            auraLog("光环启动 · 已学会: " .. tostring(S.learnCall.name), Color3.fromRGB(255, 170, 170))
-        end
-    else
-        if auraPanel then auraPanel.Visible = false end
-    end
-    notify(v and "杀戮光环: 开" or "杀戮光环: 关", v and "ok" or "info", 1.8)
-end)
-M.addButton(pCombat, "重新学习（清除已学攻击）", function()
-    S.learnCall = nil
-    S.learned = nil
-    S.learnActive = true
-    pcall(function() if hasFS and writefile then writefile(LEARN_FILE, "") end end)
-    auraLog("已清除旧记录：手动砍一刀重新学习", Color3.fromRGB(255, 220, 120))
+    if v then pcall(ensureAuraPanel); if auraPanel then auraPanel.Visible = true end end
+    notify(v and "杀戮光环: 开" or "杀戮光环: 关", v and "ok" or "info", 1.6)
 end)
 UIKEYS.setAuraKeyBtn = M.addButton(pCombat, "光环快捷键: " .. S.auraKey.Name .. "（点我改键）", function()
     S.keyCapture = "aura"
     notify("按一个新键作为光环开关（Esc 取消）", "warn", 4)
 end)
-M.addSlider(pCombat, "光环半径 studs", 5, 60, 20, function(v) S.auraRadius = v end)
+M.addToggle(pCombat, "自动算武器攻击距离", true, function(v)
+    S.autoReach = v
+    notify(v and "已按手持武器自动计算攻击距离" or "使用固定半径", "info", 2.4)
+end)
+M.addSlider(pCombat, "光环半径 studs（自动模式下会被武器距离覆盖）", 5, 120, 20, function(v) S.auraRadius = v end)
 
 M.addToggle(pCombat, "瞄准 NPC / 怪物", false, function(v)
     S.aimNpc = v
