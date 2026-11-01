@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v8.7"
-local BUILD   = "2026-11-01 17:50"
+local VERSION = "v8.8"
+local BUILD   = "2026-11-01 18:15"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -45,7 +45,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "zoom", doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -2338,6 +2338,7 @@ end)
 
 --==================== 第三人称 / 模拟移动 / 自动躲避 ====================
 local camOrig = nil
+local camDbg = nil
 local orbit = { yaw = 0, pitch = 0.25, dist = 14 }
 
 local function setThirdPerson(on)
@@ -2389,6 +2390,15 @@ RS:BindToRenderStep("XHubCam", Enum.RenderPriority.Last.Value, function()
                 cam.CameraType = Enum.CameraType.Custom
             end
         end)
+        -- 兜底：如果相机离人太近（<6 studs），直接推镜头到身后
+        local hz = hum0 and hum0.Parent and hum0.Parent:FindFirstChild("HumanoidRootPart")
+        if hz then
+            local dd = (cam.CFrame.Position - hz.Position).Magnitude
+            if dd < 6 then
+                local back = hz.CFrame.LookVector * -14 + Vector3.new(0, 4, 0)
+                pcall(function() cam.CFrame = CFrame.lookAt(hz.Position + back, hz.Position) end)
+            end
+        end
         return
     end
     local d = UIS:GetMouseDelta()
@@ -2408,6 +2418,18 @@ RS:BindToRenderStep("XHubCam", Enum.RenderPriority.Last.Value, function()
     pcall(function() cam.CameraSubject = nil end)
     pcall(function() cam.CameraType = Enum.CameraType.Scriptable end)
     cam.CFrame = CFrame.lookAt(pos, eye)
+    if S.tpDebug then
+        if not (camDbg and camDbg.Parent) then
+            camDbg = mk("TextLabel", { Name = "XHubCamDbg", Size = UDim2.fromOffset(420, 22),
+                Position = UDim2.new(0, 12, 0, 40), BackgroundTransparency = 0.3,
+                BackgroundColor3 = Color3.fromRGB(12, 16, 22), Text = "",
+                Font = Enum.Font.Code, TextSize = 12, TextColor3 = Color3.fromRGB(160, 230, 255),
+                ZIndex = 40 }, gui)
+        end
+        camDbg.Text = ("tp=%s  type=%s  mode=%s  距离=%.1f  yaw=%.2f pitch=%.2f")
+            :format(tostring(S.tpMode), tostring(cam.CameraType), tostring(lp.CameraMode),
+                    (cam.CFrame.Position - hrp.Position).Magnitude, orbit.yaw, orbit.pitch)
+    end
 end)
 
 -- 变焦锁定模式：每帧把游戏的视角设置拉回来（不少游戏会锁第一人称）
@@ -2547,9 +2569,16 @@ end
 
 local function hideSmart(name)
     if hiding then return end
-    if os.clock() < (S.lastHide or 0) + 15 then return end
+    if os.clock() < (S.lastHide or 0) + 15 then
+        if os.clock() - (S.lastHideNotify or 0) > 20 then
+            S.lastHideNotify = os.clock()
+            notify(("躲避冷却中（距上次 %.0f 秒），%s 已到 %.0fm 但未再次触发"):format(os.clock() - (S.lastHide or 0), tostring(name), 0), "info", 3)
+        end
+        return
+    end
     S.lastHide = os.clock()
     hiding = true
+    notify(("触发躲避: %s"):format(tostring(name)), "ok", 2)
 
     if preferSky(name) then
         skyHide(name)
@@ -2695,11 +2724,26 @@ end)
 local nearestTrigger
 
 task.spawn(function()
+    local warned = 0
     while true do
         task.wait(0.4)
-        if S.autoHide then
+        local ok, err = pcall(function()
             local name, d = nearestTrigger()
-            if name and d <= S.hideDist then hideSmart(name) end
+            if not name then return end
+            if d <= S.hideDist then
+                if S.autoHide then
+                    hideSmart(name)
+                else
+                    if os.clock() - warned > 20 then
+                        warned = os.clock()
+                        notify(("检测到 %s %.0fm，但【自动躲避未开启】"):format(name, d), "warn", 4)
+                    end
+                end
+            end
+        end)
+        if not ok then
+            notify("躲避循环异常: " .. tostring(err), "err", 4)
+            task.wait(2)
         end
     end
 end)
@@ -3324,6 +3368,12 @@ setTpModeBtn = addButton(pVisual, "第三人称模式: 变焦锁定", function()
     notify("模式 = " .. S.tpMode, "info", 1.6)
 end)
 addToggle(pVisual, "第三人称 Y 轴反转", true, function(v) S.invertY = v end)
+addToggle(pVisual, "第三人称调试信息（排查用）", false, function(v)
+    S.tpDebug = v
+    if not v and camDbg then camDbg:Destroy(); camDbg = nil end
+    notify(v and "已显示相机调试信息（左上角）" or "调试信息已关闭", "info", 2.2)
+end)
+addSlider(pVisual, "第三人称镜头距离 studs", 6, 40, 14, function(v) orbit.dist = v end)
 addButton(pVisual, "恢复默认视角", function() setThirdPerson(false) end)
 addSection(pVisual, "性能")
 addToggle(pVisual, "优化模式（降低扫描频率）", true, function(v)
