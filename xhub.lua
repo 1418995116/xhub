@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v13.2"
-local BUILD   = "2026-11-02 18:30"
+local VERSION = "v13.3"
+local BUILD   = "2026-11-02 19:05"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = true, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = true, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = false, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -4741,34 +4741,12 @@ M.addToggle(pCombat, "开启杀戮光环", false, function(v)
     end
     notify(v and ("杀戮光环已开：半径 " .. tostring(S.auraRadius) .. " studs") or "杀戮光环已关", "info", 2.2)
 end)
-M.addToggle(pCombat, "光环打 NPC / 怪物", true, function(v) S.auraNpc = v end)
-M.addToggle(pCombat, "光环打玩家", false, function(v) S.auraPlayer = v end)
-M.addToggle(pCombat, "一刀多砍（同一次挥手打多个目标）", true, function(v)
-    S.auraMulti = v
-    notify(v and "一刀多砍已开：每次挥手打范围内全部目标" or "一刀多砍已关：只打最近的一个", "info", 2.6)
-end)
-M.addSlider(pCombat, "多砍目标数", 1, 15, 5, function(v) S.auraMax = v end)
 M.addSlider(pCombat, "挥手间隔 ms（近战建议 300-500）", 50, 900, 350, function(v) S.auraFireInt = v / 1000 end)
 UIKEYS.setAuraKeyBtn = M.addButton(pCombat, "光环快捷键: " .. S.auraKey.Name .. "（点我改键）", function()
     S.keyCapture = "aura"
     notify("按一个新键作为光环开关（Esc 取消）", "warn", 4)
 end)
 M.addSlider(pCombat, "光环半径 studs", 5, 60, 20, function(v) S.auraRadius = v end)
-M.addSlider(pCombat, "近战有效距离 studs（超出不挥）", 2, 30, 12, function(v) S.meleeRange = v end)
-M.addToggle(pCombat, "远程武器模式（不限近战距离）", false, function(v)
-    S.auraRanged = v
-    notify(v and "远程模式：任意距离都会开火" or "近战模式：只在有效距离内挥砍", "info", 2.4)
-end)
-M.addToggle(pCombat, "显示光环范围（白色圆圈）", true, function(v) S.auraRing = v end)
-M.addSlider(pCombat, "光环攻击间隔 ms", 50, 500, 150, function(v) S.auraInt = v / 1000 end)
-M.addToggle(pCombat, "光环调试信息（F9）", false, function(v)
-    S.auraDebug = v
-    notify(v and "光环调试已开：F9 会打印目标/工具/远程改写状态" or "光环调试已关", "info", 2.5)
-end)
-M.addToggle(pCombat, "光环把射击方向改到目标（远程改写）", true, function(v)
-    S.auraRemote = v
-    notify(v and "光环会同时改写武器远程方向（需要开「远程改写」）" or "光环只激活工具，不改写远程", "info", 3)
-end)
 
 M.addToggle(pCombat, "瞄准 NPC / 怪物", false, function(v)
     S.aimNpc = v
