@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v10.9"
-local BUILD   = "2026-11-02 05:10"
+local VERSION = "v11.0"
+local BUILD   = "2026-11-02 05:45"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -1951,7 +1951,7 @@ function M.isEntityModel(m)
 end
 
 -- 目标扫描：专门找"带 Humanoid 的 Model"（不受 scanAll 数量上限影响）
--- 目标索引：事件驱动维护，避免周期性全树遍历
+-- 目标索引：事件驱动 + 深扫补全（每 6 秒一次，深度 3）
 local targetIndex, targetIndexT = {}, 0
 do
     pcall(function()
@@ -1964,24 +1964,36 @@ do
     end)
 end
 
+local function deepIndex()
+    local seen = 0
+    local function walk(inst, depth)
+        if depth > 3 or seen > 12000 then return end
+        for _, c in ipairs(inst:GetChildren()) do
+            seen = seen + 1
+            if c:IsA("Model") and c:FindFirstChildOfClass("Humanoid") then targetIndex[c] = true end
+            if c:IsA("Model") or c:IsA("Folder") then walk(c, depth + 1) end
+        end
+    end
+    pcall(walk, workspace, 0)
+    pcall(function()
+        local cr = workspace:FindFirstChild("CurrentRooms")
+        if cr then
+            for _, c in ipairs(cr:GetChildren()) do
+                if c:IsA("Model") and c:FindFirstChildOfClass("Humanoid") then targetIndex[c] = true end
+                if c:IsA("Model") or c:IsA("Folder") then walk(c, 1) end
+            end
+        end
+    end)
+end
+
 function M.scanTargets()
     local now = os.clock()
-    -- 每 6 秒做一次补扫（防止事件漏掉的模型）
     if now - targetIndexT > 6 then
         targetIndexT = now
         for m in pairs(targetIndex) do
             if not m.Parent then targetIndex[m] = nil end
         end
-        pcall(function()
-            local cr = workspace:FindFirstChild("CurrentRooms")
-            local roots = { workspace }
-            if cr then roots[#roots + 1] = cr end
-            for _, root in ipairs(roots) do
-                for _, c in ipairs(root:GetChildren()) do
-                    if c:IsA("Model") and c:FindFirstChildOfClass("Humanoid") then targetIndex[c] = true end
-                end
-            end
-        end)
+        deepIndex()
     end
     local out = {}
     for m in pairs(targetIndex) do
@@ -1992,6 +2004,9 @@ function M.scanTargets()
     end
     return out
 end
+
+-- 启动时立即建一次索引（别等 6 秒）
+task.spawn(function() task.wait(0.5) pcall(deepIndex) end)
 function M.scanAll(cap)
     local out, n = {}, 0
     cap = cap or 5000
@@ -2895,6 +2910,27 @@ end)
 auraTarget = nil
 
 -- 独立扫描（不依赖 ESP 开关，NPC/玩家都能找到）
+-- NPC ESP 事件快路径：新怪一出现立即上框（每 0.4 秒补一次）
+task.spawn(function()
+    while RUNNING do
+        task.wait(0.4)
+        if S.espNpc then
+            local shown = 0
+            for _ in pairs(npcStore) do shown = shown + 1 end
+            local maxN = S.npcEspMax or 40
+            if shown < maxN then
+                for _, m in ipairs(M.scanTargets()) do
+                    if shown >= maxN then break end
+                    if not Players:GetPlayerFromCharacter(m) and not npcStore[m] then
+                        pcall(M.ensureNpcEsp, m)
+                        shown = shown + 1
+                    end
+                end
+            end
+        end
+    end
+end)
+
 --==== 光环范围：白色圆环（纯描边，用 Drawing 画 48 段折线）====
 local auraDraw = { lines = {}, ok = false }
 local function ensureAuraDraw()
@@ -3148,6 +3184,15 @@ task.spawn(function()
                 -- ① 先把武器远程的改写窗口打开，把射击方向改成目标
                 if S.auraRemote then fireUntil = os.clock() + 0.3 end
 
+
+                -- 面向目标（只转身，不移动）
+                pcall(function()
+                    local c1 = M.charOf(lp)
+                    local h1 = c1 and c1:FindFirstChild("HumanoidRootPart")
+                    if h1 then
+                        h1.CFrame = CFrame.lookAt(h1.Position, Vector3.new(p.Position.X, h1.Position.Y, p.Position.Z))
+                    end
+                end)
 
                 -- ③ 真正走游戏判定的攻击：激活手里工具
                 local c = M.charOf(lp)
