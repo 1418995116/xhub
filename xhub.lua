@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v17.3"
-local BUILD   = "2026-11-04 08:20"
+local VERSION = "v17.4"
+local BUILD   = "2026-11-04 19:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -62,6 +62,12 @@ pcall(function()
     end
 end)
 local Players, RS = game:GetService("Players"), game:GetService("RunService")
+
+-- ① 最先执行：还原上一版注入残留的 __namecall 钩子（否则会被 267 检测踢出）
+pcall(function()
+    if _G.__XHubRestoreNamecall then _G.__XHubRestoreNamecall() end
+    _G.__XHubRestoreNamecall = nil
+end)
 local UIS, CoreGui = game:GetService("UserInputService"), game:GetService("CoreGui")
 local RStorage, SC = game:GetService("ReplicatedStorage"), game:GetService("ScriptContext")
 local Lighting, TweenService = game:GetService("Lighting"), game:GetService("TweenService")
@@ -83,7 +89,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = false, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, aimNo360 = true, aimMaxAngle = 60, aimMaxPitch = 35, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = false, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = false, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, aimNo360 = true, aimMaxAngle = 60, aimMaxPitch = 35, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = false, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, noHook = true, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -1277,12 +1283,18 @@ function M.argSig(args, n)
 end
 
 function M.installRemoteAim()
+    if S.noHook then return end   -- 安全模式：不装 namecall 钩子（会被 267 检测）
     if remoteHooked then return end
     if not (hookmetamethod and getnamecallmethod and checkcaller) then
         notify("执行器不支持 hookmetamethod，远程改写不可用", "err", 3)
         return
     end
     local old
+    local mt0 = getrawmetatable and getrawmetatable(game)
+    local orig0 = mt0 and rawget(mt0, "__namecall")
+    _G.__XHubRestoreNamecall = function()
+        pcall(function() if mt0 and orig0 then rawset(mt0, "__namecall", orig0) end end)
+    end
     old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         if not RUNNING then return old(self, ...) end
         local m = getnamecallmethod()
@@ -1889,6 +1901,7 @@ function M.runLayer1()
 end
 
 function M.hookRemote(inst)
+    if S.noHook then return false end
     if not (hookmetamethod and getnamecallmethod and checkcaller) then return false end
     local ok = pcall(function()
         local old
@@ -2000,6 +2013,7 @@ local blockedRemotes = {}
 function M.blockRemoteSubstr(sub)
     sub = tostring(sub or ""):lower()
     if sub == "" then return 0 end
+    if S.noHook then return 0 end
     if not (hookmetamethod and getnamecallmethod) then return 0 end
     local n = 0
     local function walk(root)
@@ -5408,6 +5422,17 @@ task.spawn(function()
 end)
 
 print("[XHub][ui] build pGuard")
+M.addSection(pGuard, "① 反检测（重要）")
+M.addToggle(pGuard, "安全模式：不挂钩子（防 267 namecall 检测）", true, function(v)
+    S.noHook = v
+    notify(v and "安全模式开启：不装 namecall 钩子（推荐）" or "已关闭：远程改写可用但可能被检测", v and "ok" or "warn", 4)
+end)
+M.addButton(pGuard, "立即还原 namecall 钩子（解除 267 风险）", function()
+    pcall(function() if _G.__XHubRestoreNamecall then _G.__XHubRestoreNamecall() end end)
+    S.noHook = true
+    notify("已尝试还原游戏原始 namecall", "ok", 3)
+end)
+
 M.addSection(pGuard, "① 基础压制")
 M.addButton(pGuard, "圣奥里安全预设（限速 + 关飞行 + 开①③）", function()
     S.safeMode = true
