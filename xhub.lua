@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v16.2"
-local BUILD   = "2026-11-04 01:00"
+local VERSION = "v16.3"
+local BUILD   = "2026-11-04 01:45"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = false, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = true, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = false, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -891,15 +891,32 @@ function M.pickNpcFromStore(maxDist, requireLos, partName)
     if not hrp then return nil, nil, 0 end
     maxDist = maxDist or 200
     local bestM, bestPos, bestD, cand = nil, nil, math.huge, 0
+    local nowP = os.clock()
+    M._losCache = M._losCache or {}
     for m in pairs(npcStore) do
         if m and m.Parent and m ~= c then
-            cand = cand + 1
-            local _, pos = M.npcPartPos(m, partName)
-            if pos then
-                local d = (pos - hrp.Position).Magnitude
-                if d <= maxDist and d < bestD then
-                    if (not requireLos) or M.hasLineOfSight(m, pos) then
-                        bestD, bestPos, bestM = d, pos, m
+            -- 尸体过滤：血量 <= 0 不锁（活体这里读到的是 100）
+            local humC = m:FindFirstChildOfClass("Humanoid")
+            local alive = not (humC and humC.Health <= 0)
+            if alive then
+                cand = cand + 1
+                local _, pos = M.npcPartPos(m, partName)
+                if pos then
+                    local d = (pos - hrp.Position).Magnitude
+                    if d <= maxDist and d < bestD then
+                        local losOK = true
+                        if requireLos then
+                            local cache = M._losCache[m]
+                            if cache and (nowP - cache.t) < 0.25 then
+                                losOK = cache.ok
+                            else
+                                losOK = M.hasLineOfSight(m, pos)
+                                M._losCache[m] = { t = nowP, ok = losOK }
+                            end
+                        end
+                        if losOK then
+                            bestD, bestPos, bestM = d, pos, m
+                        end
                     end
                 end
             end
@@ -908,7 +925,6 @@ function M.pickNpcFromStore(maxDist, requireLos, partName)
     S._npcCand = cand
     return bestPos, bestM, cand
 end
-
 -- NPC 专用目标查找（独立自瞄 / 杀戮光环共用）
 function M.findNpcTarget(maxDist)
     local c = M.charOf(lp)
@@ -997,9 +1013,15 @@ local function aimTick(dt)
     -- 独立 NPC 自瞄：不要求按住左键也会转向（写相机放到最后一层渲染回调执行）
     if S.npcAim then
         local wantNpc = (not S.npcAimOnFire) or UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+        -- 选目标节流：0.12 秒一次，避免每帧遍历/射线导致掉帧与抖动
         local npPos, nm2, npCand = nil, nil, 0
         if wantNpc then
-            npPos, nm2, npCand = M.pickNpcFromStore(S.npcAimDist, S.npcWall, S.npcPart)
+            local nowPick = os.clock()
+            if not (M._pickT and (nowPick - M._pickT) < 0.12) or not M._pickPos then
+                M._pickT = nowPick
+                M._pickPos, M._pickM, M._pickCand = M.pickNpcFromStore(S.npcAimDist, S.npcWall, S.npcPart)
+            end
+            npPos, nm2, npCand = M._pickPos, M._pickM, M._pickCand or 0
         else
             S._npcCand = S._npcCand or 0
         end
@@ -5092,7 +5114,8 @@ M.addToggle(pCombat, "开启 NPC 自瞄", false, function(v)
 end)
 M.addToggle(pCombat, "NPC 自瞄：只在按住左键时锁", true, function(v) S.npcAimOnFire = v end)
 M.addToggle(pCombat, "NPC 自瞄：预判移动", true, function(v) S.npcLead = v end)
-M.addSlider(pCombat, "NPC 自瞄距离", 20, 400, 200, function(v) S.npcAimDist = v end)
+M.addSlider(pCombat, "NPC 自瞄距离（世界距离上限）", 20, 400, 200, function(v) S.npcAimDist = v end)
+M.addSlider(pCombat, "NPC 瞄准距离（准星内才锁，越小越稳）", 20, 400, 200, function(v) S.npcAimRange = v end)
 M.addToggle(pCombat, "显示 NPC 自瞄 FOV 圈（绿色）", true, function(v) S.npcShowFov = v end)
 M.addSlider(pCombat, "NPC 自瞄 FOV 半径 像素", 40, 600, 300, function(v) S.npcAimFov = v end)
 UIKEYS.npcPartBtn = M.addButton(pCombat, "NPC 自瞄部位: 头部（点我切换）", function()
