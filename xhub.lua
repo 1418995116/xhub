@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v15.4"
-local BUILD   = "2026-11-03 19:20"
+local VERSION = "v15.5"
+local BUILD   = "2026-11-03 19:55"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -922,7 +922,36 @@ local function aimTick(dt)
     end
 
     -- NPC 自瞄优先：有目标就跳过本帧玩家自瞄的相机写入，避免互相覆盖
-    if npcAimGoal then return end
+    if npcAimGoal then
+        -- 提前返回前也要更新两个 FOV 圈，否则圈会消失
+        if fovGui then
+            fovGui.Visible = (S.aim and S.showFov)
+            if fovGui.Visible then
+                local vpA = cam.ViewportSize
+                if Drawing then
+                    fovGui.Position = Vector2.new(vpA.X / 2, vpA.Y / 2)
+                    fovGui.Radius = S.aimFov
+                else
+                    fovGui.Position = UDim2.fromOffset(vpA.X / 2, vpA.Y / 2)
+                    fovGui.Size = UDim2.fromOffset(S.aimFov * 2, S.aimFov * 2)
+                end
+            end
+        end
+        if npcFovGui then
+            npcFovGui.Visible = (S.npcAim and S.npcShowFov)
+            if npcFovGui.Visible then
+                local vpB = cam.ViewportSize
+                if Drawing then
+                    npcFovGui.Position = Vector2.new(vpB.X / 2, vpB.Y / 2)
+                    npcFovGui.Radius = S.npcAimFov or 300
+                else
+                    npcFovGui.Position = UDim2.fromOffset(vpB.X / 2, vpB.Y / 2)
+                    npcFovGui.Size = UDim2.fromOffset((S.npcAimFov or 300) * 2, (S.npcAimFov or 300) * 2)
+                end
+            end
+        end
+        return
+    end
 
     if fovGui then
         fovGui.Visible = (S.aim and S.showFov)
