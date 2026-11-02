@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v16.6"
-local BUILD   = "2026-11-04 03:50"
+local VERSION = "v16.7"
+local BUILD   = "2026-11-04 04:25"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -4760,7 +4760,10 @@ function M.ensureNpcEsp(m)
     local maxD = S.npcEspDist or 300
     local tooFar = dNow and dNow > maxD
     -- 尸体：不销毁，只改成灰色标记（仍绘制，但不作为自瞄目标）
+    local humNow = m:FindFirstChildOfClass("Humanoid")
+    local prev = npcStore[m]
     local isDead = (humNow ~= nil and humNow.Health <= 0) and prev ~= nil and prev.seenAlive
+    local o = npcStore[m]
     if not o then o = {}; npcStore[m] = o end
     if not (o.hl and o.hl.Parent) then
         o.hl = mk("Highlight", { Name = "XHubNpcEsp",
