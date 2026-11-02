@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v14.6"
-local BUILD   = "2026-11-03 14:20"
+local VERSION = "v14.7"
+local BUILD   = "2026-11-03 15:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -4502,6 +4502,13 @@ function M.ensureNpcEsp(m)
     local dNow = M.distTo(m)
     local maxD = S.npcEspDist or 300
     local tooFar = dNow and dNow > maxD
+    -- 死亡过滤：血量 <= 0 的 NPC 不绘制（并清掉已有绘制）
+    local humNow = m:FindFirstChildOfClass("Humanoid")
+    if humNow and humNow.Health <= 0 then
+        local old0 = npcStore[m]
+        if old0 then pcall(M.destroyEnt, old0); npcStore[m] = nil end
+        return
+    end
     local o = npcStore[m]
     if not o then o = {}; npcStore[m] = o end
     if not (o.hl and o.hl.Parent) then
