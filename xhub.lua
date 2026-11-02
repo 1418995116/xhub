@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v17.5"
-local BUILD   = "2026-11-04 20:10"
+local VERSION = "v17.6"
+local BUILD   = "2026-11-04 21:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -5015,6 +5015,7 @@ local pMain, pVisual = M.addPage("主要"), M.addPage("视觉")
 local pCombat, pAuto = M.addPage("战斗"), M.addPage("自动")
 local pGuard = M.addPage("防护")
 local pMisc = M.addPage("杂项")
+local pTool = M.addPage("工具")
 
 print("[XHub][ui] build pMain")
 M.addSection(pMain, "MOVEMENT")
@@ -5666,6 +5667,63 @@ task.spawn(function()
     end
 end)
 
+--==== 工具页：Dex 快捷启动 ====
+M.addSection(pTool, "对象浏览器")
+mk("TextLabel", { Text = "Dex# 会 hook __namecall / 扫描注册表，可能触发本游戏的 267 检测。建议在测试服/单人服使用。",
+    BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 34), Font = Enum.Font.Gotham, TextSize = 10,
+    TextColor3 = Color3.fromRGB(255, 190, 120), TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = rowOrder }, pTool)
+rowOrder = rowOrder + 1
+M.addButton(pTool, "启动 Dex#（对象浏览器）", function()
+    local url = "https://raw.githubusercontent.com/snmwdd/DexPlusPlusPlusPlus/refs/heads/main/script.lua"
+    notify("正在加载 Dex#…", "info", 3)
+    task.spawn(function()
+        local ok, code = pcall(function() return game:HttpGet(url, true) end)
+        if not (ok and code and #code > 1000) then
+            notify("下载失败（网络/被拦截），试试换镜像", "err", 4)
+            return
+        end
+        local ok2, err = pcall(function()
+            local f = loadstring(code)
+            if not f then error("loadstring 失败") end
+            f()
+        end)
+        if ok2 then
+            notify("Dex# 已启动", "ok", 3)
+        else
+            notify("Dex 执行失败: " .. tostring(err), "err", 5)
+            print("[XHub][dex] " .. tostring(err))
+        end
+    end)
+end)
+M.addButton(pTool, "启动 Dex#（jsDelivr 镜像）", function()
+    local url = "https://cdn.jsdelivr.net/gh/snmwdd/DexPlusPlusPlusPlus@main/script.lua"
+    notify("正在从镜像加载 Dex#…", "info", 3)
+    task.spawn(function()
+        local ok, code = pcall(function() return game:HttpGet(url, true) end)
+        if not (ok and code and #code > 1000) then
+            notify("镜像下载失败", "err", 4)
+            return
+        end
+        local ok2, err = pcall(function() local f = loadstring(code); if f then f() end end)
+        notify(ok2 and "Dex# 已启动（镜像）" or ("Dex 失败: " .. tostring(err)), ok2 and "ok" or "err", 4)
+    end)
+end)
+M.addButton(pTool, "复制 Dex 链接到剪贴板", function()
+    pcall(function()
+        setclipboard([[loadstring(game:HttpGet("https://cdn.jsdelivr.net/gh/snmwdd/DexPlusPlusPlusPlus@main/script.lua"))()]])
+    end)
+    notify("已复制 Dex 加载器到剪贴板", "ok", 3)
+end)
+
+M.addSection(pTool, "说明")
+M.addButton(pTool, "打印当前服务器 PlaceId / JobId", function()
+    local txt = ("PlaceId=%d  JobId=%s"):format(game.PlaceId, tostring(game.JobId))
+    print("[XHub][dex] " .. txt)
+    pcall(function() setclipboard(txt) end)
+    notify("已打印并复制", "info", 3)
+end)
+
 pcall(function() tabBtns["主要"]:Fire("MouseButton1Click") end)
 
     end)
@@ -5831,5 +5889,5 @@ end)
 if S.noclip then
     task.delay(0.6, function() pcall(function() M.setNoclip(true) end) end)
 end
-print(("[XHub] %s (build %s) loaded · 6 页 · 菜单键 %s · 档位=%s (PlaceId=%d)"):format(
+print(("[XHub] %s (build %s) loaded · 7 页 · 菜单键 %s · 档位=%s (PlaceId=%d)"):format(
     VERSION, BUILD, CONFIG.MenuKeys[1].Name, currentProfileKey, game.PlaceId))
