@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v15.8"
-local BUILD   = "2026-11-03 21:45"
+local VERSION = "v15.9"
+local BUILD   = "2026-11-03 22:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -949,7 +949,7 @@ local function aimTick(dt)
                 local c9 = M.charOf(lp)
                 local h9 = c9 and c9:FindFirstChild("HumanoidRootPart")
                 if h9 then
-                    h9.CFrame = CFrame.lookAt(h9.Position, Vector3.new(goal.X, h9.Position.Y, goal.Z))
+                    -- 只转相机，绝不写 HRP（写 HRP 会让角色站不稳/抖动）
                     cam.CFrame = CFrame.lookAt(cam.CFrame.Position, goal)
                 end
             end)
@@ -4086,7 +4086,7 @@ end)
 local spinYaw = 0
 local spinLocked = false
 pcall(function() RS:UnbindFromRenderStep("XHubNpcAim") end)
-RS:BindToRenderStep("XHubNpcAim", Enum.RenderPriority.Camera.Value + 2, function()
+RS:BindToRenderStep("XHubNpcAim", Enum.RenderPriority.Last.Value - 1, function()
     if not npcAimGoal then return end
     if not S.npcAim then return end
     pcall(function()
