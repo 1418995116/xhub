@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v14.9"
-local BUILD   = "2026-11-03 16:20"
+local VERSION = "v15.0"
+local BUILD   = "2026-11-03 17:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 80, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimFov = 300, npcShowFov = true, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 80, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -749,6 +749,25 @@ if not fovGui then
     mk("UICorner", { CornerRadius = UDim.new(1, 0) }, fovGui)
     mk("UIStroke", { Color = CONFIG.Accent, Thickness = 1, Transparency = 0.3 }, fovGui)
 end
+-- NPC 自瞄专用 FOV 圈（绿色）
+local npcFovGui
+if Drawing then
+    local okN, cN = pcall(function()
+        local o = Drawing.new("Circle")
+        o.Thickness, o.NumSides, o.Filled = 1.5, 64, false
+        o.Color = Color3.fromRGB(120, 255, 160)
+        return o
+    end)
+    if okN then npcFovGui = cN end
+end
+if not npcFovGui then
+    npcFovGui = mk("Frame", { Name = "XHubNpcFov", BackgroundTransparency = 1,
+        AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(300, 300),
+        Visible = false, ZIndex = 3 }, gui)
+    mk("UICorner", { CornerRadius = UDim.new(1, 0) }, npcFovGui)
+    mk("UIStroke", { Color = Color3.fromRGB(120, 255, 160), Thickness = 1, Transparency = 0.3 }, npcFovGui)
+end
+
 function M.findTarget()
     local vp = cam.ViewportSize
     local center = Vector2.new(vp.X / 2, vp.Y / 2)
@@ -885,6 +904,20 @@ local function aimTick(dt)
             else
                 fovGui.Position = UDim2.fromOffset(vp.X / 2, vp.Y / 2)
                 fovGui.Size = UDim2.fromOffset(S.aimFov * 2, S.aimFov * 2)
+            end
+        end
+    end
+
+    if npcFovGui then
+        npcFovGui.Visible = (S.npcAim and S.npcShowFov)
+        if npcFovGui.Visible then
+            local vp2 = cam.ViewportSize
+            if Drawing then
+                npcFovGui.Position = Vector2.new(vp2.X / 2, vp2.Y / 2)
+                npcFovGui.Radius = S.npcAimFov or 300
+            else
+                npcFovGui.Position = UDim2.fromOffset(vp2.X / 2, vp2.Y / 2)
+                npcFovGui.Size = UDim2.fromOffset((S.npcAimFov or 300) * 2, (S.npcAimFov or 300) * 2)
             end
         end
     end
@@ -4870,6 +4903,8 @@ end)
 M.addToggle(pCombat, "NPC 自瞄：只在按住左键时锁", true, function(v) S.npcAimOnFire = v end)
 M.addToggle(pCombat, "NPC 自瞄：预判移动", true, function(v) S.npcLead = v end)
 M.addSlider(pCombat, "NPC 自瞄距离", 20, 400, 200, function(v) S.npcAimDist = v end)
+M.addToggle(pCombat, "显示 NPC 自瞄 FOV 圈（绿色）", true, function(v) S.npcShowFov = v end)
+M.addSlider(pCombat, "NPC 自瞄 FOV 半径 像素", 40, 600, 300, function(v) S.npcAimFov = v end)
 
 M.addSection(pCombat, "杀戮光环")
 M.addToggle(pCombat, "开启杀戮光环", false, function(v)
