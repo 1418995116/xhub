@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v16.8"
-local BUILD   = "2026-11-04 05:00"
+local VERSION = "v16.9"
+local BUILD   = "2026-11-04 05:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = false, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = false, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = false, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, aimNo360 = true, aimMaxAngle = 60, aimMaxPitch = 25, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = false, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -1053,10 +1053,25 @@ local function aimTick(dt)
                 local h9 = c9 and c9:FindFirstChild("HumanoidRootPart")
                 if h9 then
                     -- 只转相机，绝不写 HRP（写 HRP 会让角色站不稳/抖动）
-                    -- 走路时不做相机俯仰（避免前倾感）\n            -- 限制俯角：目标比相机低太多时抬高瞄准点
-                    local camY = cam.CFrame.Position.Y
-                    if goal.Y < camY - 3 then goal = Vector3.new(goal.X, camY - 3, goal.Z) end
-                    cam.CFrame = CFrame.lookAt(cam.CFrame.Position, goal)
+                    local camPos0 = cam.CFrame.Position
+                    local dir0 = goal - camPos0
+                    if dir0.Magnitude > 0.1 then
+                        -- 禁止 360° 自瞄：只在相机前方一定角度内才转（防身后目标把镜头甩过去）
+                        local look0 = cam.CFrame.LookVector
+                        local ang0 = math.deg(math.acos(math.clamp(look0:Dot(dir0.Unit), -1, 1)))
+                        local allowAng = S.aimMaxAngle or 60
+                        if (not S.aimNo360) or ang0 <= allowAng then
+                            -- 俯仰限制：最多下压/上抬 N 度，避免走路时"前倾"
+                            local maxPitch = math.rad(S.aimMaxPitch or 25)
+                            local flat = Vector3.new(dir0.X, 0, dir0.Z)
+                            local pitch = math.atan2(dir0.Y, flat.Magnitude)
+                            local cp = math.clamp(pitch, -maxPitch, maxPitch)
+                            local aimPt = camPos0 + (flat.Magnitude > 0.01
+                                and (flat.Unit * math.cos(cp) + Vector3.new(0, math.sin(cp), 0)) * dir0.Magnitude
+                                or dir0)
+                            cam.CFrame = CFrame.lookAt(camPos0, aimPt)
+                        end
+                    end
                 end
             end)
             if aimInfo then aimInfo.Text = ("NPC自瞄: %s  %.0fm"):format(nm2 and nm2.Name or "?", (npPos - cam.CFrame.Position).Magnitude) end
@@ -4189,7 +4204,22 @@ RS:BindToRenderStep("XHubNpcAim", Enum.RenderPriority.Last.Value - 1, function()
     if not npcAimGoal then return end
     if not S.npcAim then return end
     pcall(function()
-        cam.CFrame = CFrame.lookAt(cam.CFrame.Position, npcAimGoal)
+        -- 同样做角度/俯仰限制，避免覆盖后恢复大角度
+        local cp0 = cam.CFrame.Position
+        local d0 = npcAimGoal - cp0
+        if d0.Magnitude > 0.1 then
+            local look0 = cam.CFrame.LookVector
+            local ang0 = math.deg(math.acos(math.clamp(look0:Dot(d0.Unit), -1, 1)))
+            if (not S.aimNo360) or ang0 <= (S.aimMaxAngle or 60) then
+                local maxP = math.rad(S.aimMaxPitch or 25)
+                local flat0 = Vector3.new(d0.X, 0, d0.Z)
+                local pit0 = math.atan2(d0.Y, flat0.Magnitude)
+                local cpit = math.clamp(pit0, -maxP, maxP)
+                local pt = cp0 + (flat0.Magnitude > 0.01
+                    and (flat0.Unit * math.cos(cpit) + Vector3.new(0, math.sin(cpit), 0)) * d0.Magnitude or d0)
+                cam.CFrame = CFrame.lookAt(cp0, pt)
+            end
+        end
     end)
 end)
 
@@ -5139,6 +5169,12 @@ UIKEYS.npcPartBtn = M.addButton(pCombat, "NPC 自瞄部位: 头部（点我切�
     UIKEYS.npcPartBtn("NPC 自瞄部位: " .. (label[nxt] or nxt) .. "（点我切换）")
     notify("锁定部位: " .. (label[nxt] or nxt), "info", 2)
 end)
+M.addToggle(pCombat, "禁止 360° 自瞄（只锁前方角度内）", true, function(v)
+    S.aimNo360 = v
+    notify(v and "只锁相机前方角度内的目标" or "允许 360° 锁定", "info", 2.2)
+end)
+M.addSlider(pCombat, "自瞄最大角度 度（180=不限）", 15, 180, 60, function(v) S.aimMaxAngle = v end)
+M.addSlider(pCombat, "自瞄最大俯仰 度（防走路前倾）", 5, 60, 25, function(v) S.aimMaxPitch = v end)
 M.addToggle(pCombat, "隔墙不锁（需要视线）", true, function(v)
     S.npcWall = v
     notify(v and "只锁视线内 NPC（隔墙不锁）" or "可锁隔墙 NPC", "info", 2.4)
