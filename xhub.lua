@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v14.8"
-local BUILD   = "2026-11-03 15:40"
+local VERSION = "v14.9"
+local BUILD   = "2026-11-03 16:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -804,6 +804,7 @@ local aimInfo
 local aimWant, aimGoal = false, nil
 local npcStore = {}          -- forward decl (NPC ESP 会往里塞)
 local lastNpcTarget = nil
+local npcAimGoal = nil
 local hitTrack = { part = nil, hp = nil, last = 0 }
 
 -- NPC 专用目标查找（独立自瞄 / 杀戮光环共用）
@@ -853,25 +854,25 @@ local function aimTick(dt)
         end
     end
 
-    -- 独立 NPC 自瞄：与玩家自瞄互不影响
+    -- 独立 NPC 自瞄：不要求按住左键也会转向（写相机放到最后一层渲染回调执行）
     if S.npcAim and not main.Visible then
         local np, nm2 = M.findNpcTarget(S.npcAimDist)
         if np then
-            local wantFire = (not S.npcAimOnFire) or UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
-            if wantFire then
-                local goal = np.Position
-                if S.npcLead then
-                    local v = np.AssemblyLinearVelocity
-                    local dd = (np.Position - cam.CFrame.Position).Magnitude
-                    goal = np.Position + v * (dd / math.max(50, S.leadSpeed)) * (S.leadScale or 1)
-                end
-                pcall(function() cam.CFrame = CFrame.lookAt(cam.CFrame.Position, goal) end)
-                if aimInfo then aimInfo.Text = ("NPC自瞄: %s  %.0fm"):format(nm2.Name, (np.Position - cam.CFrame.Position).Magnitude) end
-                lastNpcTarget = nm2
+            local goal = np.Position
+            if S.npcLead then
+                local v = np.AssemblyLinearVelocity
+                local dd = (np.Position - cam.CFrame.Position).Magnitude
+                goal = np.Position + v * (dd / math.max(50, S.leadSpeed)) * (S.leadScale or 1)
             end
+            npcAimGoal = goal
+            if aimInfo then aimInfo.Text = ("NPC自瞄: %s  %.0fm"):format(nm2.Name, (np.Position - cam.CFrame.Position).Magnitude) end
+            lastNpcTarget = nm2
         else
+            npcAimGoal = nil
             if aimInfo and not S.aim then aimInfo.Text = "NPC自瞄: 无目标" end
         end
+    else
+        npcAimGoal = nil
     end
 
     if fovGui then
@@ -3937,6 +3938,15 @@ end)
 --==== 玩家旋转（Spin）：RenderStepped 最高优先级 + 关掉 AutoRotate 才不会被打回 ====
 local spinYaw = 0
 local spinLocked = false
+pcall(function() RS:UnbindFromRenderStep("XHubNpcAim") end)
+RS:BindToRenderStep("XHubNpcAim", Enum.RenderPriority.Camera.Value + 2, function()
+    if not npcAimGoal then return end
+    if not S.npcAim then return end
+    pcall(function()
+        cam.CFrame = CFrame.lookAt(cam.CFrame.Position, npcAimGoal)
+    end)
+end)
+
 pcall(function() RS:UnbindFromRenderStep("XHubSpin") end)
 RS:BindToRenderStep("XHubSpin", Enum.RenderPriority.Last.Value - 5, function(dt)
     local c = M.charOf(lp)
@@ -5334,7 +5344,7 @@ shutdownXHub = function()
     RUNNING = false
 
     -- 1) 解绑全部渲染回调
-    for _, name in ipairs({ "XHubAim", "XHubSilent", "XHubCam", "XHubSky", "XHubSpin", "XHubMouse" }) do
+    for _, name in ipairs({ "XHubAim", "XHubSilent", "XHubCam", "XHubSky", "XHubSpin", "XHubMouse", "XHubNpcAim" }) do
         pcall(function() RS:UnbindFromRenderStep(name) end)
     end
 
