@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v15.0"
-local BUILD   = "2026-11-03 17:00"
+local VERSION = "v15.1"
+local BUILD   = "2026-11-03 17:35"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -849,6 +849,12 @@ function M.findNpcTarget(maxDist)
         if hum0 and hum0.Health <= 0 then return end
         local d = (p.Position - hrp.Position).Magnitude
         if d > maxDist or d >= bestD then return end
+        if S.npcShowFov then
+            local vpF = cam.ViewportSize
+            local spF = cam:WorldToViewportPoint(p.Position)
+            local cF = Vector2.new(vpF.X / 2, vpF.Y / 2)
+            if (Vector2.new(spF.X, spF.Y) - cF).Magnitude > (S.npcAimFov or 300) then return end
+        end
         bestD, bestP, bestM = d, p, m
     end
     for m in pairs(npcStore) do consider(m) end
