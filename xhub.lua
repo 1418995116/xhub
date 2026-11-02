@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v16.9"
-local BUILD   = "2026-11-04 05:40"
+local VERSION = "v17.0"
+local BUILD   = "2026-11-04 06:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = false, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, aimNo360 = true, aimMaxAngle = 60, aimMaxPitch = 25, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = false, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = false, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, aimNo360 = true, aimMaxAngle = 60, aimMaxPitch = 35, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = false, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -871,8 +871,6 @@ end
 function M.hasLineOfSight(m, pos)
     local ok, res = pcall(function()
         local origin = cam.CFrame.Position
-        local dir = pos - origin
-        if dir.Magnitude < 0.1 then return true end
         local rp = RaycastParams.new()
         rp.FilterType = Enum.RaycastFilterType.Exclude
         local filter = {}
@@ -881,12 +879,32 @@ function M.hasLineOfSight(m, pos)
         if m then filter[#filter + 1] = m end
         rp.FilterDescendantsInstances = filter
         rp.IgnoreWater = true
-        local hit = workspace:Raycast(origin, dir, rp)
-        return hit == nil
+        local function clear(target)
+            local dir = target - origin
+            if dir.Magnitude < 0.1 then return true end
+            local hit = workspace:Raycast(origin, dir, rp)
+            if not hit then return true end
+            local inst = hit.Instance
+            if not inst then return true end
+            -- 命中目标自己身上 = 可见
+            if m and (inst == m or inst:IsDescendantOf(m)) then return true end
+            -- 透明/不碰撞的装饰物不算遮挡（玻璃、草、绳子等）
+            if inst.Transparency and inst.Transparency >= 0.6 then return true end
+            if inst.CanCollide == false then return true end
+            -- 命中点几乎贴着目标（薄墙/边缘）也算可见
+            if (hit.Position - target).Magnitude < 2.0 then return true end
+            return false
+        end
+        if clear(pos) then return true end
+        -- 再试躯干/根部，避免只瞄头被门框挡住
+        if m then
+            local alt = M.modelPos(m)
+            if alt and clear(alt) then return true end
+        end
+        return false
     end)
     return ok and res
 end
-
 function M.pickNpcFromStore(maxDist, requireLos, partName, useFov)
     local c = M.charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
@@ -5173,8 +5191,8 @@ M.addToggle(pCombat, "禁止 360° 自瞄（只锁前方角度内）", true, fun
     S.aimNo360 = v
     notify(v and "只锁相机前方角度内的目标" or "允许 360° 锁定", "info", 2.2)
 end)
-M.addSlider(pCombat, "自瞄最大角度 度（180=不限）", 15, 180, 60, function(v) S.aimMaxAngle = v end)
-M.addSlider(pCombat, "自瞄最大俯仰 度（防走路前倾）", 5, 60, 25, function(v) S.aimMaxPitch = v end)
+M.addSlider(pCombat, "自瞄最大角度 度（180=不限）", 30, 180, 60, function(v) S.aimMaxAngle = v end)
+M.addSlider(pCombat, "自瞄最大俯仰 度（只限镜头，不影响锁定）", 15, 90, 35, function(v) S.aimMaxPitch = v end)
 M.addToggle(pCombat, "隔墙不锁（需要视线）", true, function(v)
     S.npcWall = v
     notify(v and "只锁视线内 NPC（隔墙不锁）" or "可锁隔墙 NPC", "info", 2.4)
