@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v15.2"
-local BUILD   = "2026-11-03 18:10"
+local VERSION = "v15.3"
+local BUILD   = "2026-11-03 18:50"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -890,10 +890,31 @@ local function aimTick(dt)
                 goal = np.Position + v * (dd / math.max(50, S.leadSpeed)) * (S.leadScale or 1)
             end
             npcAimGoal = goal
+            -- 双保险：同时转身 + 直接写相机（渲染回调里还会再写一次）
+            pcall(function()
+                local c9 = M.charOf(lp)
+                local h9 = c9 and c9:FindFirstChild("HumanoidRootPart")
+                if h9 then
+                    h9.CFrame = CFrame.lookAt(h9.Position, Vector3.new(goal.X, h9.Position.Y, goal.Z))
+                    cam.CFrame = CFrame.lookAt(cam.CFrame.Position, goal)
+                end
+            end)
             if aimInfo then aimInfo.Text = ("NPC自瞄: %s  %.0fm"):format(nm2.Name, (np.Position - cam.CFrame.Position).Magnitude) end
             lastNpcTarget = nm2
         else
             npcAimGoal = nil
+            if os.clock() - (S._npcAimDiag or 0) > 3 then
+                S._npcAimDiag = os.clock()
+                local cnt, nearN = 0, 0
+                local c8 = M.charOf(lp)
+                local h8 = c8 and c8:FindFirstChild("HumanoidRootPart")
+                for mm in pairs(npcStore) do
+                    cnt = cnt + 1
+                    local r8 = mm.Parent and (mm:FindFirstChild("HumanoidRootPart") or mm.PrimaryPart)
+                    if r8 and h8 and (r8.Position - h8.Position).Magnitude <= (S.npcAimDist or 200) then nearN = nearN + 1 end
+                end
+                print(("[npcaim] 无目标: npcStore=%d 范围内=%d fov=%.0f"):format(cnt, nearN, S.npcAimFov or 300))
+            end
             if aimInfo and not S.aim then aimInfo.Text = "NPC自瞄: 无目标" end
         end
     else
