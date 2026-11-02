@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v17.2"
-local BUILD   = "2026-11-04 07:40"
+local VERSION = "v17.3"
+local BUILD   = "2026-11-04 08:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -4852,11 +4852,10 @@ function M.ensureNpcEsp(m)
     local head = m:FindFirstChild("Head") or m:FindFirstChild("HumanoidRootPart", true)
                   or m:FindFirstChildWhichIsA("BasePart", true)
     if not head then
-        -- 没有部件：自建透明锚点，保证这类 NPC 也能绘制
-        local anchor = m:FindFirstChild("XHubNpcAnchor")
-        if not anchor then
-            local base = M.modelPos(m)
-            if base then
+        -- 模型没有任何部件：在 workspace 里建一个跟随锚点（不动 NPC 模型本身）
+        local base = M.modelPos(m)
+        if base then
+            if not (o.anchor and o.anchor.Parent) then
                 local okA, part = pcall(function()
                     local p = Instance.new("Part")
                     p.Name = "XHubNpcAnchor"
@@ -4864,19 +4863,20 @@ function M.ensureNpcEsp(m)
                     p.Transparency = 1
                     p.CanCollide, p.CanQuery, p.CanTouch = false, false, false
                     p.Massless, p.Anchored = true, true
-                    p.CFrame = CFrame.new(base + Vector3.new(0, 2.2, 0))
-                    p.Parent = m
+                    p.Parent = workspace
                     return p
                 end)
-                if okA then anchor = part end
+                if okA then o.anchor = part end
+            end
+            if o.anchor then
+                pcall(function() o.anchor.CFrame = CFrame.new(base + Vector3.new(0, 2.2, 0)) end)
+                head = o.anchor
             end
         end
-        head = anchor
     end
-    if not head then return end
-    if not (o.tag and o.tag.Parent) then
-        o.tag = mk("BillboardGui", { Name = "XHubNpcEspTag", Size = UDim2.fromOffset(200, 54),
-            AlwaysOnTop = true, Adornee = head, StudsOffset = Vector3.new(0, 2.6, 0) }, head)
+        if not (o.tag and o.tag.Parent) then
+            o.tag = mk("BillboardGui", { Name = "XHubNpcEspTag", Size = UDim2.fromOffset(200, 54),
+                AlwaysOnTop = true, Adornee = head, StudsOffset = Vector3.new(0, 2.6, 0) }, head)
         o.box = mk("Frame", { Size = UDim2.fromOffset(38, 58), Position = UDim2.new(0.5, -19, 0.5, -29),
             BackgroundTransparency = 1, BorderSizePixel = 2,
             BorderColor3 = Color3.fromRGB(140, 255, 150) }, o.tag)
