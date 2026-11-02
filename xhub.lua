@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v16.3"
-local BUILD   = "2026-11-04 01:45"
+local VERSION = "v16.4"
+local BUILD   = "2026-11-04 02:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = false, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = false, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = false, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -4091,14 +4091,7 @@ task.spawn(function()
                 if S.auraRemote then fireUntil = os.clock() + 0.3 end
 
 
-                -- 面向目标（只转身，不移动）
-                pcall(function()
-                    local c1 = M.charOf(lp)
-                    local h1 = c1 and c1:FindFirstChild("HumanoidRootPart")
-                    if h1 then
-                        h1.CFrame = CFrame.lookAt(h1.Position, Vector3.new(p.Position.X, h1.Position.Y, p.Position.Z))
-                    end
-                end)
+                -- 不再强制写 HRP 转向（会和移动系统打架，导致抖动/前倾）
 
                 -- ③ 真正走游戏判定的攻击：激活手里工具
                 local c = M.charOf(lp)
@@ -4843,7 +4836,7 @@ task.spawn(function()
     local locked = false
     while RUNNING do
         task.wait(0.08)
-        if S.eyesAway then
+        if S.eyesAway and (currentProfileKey == "doors" or S.forceDoors) then
             local c, h = M.charOf(lp), M.humOf(lp)
             local hrp = c and c:FindFirstChild("HumanoidRootPart")
             local best, bestD = nil, 200
