@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v14.5"
-local BUILD   = "2026-11-03 01:20"
+local VERSION = "v14.6"
+local BUILD   = "2026-11-03 14:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 40, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 80, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -816,10 +816,17 @@ function M.findNpcTarget(maxDist)
     local function consider(m)
         if not m or not m.Parent or m == c then return end
         if lp.Character and m == lp.Character then return end
-        local hum = m:FindFirstChildOfClass("Humanoid")
         local p = m:FindFirstChild("HumanoidRootPart") or M.firstPart(m)
-        if not (hum and p) then return end
-        if hum.Health <= 0 then return end
+        if not p then return end
+        if not Players:GetPlayerFromCharacter(m) then
+            local nm0 = m.Name:lower()
+            local npcish = nm0:find("resident", 1, true) or nm0:find("officer", 1, true)
+                or nm0:find("npc", 1, true) or nm0:find("guard", 1, true)
+                or nm0:find("criminal", 1, true) or m:FindFirstChild("Head") ~= nil
+            if not npcish then return end
+        end
+        local hum0 = m:FindFirstChildOfClass("Humanoid")
+        if hum0 and hum0.Health <= 0 then return end
         local d = (p.Position - hrp.Position).Magnitude
         if d > maxDist or d >= bestD then return end
         bestD, bestP, bestM = d, p, m
@@ -3745,7 +3752,13 @@ local function auraFindTargets(maxN)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if not hrp then return {} end
     local list = {}
-    for _, m in ipairs(M.scanTargets()) do
+    local seenM = {}
+    local srcList = {}
+    for mm in pairs(npcStore) do srcList[#srcList + 1] = mm end
+    for _, mm in ipairs(M.scanTargets()) do srcList[#srcList + 1] = mm end
+    for _, m in ipairs(srcList) do
+        if not seenM[m] then
+        seenM[m] = true
         if m ~= c then
             local hum = m:FindFirstChildOfClass("Humanoid")
             local root = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
@@ -3770,6 +3783,7 @@ local function auraFindTargets(maxN)
             end
         end
     end
+        end
     table.sort(list, function(a, b) return a.d < b.d end)
     while #list > maxN do table.remove(list) end
     return list
@@ -4681,7 +4695,7 @@ M.addToggle(pVisual, "NPC / 怪物 ESP", false, function(v)
     notify(v and "NPC ESP 已开启（方框+名字+血量+距离）" or "NPC ESP 已关闭", "info", 2.2)
 end)
 M.addSlider(pVisual, "NPC 绘制距离（studs）", 30, 400, 300, function(v) S.npcEspDist = v end)
-M.addSlider(pVisual, "NPC 最多显示数量", 5, 80, 40, function(v) S.npcEspMax = v end)
+M.addSlider(pVisual, "NPC 最多显示数量", 5, 200, 80, function(v) S.npcEspMax = v end)
 M.addToggle(pVisual, "穿墙可见", true, function(v) S.espOccluded = v end)
 M.addToggle(pVisual, "彩虹上色", false, function(v) S.espRainbow = v end)
 M.addSection(pVisual, "环境")
