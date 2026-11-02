@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v16.4"
-local BUILD   = "2026-11-04 02:30"
+local VERSION = "v16.5"
+local BUILD   = "2026-11-04 03:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -885,7 +885,7 @@ function M.hasLineOfSight(m, pos)
     return ok and res
 end
 
-function M.pickNpcFromStore(maxDist, requireLos, partName)
+function M.pickNpcFromStore(maxDist, requireLos, partName, useFov)
     local c = M.charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil, nil, 0 end
@@ -903,7 +903,14 @@ function M.pickNpcFromStore(maxDist, requireLos, partName)
                 local _, pos = M.npcPartPos(m, partName)
                 if pos then
                     local d = (pos - hrp.Position).Magnitude
-                    if d <= maxDist and d < bestD then
+                    local inFov = true
+                    if useFov then
+                        local vpF = cam.ViewportSize
+                        local spF = cam:WorldToViewportPoint(pos)
+                        local cF = Vector2.new(vpF.X / 2, vpF.Y / 2)
+                        inFov = (Vector2.new(spF.X, spF.Y) - cF).Magnitude <= (S.npcAimFov or 300)
+                    end
+                    if inFov and d <= maxDist and d < bestD then
                         local losOK = true
                         if requireLos then
                             local cache = M._losCache[m]
@@ -1019,7 +1026,8 @@ local function aimTick(dt)
             local nowPick = os.clock()
             if not (M._pickT and (nowPick - M._pickT) < 0.12) or not M._pickPos then
                 M._pickT = nowPick
-                M._pickPos, M._pickM, M._pickCand = M.pickNpcFromStore(S.npcAimDist, S.npcWall, S.npcPart)
+                M._pickPos, M._pickM, M._pickCand = M.pickNpcFromStore(
+                    math.min(S.npcAimDist or 200, S.npcAimRange or 200), S.npcWall, S.npcPart, S.npcFovLimit)
             end
             npPos, nm2, npCand = M._pickPos, M._pickM, M._pickCand or 0
         else
@@ -4746,15 +4754,8 @@ function M.ensureNpcEsp(m)
     local dNow = M.distTo(m)
     local maxD = S.npcEspDist or 300
     local tooFar = dNow and dNow > maxD
-    -- 死亡过滤：只有"已确认死亡"（之前画过且有 Humanoid 且血量归零）才清除
-    local humNow = m:FindFirstChildOfClass("Humanoid")
-    local prev = npcStore[m]
-    if (not S.npcKeepDead) and humNow and humNow.Health <= 0 and prev and prev.seenAlive then
-        pcall(M.destroyEnt, prev)
-        npcStore[m] = nil
-        return
-    end
-    local o = npcStore[m]
+    -- 尸体：不销毁，只改成灰色标记（仍绘制，但不作为自瞄目标）
+    local isDead = (humNow ~= nil and humNow.Health <= 0) and prev ~= nil and prev.seenAlive
     if not o then o = {}; npcStore[m] = o end
     if not (o.hl and o.hl.Parent) then
         o.hl = mk("Highlight", { Name = "XHubNpcEsp",
@@ -4787,7 +4788,14 @@ function M.ensureNpcEsp(m)
     if o.hl then o.hl.Enabled = not tooFar end
     local hum = m:FindFirstChildOfClass("Humanoid")
     local hp = hum and math.floor(hum.Health) or 0
-    if o.lbl then o.lbl.Text = m.Name end
+    if o.lbl then o.lbl.Text = (isDead and ("[尸体] " .. m.Name) or m.Name) end
+    if o.hl then
+        if isDead then
+            o.hl.FillColor, o.hl.OutlineColor = Color3.fromRGB(120, 120, 120), Color3.fromRGB(160, 160, 160)
+        else
+            o.hl.FillColor, o.hl.OutlineColor = Color3.fromRGB(90, 255, 120), Color3.fromRGB(190, 255, 200)
+        end
+    end
     if o.dlbl then
         local d = M.distTo(m)
         o.dlbl.Text = d and ("HP %d · %.0f m"):format(hp, d) or ("HP %d"):format(hp)
