@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v15.6"
-local BUILD   = "2026-11-03 20:30"
+local VERSION = "v15.7"
+local BUILD   = "2026-11-03 21:05"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -834,12 +834,12 @@ function M.findNpcTarget(maxDist)
     if not hrp then return nil end
     maxDist = maxDist or (S.npcAimDist or 200)
     local bestD, bestP, bestM = math.huge, nil, nil
-    local function consider(m)
+    local function consider(m, trusted)
         if not m or not m.Parent or m == c then return end
         if lp.Character and m == lp.Character then return end
         local p = m:FindFirstChild("HumanoidRootPart") or M.firstPart(m)
         if not p then return end
-        if not Players:GetPlayerFromCharacter(m) then
+        if not trusted and not Players:GetPlayerFromCharacter(m) then
             local nm0 = m.Name:lower()
             local npcish = nm0:find("resident", 1, true) or nm0:find("officer", 1, true)
                 or nm0:find("npc", 1, true) or nm0:find("guard", 1, true)
@@ -852,7 +852,7 @@ function M.findNpcTarget(maxDist)
         if d > maxDist or d >= bestD then return end
         bestD, bestP, bestM = d, p, m
     end
-    for m in pairs(npcStore) do consider(m) end
+    for m in pairs(npcStore) do consider(m, true) end
     for _, mm in ipairs(M.scanTargets()) do consider(mm) end
     for m in pairs(entStore) do
         local nm = m.Name:lower()
@@ -3217,7 +3217,7 @@ task.spawn(function()
         if S.npcHitbox then
             local mult = S.hitboxMult or 1.6
             for _, m in ipairs(M.scanTargets()) do
-                if not Players:GetPlayerFromCharacter(m) then
+        if not Players:GetPlayerFromCharacter(m) then
                     local root = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
                     if root then
                         local probe = hitProbes[m]
@@ -3260,7 +3260,7 @@ task.spawn(function()
         task.wait(0.5)
         if S.npcNoCollide then
             for _, m in ipairs(M.scanTargets()) do
-                if not Players:GetPlayerFromCharacter(m) then
+        if not Players:GetPlayerFromCharacter(m) then
                     for _, d in ipairs(m:GetDescendants()) do
                         if d:IsA("BasePart") and d.CanCollide then
                             pcall(function() d.CanCollide = false end)
@@ -4133,7 +4133,7 @@ nearestTrigger = function()
     local t1D, t1N = math.huge, nil
     local t2D, t2N = math.huge, nil
 
-    local function consider(m)
+    local function consider(m, trusted)
         if not m or not m.Parent then return end
         local nm = m.Name:lower()
         if nm:find("fake", 1, true) or nm:find("dupe", 1, true)
@@ -4693,7 +4693,7 @@ task.spawn(function()
             local known = 0
             for mm in pairs(npcStore) do known = known + 1 end
             for _, m in ipairs(M.scanTargets()) do
-                if not Players:GetPlayerFromCharacter(m) then
+        if not Players:GetPlayerFromCharacter(m) then
                     n = n + 1
                     if n > 3000 then break end
                     local o = npcStore[m]
