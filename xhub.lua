@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v17.0"
-local BUILD   = "2026-11-04 06:20"
+local VERSION = "v17.1"
+local BUILD   = "2026-11-04 07:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -1031,6 +1031,10 @@ local function aimTick(dt)
             local nmHud = lastNpcTarget and lastNpcTarget.Name or "无"
             local candHud = S._npcCand or 0
             local gateHud = (S.npcAimOnFire and not UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)) and "（按住左键）" or ""
+            M._camWrites = M._camWrites or 0
+            local espTotal = 0
+            for mm, oo in pairs(npcStore) do if oo and oo.tag and oo.tag.Parent then espTotal = espTotal + 1 end end
+            gateHud = gateHud .. (" 镜头%d 绘制%d"):format(M._camWrites, espTotal)
             npcHud.Text = ("NPC自瞄: 开 · 目标 %s · 候选 %d · 半径 %.0f%s"):format(nmHud, candHud, S.npcAimDist or 200, gateHud)
             npcHud.Visible = true
         else
@@ -1088,6 +1092,7 @@ local function aimTick(dt)
                                 and (flat.Unit * math.cos(cp) + Vector3.new(0, math.sin(cp), 0)) * dir0.Magnitude
                                 or dir0)
                             cam.CFrame = CFrame.lookAt(camPos0, aimPt)
+                            M._camWrites = (M._camWrites or 0) + 1
                         end
                     end
                 end
@@ -4035,6 +4040,28 @@ task.spawn(function()
     end
 end)
 -- 多目标查找：范围内按距离排序（一刀多砍用）
+--==== 姿态保护：清掉任何残留的俯仰/翻滚，保证 AutoRotate 打开 ====
+task.spawn(function()
+    while RUNNING do
+        task.wait(0.5)
+        if not S.spin then
+            pcall(function()
+                local c = M.charOf(lp)
+                local h = c and c:FindFirstChildOfClass("Humanoid")
+                local hrp = c and c:FindFirstChild("HumanoidRootPart")
+                if h and not h.AutoRotate then h.AutoRotate = true end
+                if hrp and math.abs(hrp.CFrame.UpVector.Y - 1) > 0.03 then
+                    local lv = hrp.CFrame.LookVector
+                    local flat = Vector3.new(lv.X, 0, lv.Z)
+                    if flat.Magnitude > 0.01 then
+                        hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flat.Unit)
+                    end
+                end
+            end)
+        end
+    end
+end)
+
 local function auraFindTargets(maxN)
     maxN = maxN or 5
     local c = M.charOf(lp)
@@ -4236,6 +4263,7 @@ RS:BindToRenderStep("XHubNpcAim", Enum.RenderPriority.Last.Value - 1, function()
                 local pt = cp0 + (flat0.Magnitude > 0.01
                     and (flat0.Unit * math.cos(cpit) + Vector3.new(0, math.sin(cpit), 0)) * d0.Magnitude or d0)
                 cam.CFrame = CFrame.lookAt(cp0, pt)
+                M._camWrites = (M._camWrites or 0) + 1
             end
         end
     end)
