@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v15.7"
-local BUILD   = "2026-11-03 21:05"
+local VERSION = "v15.8"
+local BUILD   = "2026-11-03 21:45"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -827,6 +827,25 @@ local npcHud = nil
 local npcAimGoal = nil
 local hitTrack = { part = nil, hp = nil, last = 0 }
 
+-- 任意模型都能取到"锚点部件 / 坐标"（不依赖 HumanoidRootPart）
+function M.modelAnchor(m)
+    if not m then return nil end
+    local p = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+    if p then return p end
+    local h = m:FindFirstChild("Head")
+    if h then return h end
+    local ok, any = pcall(function() return m:FindFirstChildWhichIsA("BasePart", true) end)
+    if ok and any then return any end
+    return nil
+end
+
+function M.modelPos(m)
+    local p = M.modelAnchor(m)
+    if p then return p.Position end
+    local ok, pv = pcall(function() return m:GetPivot().Position end)
+    if ok and pv then return pv end
+    return nil
+end
 -- NPC 专用目标查找（独立自瞄 / 杀戮光环共用）
 function M.findNpcTarget(maxDist)
     local c = M.charOf(lp)
@@ -837,8 +856,10 @@ function M.findNpcTarget(maxDist)
     local function consider(m, trusted)
         if not m or not m.Parent or m == c then return end
         if lp.Character and m == lp.Character then return end
-        local p = m:FindFirstChild("HumanoidRootPart") or M.firstPart(m)
-        if not p then return end
+        -- 位置来源：HRP → PrimaryPart → Head → 任意 BasePart → 模型枢轴（保证必定取得到）
+        local p = M.modelAnchor(m)
+        local pos = p and p.Position or M.modelPos(m)
+        if not pos then return end
         if not trusted and not Players:GetPlayerFromCharacter(m) then
             local nm0 = m.Name:lower()
             local npcish = nm0:find("resident", 1, true) or nm0:find("officer", 1, true)
@@ -846,11 +867,13 @@ function M.findNpcTarget(maxDist)
                 or nm0:find("criminal", 1, true) or m:FindFirstChild("Head") ~= nil
             if not npcish then return end
         end
-        local hum0 = m:FindFirstChildOfClass("Humanoid")
-        if hum0 and hum0.Health <= 0 then return end
-        local d = (p.Position - hrp.Position).Magnitude
+        if not trusted then
+            local hum0 = m:FindFirstChildOfClass("Humanoid")
+            if hum0 and hum0.Health <= 0 then return end
+        end
+        local d = (pos - hrp.Position).Magnitude
         if d > maxDist or d >= bestD then return end
-        bestD, bestP, bestM = d, p, m
+        bestD, bestP, bestM, bestPos = d, p, m, pos
     end
     for m in pairs(npcStore) do consider(m, true) end
     for _, mm in ipairs(M.scanTargets()) do consider(mm) end
@@ -861,7 +884,7 @@ function M.findNpcTarget(maxDist)
             consider(m)
         end
     end
-    return bestP, bestM, bestD
+    return bestPos, bestM, bestD, bestP
 end
 local function aimTick(dt)
     -- 每帧最先刷新 FOV 圈（不受后面任何 return 影响）
@@ -909,16 +932,19 @@ local function aimTick(dt)
 
     -- 独立 NPC 自瞄：不要求按住左键也会转向（写相机放到最后一层渲染回调执行）
     if S.npcAim then
-        local np, nm2 = M.findNpcTarget(S.npcAimDist)
-        if np then
-            local goal = np.Position
+        local npPos, nm2 = M.findNpcTarget(S.npcAimDist)
+        if npPos then
+            local goal = npPos
             if S.npcLead then
-                local v = np.AssemblyLinearVelocity
-                local dd = (np.Position - cam.CFrame.Position).Magnitude
-                goal = np.Position + v * (dd / math.max(50, S.leadSpeed)) * (S.leadScale or 1)
+                local vv = Vector3.zero
+                pcall(function()
+                    local ref = nm2 and (M.modelAnchor(nm2))
+                    if ref then vv = ref.AssemblyLinearVelocity end
+                end)
+                local dd = (npPos - cam.CFrame.Position).Magnitude
+                goal = npPos + vv * (dd / math.max(50, S.leadSpeed)) * (S.leadScale or 1)
             end
             npcAimGoal = goal
-            -- 双保险：同时转身 + 直接写相机（渲染回调里还会再写一次）
             pcall(function()
                 local c9 = M.charOf(lp)
                 local h9 = c9 and c9:FindFirstChild("HumanoidRootPart")
@@ -927,7 +953,7 @@ local function aimTick(dt)
                     cam.CFrame = CFrame.lookAt(cam.CFrame.Position, goal)
                 end
             end)
-            if aimInfo then aimInfo.Text = ("NPC自瞄: %s  %.0fm"):format(nm2.Name, (np.Position - cam.CFrame.Position).Magnitude) end
+            if aimInfo then aimInfo.Text = ("NPC自瞄: %s  %.0fm"):format(nm2 and nm2.Name or "?", (npPos - cam.CFrame.Position).Magnitude) end
             lastNpcTarget = nm2
         else
             npcAimGoal = nil
@@ -3090,7 +3116,7 @@ function M.diagScan()
         if m ~= c then
             if m:FindFirstChildOfClass("Humanoid") then humCount = humCount + 1 end
             if #nameSample < 8 then nameSample[#nameSample + 1] = m.Name end
-            local root = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+            local root = M.modelAnchor(m)
             if root and hrp then
                 local d = (root.Position - hrp.Position).Magnitude
                 if d < bestD then bestD, bestM = d, m end
@@ -3886,7 +3912,7 @@ local function auraFindTargets(maxN)
         if m ~= c then
             local hum = m:FindFirstChildOfClass("Humanoid")
             local root = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
-            local npcLike = (hum ~= nil and hum.Health > 0)
+            local npcLike = (hum ~= nil and hum.Health > 0) or npcStore[m] ~= nil
             if not npcLike and not Players:GetPlayerFromCharacter(m) then
                 local nm = m.Name:lower()
                 if nm:find("resident", 1, true) or nm:find("officer", 1, true) or nm:find("npc", 1, true)
@@ -3921,7 +3947,7 @@ local function auraFindTarget()
         if m ~= c then
             local hum = m:FindFirstChildOfClass("Humanoid")
             local root = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
-            local npcLike = (hum ~= nil and hum.Health > 0)
+            local npcLike = (hum ~= nil and hum.Health > 0) or npcStore[m] ~= nil
             if not npcLike and not Players:GetPlayerFromCharacter(m) then
                 local nm = m.Name:lower()
                 if nm:find("resident", 1, true) or nm:find("officer", 1, true) or nm:find("npc", 1, true)
@@ -3942,7 +3968,7 @@ local function auraFindTarget()
             end
         end
     end
-    return bestP, bestM, bestD
+    return bestPos, bestM, bestD, bestP
 end
 
 task.spawn(function()
