@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v14.7"
-local BUILD   = "2026-11-03 15:00"
+local VERSION = "v14.8"
+local BUILD   = "2026-11-03 15:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -3046,7 +3046,9 @@ task.spawn(function()
             if shown < maxN then
                 for _, m in ipairs(M.scanTargets()) do
                     if shown >= maxN then break end
-                    if not Players:GetPlayerFromCharacter(m) and not npcStore[m] then
+                    local hChk = m:FindFirstChildOfClass("Humanoid")
+                    if not Players:GetPlayerFromCharacter(m) and not npcStore[m]
+                       and not (hChk and hChk.Health <= 0) then
                         pcall(M.ensureNpcEsp, m)
                         shown = shown + 1
                     end
@@ -4567,7 +4569,10 @@ task.spawn(function()
                     elseif (not o) and known >= (S.npcEspMax or 40) then
                         -- 超过上限，不再新增
                     elseif m:FindFirstChildOfClass("Humanoid") then
-                        pcall(M.ensureNpcEsp, m)
+                        local hh2 = m:FindFirstChildOfClass("Humanoid")
+                        if hh2 and hh2.Health > 0 then
+                            pcall(M.ensureNpcEsp, m)
+                        end
                     end
                 end
             end
