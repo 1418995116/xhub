@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v17.4"
-local BUILD   = "2026-11-04 19:20"
+local VERSION = "v17.5"
+local BUILD   = "2026-11-04 20:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -1464,6 +1464,7 @@ end)
 
 -- 兼容：如果执行器支持 hookfunction，再挂一层 ScreenPointToRay（更隐蔽）
 pcall(function()
+    if S.noHook then return end   -- 安全模式：不钩 ScreenPointToRay
     if not (hookfunction and newcclosure) then return end
     local c = workspace.CurrentCamera
     local spr = c and c.ScreenPointToRay
@@ -1843,6 +1844,7 @@ end
 
 -- v4.1 精准挂钩: 只处理 AC 自己挂在渲染/心跳上的回调,不扫全量闭包
 function M.hookConnFns()
+    if S.noHook then return 0, 0 end
     if not (getconnections and hookfunction) then return 0, 0 end
     local connN, hookN = 0, 0
     for _, sigName in ipairs({ "Heartbeat", "RenderStepped", "Stepped", "PreRender" }) do
