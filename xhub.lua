@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v16.5"
-local BUILD   = "2026-11-04 03:10"
+local VERSION = "v16.6"
+local BUILD   = "2026-11-04 03:50"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = false, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = false, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = false, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -860,11 +860,13 @@ function M.npcPartPos(m, partName)
         local p = m:FindFirstChild(nm)
         if p and p:IsA("BasePart") then return p, p.Position end
     end
-    local p2 = M.modelAnchor(m)
-    if p2 then return p2, p2.Position end
-    return nil, M.modelPos(m)
+    -- 兜底：用模型枢轴 + 抬高，避免瞄到脚/地面导致镜头大幅下压
+    local base = M.modelPos(m)
+    if base then
+        return M.modelAnchor(m), (base + Vector3.new(0, 1.8, 0))
+    end
+    return M.modelAnchor(m), nil
 end
-
 -- 视线检测（隔墙不锁用）
 function M.hasLineOfSight(m, pos)
     local ok, res = pcall(function()
@@ -1050,6 +1052,9 @@ local function aimTick(dt)
                 local h9 = c9 and c9:FindFirstChild("HumanoidRootPart")
                 if h9 then
                     -- 只转相机，绝不写 HRP（写 HRP 会让角色站不稳/抖动）
+                    -- 走路时不做相机俯仰（避免前倾感）\n            -- 限制俯角：目标比相机低太多时抬高瞄准点
+                    local camY = cam.CFrame.Position.Y
+                    if goal.Y < camY - 3 then goal = Vector3.new(goal.X, camY - 3, goal.Z) end
                     cam.CFrame = CFrame.lookAt(cam.CFrame.Position, goal)
                 end
             end)
