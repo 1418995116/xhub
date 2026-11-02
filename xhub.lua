@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v16.0"
-local BUILD   = "2026-11-03 23:00"
+local VERSION = "v16.1"
+local BUILD   = "2026-11-04 00:05"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 80, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = true, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -4690,7 +4690,7 @@ function M.ensureNpcEsp(m)
     -- 死亡过滤：只有"已确认死亡"（之前画过且有 Humanoid 且血量归零）才清除
     local humNow = m:FindFirstChildOfClass("Humanoid")
     local prev = npcStore[m]
-    if humNow and humNow.Health <= 0 and prev and prev.seenAlive then
+    if (not S.npcKeepDead) and humNow and humNow.Health <= 0 and prev and prev.seenAlive then
         pcall(M.destroyEnt, prev)
         npcStore[m] = nil
         return
@@ -4738,6 +4738,7 @@ end
 task.spawn(function()
     while RUNNING do
         task.wait(S.fastScan and 0.8 or 0.4)
+        local okLoop, errLoop = pcall(function()
         if S.espNpc then
             local n = 0
             npcTick = (npcTick or 0) + 1
@@ -4753,11 +4754,8 @@ task.spawn(function()
                         -- 已绘制过，跳过（下一拍再刷新距离）
                     elseif (not o) and known >= (S.npcEspMax or 40) then
                         -- 超过上限，不再新增
-                    elseif m:FindFirstChildOfClass("Humanoid") then
-                        local hh2 = m:FindFirstChildOfClass("Humanoid")
-                        if hh2 and hh2.Health > 0 then
-                            pcall(M.ensureNpcEsp, m)
-                        end
+                    else
+                        pcall(M.ensureNpcEsp, m)
                     end
                 end
             end
@@ -4770,6 +4768,8 @@ task.spawn(function()
             for _, o in pairs(npcStore) do M.destroyEnt(o) end
             npcStore = {}
         end
+        end)
+        if not okLoop then print("[XHub][npcEsp] " .. tostring(errLoop)) end
     end
 end)
 --==== 遇到 Eyes 自动背对（把角色朝向转成背对它） ====
