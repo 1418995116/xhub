@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v15.5"
-local BUILD   = "2026-11-03 19:55"
+local VERSION = "v15.6"
+local BUILD   = "2026-11-03 20:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -823,6 +823,7 @@ local aimInfo
 local aimWant, aimGoal = false, nil
 local npcStore = {}          -- forward decl (NPC ESP 会往里塞)
 local lastNpcTarget = nil
+local npcHud = nil
 local npcAimGoal = nil
 local hitTrack = { part = nil, hp = nil, last = 0 }
 
@@ -849,12 +850,6 @@ function M.findNpcTarget(maxDist)
         if hum0 and hum0.Health <= 0 then return end
         local d = (p.Position - hrp.Position).Magnitude
         if d > maxDist or d >= bestD then return end
-        if S.npcShowFov then
-            local vpF = cam.ViewportSize
-            local spF = cam:WorldToViewportPoint(p.Position)
-            local cF = Vector2.new(vpF.X / 2, vpF.Y / 2)
-            if (Vector2.new(spF.X, spF.Y) - cF).Magnitude > (S.npcAimFov or 300) then return end
-        end
         bestD, bestP, bestM = d, p, m
     end
     for m in pairs(npcStore) do consider(m) end
@@ -869,6 +864,22 @@ function M.findNpcTarget(maxDist)
     return bestP, bestM, bestD
 end
 local function aimTick(dt)
+    -- 每帧最先刷新 FOV 圈（不受后面任何 return 影响）
+    pcall(function()
+        local vpC = cam.ViewportSize
+        if npcFovGui then
+            local vis = (S.npcAim and S.npcShowFov)
+            if Drawing then
+                npcFovGui.Visible = vis
+                npcFovGui.Position = Vector2.new(vpC.X / 2, vpC.Y / 2)
+                npcFovGui.Radius = S.npcAimFov or 300
+            else
+                npcFovGui.Visible = vis
+                npcFovGui.Position = UDim2.fromOffset(vpC.X / 2, vpC.Y / 2)
+                npcFovGui.Size = UDim2.fromOffset((S.npcAimFov or 300) * 2, (S.npcAimFov or 300) * 2)
+            end
+        end
+    end)
     aimWant = false
     if S.aim and not main.Visible then
         -- 只保留「左键开火自瞄」；Q 键已移除
@@ -876,6 +887,23 @@ local function aimTick(dt)
             aimWant = true
         elseif not S.aimOnFire then
             aimWant = true
+        end
+    end
+
+    -- NPC 自瞄状态 HUD（常驻显示，便于确认是否生效）
+    if not npcHud then
+        npcHud = mk("TextLabel", { Name = "XHubNpcAimHud", Size = UDim2.fromOffset(360, 20),
+            Position = UDim2.new(0.5, -180, 0, 62), BackgroundTransparency = 0.35,
+            BackgroundColor3 = Color3.fromRGB(16, 24, 18), Text = "",
+            Font = Enum.Font.Code, TextSize = 12, TextColor3 = Color3.fromRGB(150, 255, 180), ZIndex = 42 }, gui)
+    end
+    if npcHud then
+        if S.npcAim then
+            local nmHud = lastNpcTarget and lastNpcTarget.Name or "无"
+            npcHud.Text = ("NPC自瞄: 开 · 目标 %s · 半径 %.0f"):format(nmHud, S.npcAimDist or 200)
+            npcHud.Visible = true
+        else
+            npcHud.Visible = false
         end
     end
 
