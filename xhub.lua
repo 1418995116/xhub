@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v15.9"
-local BUILD   = "2026-11-03 22:20"
+local VERSION = "v16.0"
+local BUILD   = "2026-11-03 23:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -846,6 +846,31 @@ function M.modelPos(m)
     if ok and pv then return pv end
     return nil
 end
+-- 直接从 NPC ESP 的绘制表里挑目标（不经过任何名字/血量/FOV 过滤）
+function M.pickNpcFromStore(maxDist)
+    local c = M.charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil, nil, 0 end
+    maxDist = maxDist or 200
+    local bestM, bestPos, bestD, cand = nil, nil, math.huge, 0
+    for m in pairs(npcStore) do
+        if m and m.Parent and m ~= c then
+            cand = cand + 1
+            local r = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart or m:FindFirstChild("Head")
+            local pos = r and r.Position
+            if not pos then
+                local ok, pv = pcall(function() return m:GetPivot().Position end)
+                if ok then pos = pv end
+            end
+            if pos then
+                local d = (pos - hrp.Position).Magnitude
+                if d <= maxDist and d < bestD then bestD, bestPos, bestM = d, pos, m end
+            end
+        end
+    end
+    S._npcCand = cand
+    return bestPos, bestM, cand
+end
 -- NPC 专用目标查找（独立自瞄 / 杀戮光环共用）
 function M.findNpcTarget(maxDist)
     local c = M.charOf(lp)
@@ -923,7 +948,8 @@ local function aimTick(dt)
     if npcHud then
         if S.npcAim then
             local nmHud = lastNpcTarget and lastNpcTarget.Name or "无"
-            npcHud.Text = ("NPC自瞄: 开 · 目标 %s · 半径 %.0f"):format(nmHud, S.npcAimDist or 200)
+            local candHud = S._npcCand or 0
+            npcHud.Text = ("NPC自瞄: 开 · 目标 %s · 候选 %d · 半径 %.0f"):format(nmHud, candHud, S.npcAimDist or 200)
             npcHud.Visible = true
         else
             npcHud.Visible = false
@@ -932,7 +958,7 @@ local function aimTick(dt)
 
     -- 独立 NPC 自瞄：不要求按住左键也会转向（写相机放到最后一层渲染回调执行）
     if S.npcAim then
-        local npPos, nm2 = M.findNpcTarget(S.npcAimDist)
+        local npPos, nm2, npCand = M.pickNpcFromStore(S.npcAimDist)
         if npPos then
             local goal = npPos
             if S.npcLead then
@@ -5545,6 +5571,22 @@ shutdownXHub = function()
     pcall(function() if navHud then navHud:Destroy() end end)
     pcall(function() if hideHud then hideHud:Destroy() end end)
     pcall(function() if auraHud then auraHud:Destroy() end end)
+    -- 4.1) 清掉 Drawing 图形（Frame 版 GUI 已随 gui 销毁，Drawing 必须手动 Remove）
+    pcall(function() if fovGui and fovGui.Remove then fovGui:Remove() end end)
+    pcall(function() if npcFovGui and npcFovGui.Remove then npcFovGui:Remove() end end)
+    pcall(function() if npcHud then npcHud:Destroy() end end)
+    pcall(function() if auraPanel then auraPanel:Destroy() end end)
+    pcall(function() if hubFrame then hubFrame:Destroy() end end)
+    pcall(function() if aimInfo then aimInfo:Destroy() end end)
+    pcall(function() if auraRingDraw and auraRingDraw.Remove then auraRingDraw:Remove() end end)
+    -- 4.2) 清掉残留 Highlight / BillBoard / Line
+    pcall(function()
+        for _, d in ipairs(game:GetDescendants()) do
+            if d.Name == "XHubNpcEsp" or d.Name == "XHubEsp" or d.Name == "XHubEnt" or d.Name == "XHubHitProbe" then
+                pcall(function() d:Destroy() end)
+            end
+        end
+    end)
 
     -- 5) 摘掉全局注册
     _G.XHub = nil
