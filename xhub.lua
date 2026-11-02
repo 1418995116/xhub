@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v15.3"
-local BUILD   = "2026-11-03 18:50"
+local VERSION = "v15.4"
+local BUILD   = "2026-11-03 19:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimFov = 300, nvBright = 3, npcShowFov = true, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 80, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 80, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -880,7 +880,7 @@ local function aimTick(dt)
     end
 
     -- 独立 NPC 自瞄：不要求按住左键也会转向（写相机放到最后一层渲染回调执行）
-    if S.npcAim and not main.Visible then
+    if S.npcAim then
         local np, nm2 = M.findNpcTarget(S.npcAimDist)
         if np then
             local goal = np.Position
@@ -920,6 +920,9 @@ local function aimTick(dt)
     else
         npcAimGoal = nil
     end
+
+    -- NPC 自瞄优先：有目标就跳过本帧玩家自瞄的相机写入，避免互相覆盖
+    if npcAimGoal then return end
 
     if fovGui then
         fovGui.Visible = (S.aim and S.showFov)
@@ -4939,6 +4942,10 @@ M.addToggle(pCombat, "NPC 自瞄：预判移动", true, function(v) S.npcLead = 
 M.addSlider(pCombat, "NPC 自瞄距离", 20, 400, 200, function(v) S.npcAimDist = v end)
 M.addToggle(pCombat, "显示 NPC 自瞄 FOV 圈（绿色）", true, function(v) S.npcShowFov = v end)
 M.addSlider(pCombat, "NPC 自瞄 FOV 半径 像素", 40, 600, 300, function(v) S.npcAimFov = v end)
+M.addToggle(pCombat, "NPC 自瞄只在 FOV 圈内锁定", false, function(v)
+    S.npcFovLimit = v
+    notify(v and "只在绿圈内锁 NPC" or "不限制 FOV（圈只作参考）", "info", 2.6)
+end)
 
 M.addSection(pCombat, "杀戮光环")
 M.addToggle(pCombat, "开启杀戮光环", false, function(v)
