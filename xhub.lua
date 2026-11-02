@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v16.7"
-local BUILD   = "2026-11-04 04:25"
+local VERSION = "v16.8"
+local BUILD   = "2026-11-04 05:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = false, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = false, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = false, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -1012,7 +1012,8 @@ local function aimTick(dt)
         if S.npcAim then
             local nmHud = lastNpcTarget and lastNpcTarget.Name or "无"
             local candHud = S._npcCand or 0
-            npcHud.Text = ("NPC自瞄: 开 · 目标 %s · 候选 %d · 半径 %.0f"):format(nmHud, candHud, S.npcAimDist or 200)
+            local gateHud = (S.npcAimOnFire and not UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)) and "（按住左键）" or ""
+            npcHud.Text = ("NPC自瞄: 开 · 目标 %s · 候选 %d · 半径 %.0f%s"):format(nmHud, candHud, S.npcAimDist or 200, gateHud)
             npcHud.Visible = true
         else
             npcHud.Visible = false
@@ -5121,7 +5122,7 @@ M.addToggle(pCombat, "开启 NPC 自瞄", false, function(v)
     S.npcAim = v
     notify(v and "NPC 自瞄已开（只锁 NPC/怪物）" or "NPC 自瞄已关", "info", 2.2)
 end)
-M.addToggle(pCombat, "NPC 自瞄：只在按住左键时锁", true, function(v) S.npcAimOnFire = v end)
+M.addToggle(pCombat, "NPC 自瞄：只在按住左键时锁", false, function(v) S.npcAimOnFire = v end)
 M.addToggle(pCombat, "NPC 自瞄：预判移动", true, function(v) S.npcLead = v end)
 M.addSlider(pCombat, "NPC 自瞄距离（世界距离上限）", 20, 400, 200, function(v) S.npcAimDist = v end)
 M.addSlider(pCombat, "NPC 瞄准距离（准星内才锁，越小越稳）", 20, 400, 200, function(v) S.npcAimRange = v end)
