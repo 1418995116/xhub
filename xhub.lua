@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v17.1"
-local BUILD   = "2026-11-04 07:00"
+local VERSION = "v17.2"
+local BUILD   = "2026-11-04 07:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -4050,7 +4050,7 @@ task.spawn(function()
                 local h = c and c:FindFirstChildOfClass("Humanoid")
                 local hrp = c and c:FindFirstChild("HumanoidRootPart")
                 if h and not h.AutoRotate then h.AutoRotate = true end
-                if hrp and math.abs(hrp.CFrame.UpVector.Y - 1) > 0.03 then
+                if hrp and hrp.CFrame.UpVector.Y < 0.9 then
                     local lv = hrp.CFrame.LookVector
                     local flat = Vector3.new(lv.X, 0, lv.Z)
                     if flat.Magnitude > 0.01 then
@@ -4851,6 +4851,28 @@ function M.ensureNpcEsp(m)
     o.hl.Parent = m
     local head = m:FindFirstChild("Head") or m:FindFirstChild("HumanoidRootPart", true)
                   or m:FindFirstChildWhichIsA("BasePart", true)
+    if not head then
+        -- 没有部件：自建透明锚点，保证这类 NPC 也能绘制
+        local anchor = m:FindFirstChild("XHubNpcAnchor")
+        if not anchor then
+            local base = M.modelPos(m)
+            if base then
+                local okA, part = pcall(function()
+                    local p = Instance.new("Part")
+                    p.Name = "XHubNpcAnchor"
+                    p.Size = Vector3.new(0.2, 0.2, 0.2)
+                    p.Transparency = 1
+                    p.CanCollide, p.CanQuery, p.CanTouch = false, false, false
+                    p.Massless, p.Anchored = true, true
+                    p.CFrame = CFrame.new(base + Vector3.new(0, 2.2, 0))
+                    p.Parent = m
+                    return p
+                end)
+                if okA then anchor = part end
+            end
+        end
+        head = anchor
+    end
     if not head then return end
     if not (o.tag and o.tag.Parent) then
         o.tag = mk("BillboardGui", { Name = "XHubNpcEspTag", Size = UDim2.fromOffset(200, 54),
