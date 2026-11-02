@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v15.1"
-local BUILD   = "2026-11-03 17:35"
+local VERSION = "v15.2"
+local BUILD   = "2026-11-03 18:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -83,7 +83,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimFov = 300, npcShowFov = true, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 80, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = true, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcAimFov = 300, nvBright = 3, npcShowFov = true, npcAimOnFire = true, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 80, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -2007,10 +2007,11 @@ function M.setNight(on)
             }
         end
         pcall(function()
-            L.Brightness = 3
-            L.Ambient = Color3.fromRGB(150, 150, 165)
-            L.OutdoorAmbient = Color3.fromRGB(140, 140, 160)
-            L.ClockTime = 14
+            local b = S.nvBright or 3
+            L.Brightness = b
+            local a = math.clamp(b / 3, 0, 1.5)
+            L.Ambient = Color3.fromRGB(60 + 90 * a, 60 + 90 * a, 70 + 95 * a)
+            L.OutdoorAmbient = Color3.fromRGB(55 + 85 * a, 55 + 85 * a, 65 + 95 * a)
             L.FogEnd = 1000000
             L.GlobalShadows = false
         end)
@@ -4553,11 +4554,12 @@ function M.ensureNpcEsp(m)
     local dNow = M.distTo(m)
     local maxD = S.npcEspDist or 300
     local tooFar = dNow and dNow > maxD
-    -- 死亡过滤：血量 <= 0 的 NPC 不绘制（并清掉已有绘制）
+    -- 死亡过滤：只有"已确认死亡"（之前画过且有 Humanoid 且血量归零）才清除
     local humNow = m:FindFirstChildOfClass("Humanoid")
-    if humNow and humNow.Health <= 0 then
-        local old0 = npcStore[m]
-        if old0 then pcall(M.destroyEnt, old0); npcStore[m] = nil end
+    local prev = npcStore[m]
+    if humNow and humNow.Health <= 0 and prev and prev.seenAlive then
+        pcall(M.destroyEnt, prev)
+        npcStore[m] = nil
         return
     end
     local o = npcStore[m]
@@ -4587,6 +4589,7 @@ function M.ensureNpcEsp(m)
             TextStrokeTransparency = 0.5 }, o.tag)
     end
     o.tag.Adornee = head
+    if humNow and humNow.Health > 0 then o.seenAlive = true end
     o.tag.Parent = head
     if o.tag then o.tag.Enabled = not tooFar end
     if o.hl then o.hl.Enabled = not tooFar end
@@ -4761,6 +4764,10 @@ M.addToggle(pVisual, "穿墙可见", true, function(v) S.espOccluded = v end)
 M.addToggle(pVisual, "彩虹上色", false, function(v) S.espRainbow = v end)
 M.addSection(pVisual, "环境")
 M.addToggle(pVisual, "夜视（提亮+去雾，纯客户端）", false, function(v) M.setNight(v) end)
+M.addSlider(pVisual, "夜视亮度", 1, 10, 3, function(v)
+    S.nvBright = v
+    if S.night then M.setNight(false); M.setNight(true) end
+end)
 if M.doorsAllowed() then
 M.addToggle(pVisual, "场景物体绘制（柜子/床/抽屉，青色）", false, function(v)
     S.scenery = v
