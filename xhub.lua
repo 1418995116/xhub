@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.22"
-local BUILD   = "2026-11-07 03:10"
+local VERSION = "v19.23"
+local BUILD   = "2026-11-07 04:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -5992,6 +5992,15 @@ M.addButton(pMain, "隐藏菜单", function() setVisible(false) end)
 print("[XHub][ui] build pVisual")
 task.wait()
 M.addSection(pVisual, "后视镜")
+M.addToggle(pVisual, "射线后视（软件渲染·真实几何）", false, function(v)
+    pcall(function() M.rvSet(v) end)
+    notify(v and "射线后视已开：直接对背后打射线，画真实几何" or "射线后视已关", "info", 3)
+end)
+M.addStepper(pVisual, "射线后视分辨率宽", 28, 4, 8, 64, function(v) M.rv.gw = v end)
+M.addStepper(pVisual, "射线后视分辨率高", 16, 2, 6, 40, function(v) M.rv.gh = v end)
+M.addSlider(pVisual, "射线后视刷新率", 4, 30, 12, function(v) M.rv.fps = v end)
+M.addSlider(pVisual, "射线后视距离", 40, 600, 300, function(v) M.rv.range = v end)
+M.addSlider(pVisual, "射线后视视场角", 50, 130, 95, function(v) M.rv.fov = v end)
 M.addToggle(pVisual, "真实后视（实时画面·非镜像）", false, function(v)
     pcall(function() M.rearSet(v) end)
     notify(v and "真实后视已开：小窗显示背后实时画面" or "真实后视已关", "info", 3)
@@ -6675,6 +6684,114 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
 
 -- 菜单打开/关闭时只设置一次鼠标状态；不再每帧抢（坐着+第一人称游戏会抖动）
 
+--==== 射线后视（软件渲染）：不克隆世界，直接对背后打射线阵，画"像素级"真实画面 ====
+M.rv = { on = false, gw = 28, gh = 16, fov = 95, range = 300, pixels = {}, last = 0, fps = 12 }
+
+function M.rvBuild()
+    local R = M.rv
+    if R.canvas and R.canvas.Parent then return end
+    local g = mk("ScreenGui", { Name = "XHubRayView", ResetOnSpawn = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 997 }, CoreGui)
+    R.gui = g
+    local win = mk("Frame", { Name = "Win", Size = UDim2.fromOffset(340, 200),
+        Position = UDim2.new(1, -360, 0.5, 110),
+        BackgroundColor3 = Color3.fromRGB(8, 10, 14), BorderSizePixel = 0 }, g)
+    mk("UICorner", { CornerRadius = UDim.new(0, 8) }, win)
+    mk("TextLabel", { Text = "射线后视 · 软件渲染", Size = UDim2.new(1, 0, 0, 18),
+        BackgroundColor3 = Color3.fromRGB(18, 22, 30), BorderSizePixel = 0,
+        Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = Color3.fromRGB(150, 200, 255) }, win)
+    local canvas = mk("Frame", { Size = UDim2.new(1, -8, 1, -24), Position = UDim2.fromOffset(4, 20),
+        BackgroundColor3 = Color3.fromRGB(0, 0, 0), BorderSizePixel = 0, ClipsDescendants = true }, win)
+    mk("UICorner", { CornerRadius = UDim.new(0, 6) }, canvas)
+    R.canvas, R.win = canvas, win
+end
+
+function M.rvSet(on)
+    local R = M.rv
+    R.on = on
+    if on then
+        pcall(M.rvBuild)
+        if R.gui then R.gui.Enabled = true end
+    elseif R.gui then
+        R.gui.Enabled = false
+    end
+end
+
+function M.rvTick()
+    local R = M.rv
+    if not R.on then return end
+    if not (R.canvas and R.canvas.Parent) then pcall(M.rvBuild); if not R.canvas then return end end
+    if os.clock() - (R.last or 0) < 1 / (R.fps or 12) then return end
+    R.last = os.clock()
+
+    local cs = R.canvas.AbsoluteSize
+    if cs.X < 20 then return end
+    local gw, gh = R.gw, R.gh
+    local pw = cs.X / gw
+    local ph = cs.Y / gh
+
+    local ccf = cam.CFrame
+    local look = ccf.LookVector
+    local back = Vector3.new(-look.X, look.Y, -look.Z)
+    local right = ccf.RightVector * -1
+    local up = back:Cross(right).Unit
+    local origin = ccf.Position + Vector3.new(look.X, 0, look.Z) * -2.0 + Vector3.new(0, 0.4, 0)
+
+    local pr = RaycastParams.new()
+    pcall(function() pr.FilterType = Enum.RaycastFilterType.Exclude end)
+    pr.FilterDescendantsInstances = { lp.Character }
+    pr.IgnoreWater = false
+
+    local skyC = Color3.fromRGB(30, 34, 42)
+    pcall(function()
+        local L = Lighting
+        skyC = L.FogColor:Lerp(L.Ambient, 0.3)
+    end)
+
+    local tanF = math.tan(math.rad((R.fov or 95) / 2))
+    local aspect = cs.X / math.max(cs.Y, 1)
+
+    for gy = 1, gh do
+        for gx = 1, gw do
+            local i = (gy - 1) * gw + gx
+            local px = R.pixels[i]
+            if not px then
+                px = mk("Frame", { BorderSizePixel = 0, BackgroundColor3 = skyC }, R.canvas)
+                R.pixels[i] = px
+            end
+            local sx = ((gx - 0.5) / gw * 2 - 1) * tanF * aspect
+            local sy = (1 - (gy - 0.5) / gh * 2) * tanF
+            local dir = (back + right * sx + up * sy).Unit
+            local okr, hit = pcall(function()
+                return workspace:Raycast(origin, dir * (R.range or 300), pr)
+            end)
+            local col = skyC
+            if okr and hit then
+                col = hit.Instance.Color
+                pcall(function()
+                    local n = hit.Normal
+                    local shade = 0.55 + 0.45 * math.clamp(n:Dot(Vector3.new(0.4, 0.8, 0.2).Unit), 0, 1)
+                    col = Color3.new(col.R * shade, col.G * shade, col.B * shade)
+                    -- 远处略微淡化（空气透视）
+                    local dist = (hit.Position - origin).Magnitude
+                    local f = math.clamp(dist / (R.range or 300), 0, 0.6)
+                    col = col:Lerp(skyC, f)
+                end)
+            end
+            px.Visible = true
+            px.BackgroundColor3 = col
+            px.Size = UDim2.fromOffset(math.ceil(pw) + 1, math.ceil(ph) + 1)
+            px.Position = UDim2.fromOffset((gx - 1) * pw, (gy - 1) * ph)
+            px.ZIndex = 2
+        end
+    end
+end
+
+pcall(function()
+    RS.RenderStepped:Connect(function()
+        if RUNNING and M.rv.on then pcall(M.rvTick) end
+    end)
+end)
 --==== 真实后视：ViewportFrame + WorldModel（克隆附近几何，非镜像，头部跟随玩家俯仰）====
 M.rear = { on = false, w = 360, h = 220, radius = 150, maxParts = 900, autoAvoid = true, includeChars = false,
            gui = nil, vp = nil, camObj = nil, world = nil, lastBuild = 0, map = {} }
