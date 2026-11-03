@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.0"
-local BUILD   = "2026-11-06 00:10"
+local VERSION = "v19.1"
+local BUILD   = "2026-11-06 01:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -4721,6 +4721,44 @@ task.spawn(function()
     end
 end)
 -- 多目标查找：范围内按距离排序（一刀多砍用）
+--==== 视角/姿态复位（注入后自动跑一次，也可手动触发）====
+function M.resetPose()
+    local okc = 0
+    pcall(function()
+        local c = M.charOf(lp)
+        local h = c and c:FindFirstChildOfClass("Humanoid")
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if h then
+            h.PlatformStand = false
+            h.AutoRotate = true
+            h.CameraOffset = Vector3.zero
+            if h:GetState() == Enum.HumanoidStateType.Physics then
+                h:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end
+        end
+        if hrp then
+            if hrp.Anchored then hrp.Anchored = false end
+            -- 只在明显歪斜时扶正（>20°），避免每帧干扰
+            local up = hrp.CFrame.UpVector
+            if up.Y < 0.94 then
+                local lv = hrp.CFrame.LookVector
+                local flat = Vector3.new(lv.X, 0, lv.Z)
+                if flat.Magnitude > 0.01 then
+                    hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flat.Unit)
+                    okc = okc + 1
+                end
+            end
+        end
+        -- 相机去滚转/去残余俯仰
+        local look = cam.CFrame.LookVector
+        local flatLook = Vector3.new(look.X, 0, look.Z)
+        if flatLook.Magnitude > 0.01 then
+            cam.CFrame = CFrame.lookAt(cam.CFrame.Position, cam.CFrame.Position + flatLook.Unit)
+            okc = okc + 1
+        end
+    end)
+    return okc
+end
 --==== 姿态/飞行残留守护：绝不写 HRP，只修服务端会判"飞行"的状态 ====
 task.spawn(function()
     while RUNNING do
@@ -5749,6 +5787,10 @@ M.addToggle(pMain, "动作解锁（服务器禁跳/禁跑/锁动作时抢回）"
 end)
 M.addSlider(pMain, "解锁目标走速", 16, 120, 22, function(v) S.unlockWalk = v end)
 M.addSlider(pMain, "解锁目标跳跃力", 30, 200, 55, function(v) S.unlockJump = v end)
+M.addButton(pMain, "立即复位视角/姿态（前倾→扶正）", function()
+    local n = M.resetPose()
+    notify(("已复位（动作 %d）"):format(n or 0), "ok", 3)
+end)
 M.addToggle(pMain, "只留视觉（临时禁飞/禁加速）", false, function(v)
     S.safeMode = v
     if v and S.fly then M.setFly(false) end
@@ -6694,6 +6736,17 @@ task.delay(0.8, function()
         end
         print("[XHub][fly] 已清理残留飞行状态")
     end)
+end)
+
+-- 注入后自动复位视角/姿态（前倾问题兜底）
+task.delay(1.2, function()
+    pcall(function()
+        local n = M.resetPose()
+        print(("[XHub][pose] 已复位视角/姿态（动作 %d）"):format(n or 0))
+    end)
+end)
+task.delay(3.0, function()
+    pcall(function() M.resetPose() end)
 end)
 print(("[XHub] %s (build %s) loaded · 7 页 · 菜单键 %s · 档位=%s (PlaceId=%d)"):format(
     VERSION, BUILD, CONFIG.MenuKeys[1].Name, currentProfileKey, game.PlaceId))
