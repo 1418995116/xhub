@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.17"
-local BUILD   = "2026-11-06 23:00"
+local VERSION = "v19.18"
+local BUILD   = "2026-11-06 23:50"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -580,6 +580,31 @@ function M.addToggle(page, text, default, cb)
     hover(row, base); paint()
     if cb and not M._building then cb(on) end
     return set
+end
+-- 数字输入行（回车生效），返回 set 函数
+function M.addInput(page, text, default, cb)
+    if M._building then task.wait() end
+    rowOrder = rowOrder + 1
+    local row = mk("Frame", { BackgroundColor3 = Color3.fromRGB(24, 27, 34), BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 38), LayoutOrder = rowOrder }, page)
+    mk("UICorner", { CornerRadius = UDim.new(0, 7) }, row)
+    mk("TextLabel", { Text = text, BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
+        Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -110, 1, 0),
+        Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = Color3.fromRGB(218, 224, 235) }, row)
+    local box = mk("TextBox", { Text = tostring(default), Size = UDim2.fromOffset(84, 24),
+        Position = UDim2.new(1, -94, 0.5, -12), BackgroundColor3 = Color3.fromRGB(34, 38, 48),
+        BorderSizePixel = 0, ClearTextOnFocus = false, Font = Enum.Font.Code, TextSize = 13,
+        TextColor3 = Color3.fromRGB(230, 240, 250), PlaceholderText = "输入数字" }, row)
+    mk("UICorner", { CornerRadius = UDim.new(0, 6) }, box)
+    local function apply()
+        local n = tonumber((box.Text or ""):gsub("[^%d%.%-]", ""))
+        if n then
+            box.Text = tostring(n)
+            if cb and not M._building then cb(n) end
+        end
+    end
+    box.FocusLost:Connect(function(enter) if enter then apply() end end)
+    return apply
 end
 function M.addSlider(page, text, mn, mx, default, cb)
 
@@ -5915,7 +5940,16 @@ M.addToggle(pVisual, "真实后视（实时画面·非镜像）", false, functio
     pcall(function() M.rearSet(v) end)
     notify(v and "真实后视已开：小窗显示背后实时画面" or "真实后视已关", "info", 3)
 end)
-M.addSlider(pVisual, "真实后视半径", 30, 1200, 150, function(v) M.rear.radius = v; M.rear.lastBuild = 0 end)
+M.addInput(pVisual, "真实后视半径（输入数字，回车生效）", 150, function(v)
+    M.rear.radius = math.clamp(v, 20, 5000)
+    M.rear.lastBuild = 0
+    notify("后视半径 = " .. tostring(M.rear.radius), "info", 2)
+end)
+M.addInput(pVisual, "后视细节部件数（越大越完整越吃性能）", 900, function(v)
+    M.rear.maxParts = math.clamp(math.floor(v), 100, 4000)
+    M.rear.lastBuild = 0
+    notify("后视部件上限 = " .. tostring(M.rear.maxParts), "info", 2)
+end)
 M.addToggle(pVisual, "后视里显示玩家/NPC模型", false, function(v)
     M.rear.includeChars = v
     M.rear.lastBuild = 0
@@ -6690,6 +6724,17 @@ function M.rearRebuildWorld()
     if R.world then pcall(function() R.world:Destroy() end) end
     wm.Parent = R.vp
     R.world, R.map, R.lastBuild = wm, map, os.clock()
+    -- 模拟相机光照：从 Lighting 同步环境光/亮度/光向，减少"平面感"
+    pcall(function()
+        local L = Lighting
+        local amb = L.Ambient:Lerp(L.OutdoorAmbient, 0.5)
+        R.vp.Ambient = Color3.new(amb.R, amb.G, amb.B)
+        local b = math.clamp((L.Brightness or 1) / 2, 0.2, 1)
+        R.vp.LightColor = Color3.new(b, b, b)
+        local ct = (L.ClockTime or 14) / 24
+        local ang = ct * math.pi * 2
+        R.vp.LightDirection = Vector3.new(math.cos(ang), -math.sin(ang) - 0.6, math.sin(ang) * 0.3).Unit
+    end)
     if built == 0 then print("[XHub][rear] 克隆到 0 个部件（半径太小或附近无实体）") end
 end
 function M.rearTick()
