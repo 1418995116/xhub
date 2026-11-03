@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v18.2"
-local BUILD   = "2026-11-05 16:00"
+local VERSION = "v18.3"
+local BUILD   = "2026-11-05 17:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -2067,6 +2067,183 @@ function M.itemEspTick()
         end
     end
     for _, p in ipairs(dead) do itemStore[p] = nil end
+end
+--==== Dex# 离线缓存 + 汉化 ====
+M.DEX_FILES = { "xhub_dex_cn.lua", "xhub_dex.lua" }
+M.DEX_URLS = {
+    "https://cdn.jsdelivr.net/gh/snmwdd/DexPlusPlusPlusPlus@main/script.lua",
+    "https://raw.githubusercontent.com/snmwdd/DexPlusPlusPlusPlus/refs/heads/main/script.lua",
+    "https://ghproxy.net/https://raw.githubusercontent.com/snmwdd/DexPlusPlusPlusPlus/main/script.lua",
+}
+
+-- 英文 → 中文（只替换"完整字符串字面量"，不碰属性访问）
+M.DEX_CN = {
+    ["STOP"] = "停止", ["Stop Viewing"] = "停止查看",
+    ["EXIT"] = "退出", ["Exit"] = "退出",
+    ["Copy Path"] = "复制路径", ["REFRESH"] = "刷新", ["Refresh"] = "刷新",
+    ["Enable Auto Refresh"] = "开启自动刷新", ["Disable Auto Refresh"] = "关闭自动刷新",
+    ["Save to File"] = "保存到文件",
+    ["Enable Auto Rotate"] = "开启自动旋转", ["Disable Auto Rotate"] = "关闭自动旋转",
+    ["Lock Camera"] = "锁定视角", ["Unlock Camera"] = "解锁视角",
+    ["Zoom In"] = "放大", ["Zoom Out"] = "缩小",
+    ["Explorer"] = "资源管理器",
+    ["Collapse"] = "折叠", ["Expand"] = "展开",
+    ["Parent"] = "父级", ["Properties"] = "属性",
+    ["Search"] = "搜索", ["Copy"] = "复制", ["Delete"] = "删除", ["Rename"] = "重命名",
+    ["Save"] = "保存", ["Clear"] = "清空", ["Settings"] = "设置",
+    ["Value"] = "值", ["Values"] = "值",
+    ["Script"] = "脚本", ["Class"] = "类型", ["ClassName"] = "类名",
+    ["Insert"] = "插入", ["Add"] = "添加", ["Remove"] = "移除",
+    ["Apply"] = "应用", ["Cancel"] = "取消", ["OK"] = "确定",
+}
+
+function M.dexEscape(pat)
+    return (pat:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1"))
+end
+
+function M.dexLocalize(code)
+    local out = code
+    local n = 0
+    for en, cn in pairs(M.DEX_CN) do
+        local pat = '"' .. M.dexEscape(en) .. '"'
+        local rep = '"' .. cn .. '"'
+        local new, c = out:gsub(pat, rep)
+        if c > 0 then out = new; n = n + c end
+    end
+    return out, n
+end
+
+function M.dexLoadLocal()
+    if type(readfile) ~= "function" then return nil, "执行器不支持 readfile" end
+    for _, fn in ipairs(M.DEX_FILES) do
+        local ok, data = pcall(readfile, fn)
+        if ok and type(data) == "string" and #data > 5000 then
+            return data, fn
+        end
+    end
+    return nil, "没有本地缓存"
+end
+
+function M.dexSaveLocal(code)
+    if type(writefile) ~= "function" then return false end
+    local ok = pcall(function() writefile("xhub_dex.lua", code) end)
+    local cn = M.dexLocalize(code)
+    pcall(function() writefile("xhub_dex_cn.lua", cn) end)
+    return ok
+end
+
+function M.dexDownload()
+    if type(game.HttpGet) ~= "function" then return nil, "执行器缺少 HttpGet" end
+    for _, url in ipairs(M.DEX_URLS) do
+        local ok, code = pcall(function() return game:HttpGet(url, true) end)
+        if ok and type(code) == "string" and #code > 5000 then
+            return code, url
+        end
+    end
+    return nil, "全部下载源失败（网络被拦）"
+end
+
+-- 启动：本地缓存优先，没有再下载并缓存
+function M.dexLaunch(forceUpdate)
+    local code, src
+    if not forceUpdate then
+        code, src = M.dexLoadLocal()
+    end
+    if not code then
+        code, src = M.dexDownload()
+        if not code then return false, src end
+        M.dexSaveLocal(code)
+        code = M.dexLocalize(code)
+    end
+    local ok, err = pcall(function()
+        local f = loadstring(code)
+        if not f then error("loadstring 失败（Dex 被截断？）") end
+        f()
+    end)
+    if ok then return true, src end
+    return false, tostring(err)
+end
+
+--==== 内置中文资源管理器（极小版，不需要联网）====
+function M.miniExplorer()
+    if M._miniGui and M._miniGui.Parent then M._miniGui:Destroy() end
+    local g = mk("ScreenGui", { Name = "XHubMiniDex", ResetOnSpawn = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, CoreGui)
+    M._miniGui = g
+    local win = mk("Frame", { Name = "Win", Size = UDim2.fromOffset(700, 460),
+        Position = UDim2.new(0.5, -350, 0.5, -230), BackgroundColor3 = Color3.fromRGB(22, 24, 30),
+        BorderSizePixel = 0 }, g)
+    mk("UICorner", { CornerRadius = UDim.new(0, 10) }, win)
+    mk("TextLabel", { Text = "资源管理器（内置·离线）", Size = UDim2.new(1, 0, 0, 30),
+        BackgroundColor3 = Color3.fromRGB(30, 33, 42), BorderSizePixel = 0,
+        Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = Color3.fromRGB(230, 236, 246) }, win)
+    local search = mk("TextBox", { Size = UDim2.new(1, -20, 0, 28), Position = UDim2.fromOffset(10, 36),
+        BackgroundColor3 = Color3.fromRGB(30, 33, 42), BorderSizePixel = 0, ClearTextOnFocus = false,
+        PlaceholderText = "输入类名/名字过滤，如 Remote / Script", Font = Enum.Font.Code,
+        TextSize = 12, TextColor3 = Color3.fromRGB(220, 230, 240), Text = "" }, win)
+    mk("UICorner", { CornerRadius = UDim.new(0, 6) }, search)
+    local list = mk("ScrollingFrame", { Size = UDim2.new(1, -20, 1, -110), Position = UDim2.fromOffset(10, 70),
+        BackgroundColor3 = Color3.fromRGB(18, 20, 26), BorderSizePixel = 0,
+        ScrollBarThickness = 4, CanvasSize = UDim2.new(0, 0, 0, 0) }, win)
+    mk("UIListLayout", { Padding = UDim.new(0, 2) }, list)
+    local info = mk("TextLabel", { Size = UDim2.new(1, -20, 0, 32), Position = UDim2.new(0, 10, 1, -38),
+        BackgroundTransparency = 1, Font = Enum.Font.Code, TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left, TextWrapped = true,
+        TextColor3 = Color3.fromRGB(150, 200, 255), Text = "点击条目查看信息" }, win)
+    mk("TextButton", { Size = UDim2.fromOffset(70, 24), Position = UDim2.new(1, -80, 0, 4),
+        BackgroundColor3 = Color3.fromRGB(60, 40, 46), BorderSizePixel = 0, Text = "关闭",
+        Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = Color3.fromRGB(255, 200, 200) }, win)
+        .MouseButton1Click:Connect(function() g:Destroy() end)
+
+    local rows = {}
+    local function clearRows()
+        for _, r in ipairs(rows) do pcall(function() r:Destroy() end) end
+        rows = {}
+    end
+    local function refresh()
+        clearRows()
+        local q = (search.Text or ""):lower()
+        local y = 0
+        local shown = 0
+        local function add(label, inst)
+            if shown > 400 then return end
+            if q ~= "" then
+                local nm = (inst.Name or ""):lower()
+                local cls = (typeof(inst) == "Instance" and inst.ClassName or ""):lower()
+                if not (nm:find(q, 1, true) or cls:find(q, 1, true)) then return end
+            end
+            local btn = mk("TextButton", { Size = UDim2.new(1, 0, 0, 20), BackgroundColor3 = Color3.fromRGB(26, 28, 36),
+                BorderSizePixel = 0, Text = label, TextXAlignment = Enum.TextXAlignment.Left,
+                Font = Enum.Font.Code, TextSize = 11, TextColor3 = Color3.fromRGB(200, 214, 230),
+                Position = UDim2.fromOffset(0, y) }, list)
+            btn.MouseButton1Click:Connect(function()
+                local okp = pcall(function()
+                    info.Text = ("%s  ·  类型 %s\n路径: %s"):format(inst.Name, inst.ClassName, inst:GetFullName())
+                    if type(setclipboard) == "function" then setclipboard(inst:GetFullName()) end
+                end)
+                if not okp then info.Text = "读取失败" end
+            end)
+            rows[#rows + 1] = btn
+            y = y + 22
+            shown = shown + 1
+        end
+        for _, svc in ipairs({ "Workspace", "Players", "ReplicatedStorage", "ReplicatedFirst",
+                               "ServerStorage", "Lighting", "StarterGui", "CoreGui" }) do
+            local ok, s0 = pcall(function() return game:GetService(svc) end)
+            if ok and s0 then
+                add(("▸ %s (%s)"):format(svc, s0.ClassName), s0)
+                local ok2, kids = pcall(function() return s0:GetChildren() end)
+                if ok2 then
+                    for _, k in ipairs(kids) do add(("    %s  [%s]"):format(k.Name, k.ClassName), k) end
+                end
+            end
+        end
+        list.CanvasSize = UDim2.new(0, 0, 0, y + 8)
+        info.Text = ("共显示 %d 项（上限 400）"):format(shown)
+    end
+    search:GetPropertyChangedSignal("Text"):Connect(function() pcall(refresh) end)
+    pcall(refresh)
+    return g
 end
 --==== 动作解锁（服务器禁跳/禁跑/锁动作 时本地抢回控制）====
 function M.unlockActionsTick()
@@ -6085,53 +6262,48 @@ end)
 
 --==== 工具页：Dex 快捷启动 ====
 M.addSection(pTool, "对象浏览器")
+M.addButton(pTool, "启动 Dex#（离线缓存优先·已汉化）", function()
+    notify("正在启动 Dex#…", "info", 2)
+    task.spawn(function()
+        local ok, info = M.dexLaunch(false)
+        if ok then
+            notify("Dex# 已启动（" .. tostring(info) .. "）", "ok", 3.5)
+        else
+            notify("Dex 启动失败: " .. tostring(info), "err", 6)
+            print("[XHub][dex] " .. tostring(info))
+        end
+    end)
+end)
+M.addButton(pTool, "更新 Dex#（重新下载+汉化+缓存）", function()
+    notify("正在下载 Dex#…", "info", 2)
+    local code, src = M.dexDownload()
+    if not code then
+        notify("下载失败：" .. tostring(src), "err", 6)
+        return
+    end
+    local cn, n = M.dexLocalize(code)
+    M.dexSaveLocal(code)
+    notify(("已下载并汉化（替换 %d 处文案），下次可离线启动"):format(n), "ok", 5)
+    print("[XHub][dex] saved, localized=" .. tostring(n) .. " src=" .. tostring(src))
+end)
+M.addButton(pTool, "清除 Dex 缓存", function()
+    local okc = 0
+    if type(writefile) == "function" then
+        for _, fn in ipairs({ "xhub_dex.lua", "xhub_dex_cn.lua" }) do
+            if pcall(function() writefile(fn, "") end) then okc = okc + 1 end
+        end
+    end
+    notify("已清空 Dex 缓存（" .. okc .. " 个文件）", "info", 3)
+end)
+M.addButton(pTool, "内置中文资源管理器（离线·不用 Dex）", function()
+    pcall(M.miniExplorer)
+    notify("已打开内置资源管理器", "ok", 2.5)
+end)
 mk("TextLabel", { Text = "Dex# 会 hook __namecall / 扫描注册表，可能触发本游戏的 267 检测。建议在测试服/单人服使用。",
     BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 34), Font = Enum.Font.Gotham, TextSize = 10,
     TextColor3 = Color3.fromRGB(255, 190, 120), TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = rowOrder }, pTool)
 rowOrder = rowOrder + 1
-M.addButton(pTool, "启动 Dex#（对象浏览器）", function()
-    local url = "https://raw.githubusercontent.com/snmwdd/DexPlusPlusPlusPlus/refs/heads/main/script.lua"
-    notify("正在加载 Dex#…", "info", 3)
-    task.spawn(function()
-        local ok, code = pcall(function() return game:HttpGet(url, true) end)
-        if not (ok and code and #code > 1000) then
-            notify("下载失败（网络/被拦截），试试换镜像", "err", 4)
-            return
-        end
-        local ok2, err = pcall(function()
-            local f = loadstring(code)
-            if not f then error("loadstring 失败") end
-            f()
-        end)
-        if ok2 then
-            notify("Dex# 已启动", "ok", 3)
-        else
-            notify("Dex 执行失败: " .. tostring(err), "err", 5)
-            print("[XHub][dex] " .. tostring(err))
-        end
-    end)
-end)
-M.addButton(pTool, "启动 Dex#（jsDelivr 镜像）", function()
-    local url = "https://cdn.jsdelivr.net/gh/snmwdd/DexPlusPlusPlusPlus@main/script.lua"
-    notify("正在从镜像加载 Dex#…", "info", 3)
-    task.spawn(function()
-        local ok, code = pcall(function() return game:HttpGet(url, true) end)
-        if not (ok and code and #code > 1000) then
-            notify("镜像下载失败", "err", 4)
-            return
-        end
-        local ok2, err = pcall(function() local f = loadstring(code); if f then f() end end)
-        notify(ok2 and "Dex# 已启动（镜像）" or ("Dex 失败: " .. tostring(err)), ok2 and "ok" or "err", 4)
-    end)
-end)
-M.addButton(pTool, "复制 Dex 链接到剪贴板", function()
-    pcall(function()
-        setclipboard([[loadstring(game:HttpGet("https://cdn.jsdelivr.net/gh/snmwdd/DexPlusPlusPlusPlus@main/script.lua"))()]])
-    end)
-    notify("已复制 Dex 加载器到剪贴板", "ok", 3)
-end)
-
 M.addSection(pTool, "说明")
 M.addButton(pTool, "打印当前服务器 PlaceId / JobId", function()
     local txt = ("PlaceId=%d  JobId=%s"):format(game.PlaceId, tostring(game.JobId))
