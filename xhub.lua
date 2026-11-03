@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.15"
-local BUILD   = "2026-11-06 21:10"
+local VERSION = "v19.16"
+local BUILD   = "2026-11-06 22:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -675,6 +675,8 @@ function M.flyStop()
     end)
     local h = M.humOf(lp)
     if h then pcall(function() h.PlatformStand = false end) end
+        pcall(function() if h.WalkSpeed < 1 then h.WalkSpeed = 16 end end)
+        pcall(function() if h.JumpPower < 1 then h.JumpPower = 50 end end)
     cam.CameraType = Enum.CameraType.Custom
     flyPos, lastHrpPos, flySnaps = nil, nil, 0
 end
@@ -1786,14 +1788,16 @@ function M.suspendACG()
 end
 
 -- 下车后角色“半身入土 / 站不起来 / 会倒”的复位
-function M.characterFix(silent)
+function M.characterFix(silent, keepSit)
     local c = M.charOf(lp); if not c then return end
     local h = c:FindFirstChildOfClass("Humanoid")
     local hrp = c:FindFirstChild("HumanoidRootPart")
     if h then
-        pcall(function() h.Sit = false end)
+        if not keepSit then
+            pcall(function() h.Sit = false end)
+            pcall(function() h:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        end
         pcall(function() h.PlatformStand = false end)
-        pcall(function() h:ChangeState(Enum.HumanoidStateType.GettingUp) end)
         pcall(function() if h.WalkSpeed < 1 then h.WalkSpeed = 16 end end)
         pcall(function() if h.JumpPower < 1 then h.JumpPower = 50 end end)
         pcall(function() h.Jump = true end)
@@ -1822,6 +1826,14 @@ function M.characterFix(silent)
 end
 
 -- 车辆安全模式: 上车自动暂停绕过,下车自动复位角色
+-- 只有 VehicleSeat 才算"载具"；普通 Seat（凳子/椅子）不算
+function M.isVehicleSeated()
+    local h = M.humOf(lp)
+    if not h then return false end
+    local okS, sp = pcall(function() return h.SeatPart end)
+    if okS and sp and sp:IsA("VehicleSeat") then return true end
+    return false
+end
 function M.isSeated()
     local h = M.humOf(lp); if not h then return false end
     local s = false
@@ -1851,7 +1863,7 @@ local __wasSeated = false
 task.spawn(function()
     while RUNNING do
         task.wait(0.2)
-        local seated = M.isSeated()
+        local seated = M.isVehicleSeated()
         if seated ~= __wasSeated then
             __wasSeated = seated
             if seated then
@@ -1861,7 +1873,7 @@ task.spawn(function()
                 end
             else
                 task.delay(0.7, function()
-                    if S.vehicleSafe then M.characterFix(true) end
+                    if S.vehicleSafe then M.characterFix(true, M.isSeated()) end
                     notify("已下车: 角色已复位（需要绕过请重开 ①②）", "info", 3)
                 end)
             end
@@ -5903,7 +5915,7 @@ M.addToggle(pVisual, "真实后视（实时画面·非镜像）", false, functio
     pcall(function() M.rearSet(v) end)
     notify(v and "真实后视已开：小窗显示背后实时画面" or "真实后视已关", "info", 3)
 end)
-M.addSlider(pVisual, "真实后视半径", 40, 400, 120, function(v) M.rear.radius = v; M.rear.lastBuild = 0 end)
+M.addSlider(pVisual, "真实后视半径", 30, 400, 60, function(v) M.rear.radius = v; M.rear.lastBuild = 0 end)
 M.addToggle(pVisual, "后视自动避让（卡进桌椅时后退）", true, function(v) M.rear.autoAvoid = v end)
 M.addSlider(pVisual, "后视相机偏移(负=更靠后)", -60, 10, -8, function(v) M.rear.offset = v / 10 end)
 M.addSlider(pVisual, "后视相机高度偏移", -20, 40, 2, function(v) M.rear.yOff = v / 10 end)
