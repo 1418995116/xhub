@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.5-b1"
-local BUILD   = "2026-11-06 12:40"
+local VERSION = "v19.6-lazy"
+local BUILD   = "2026-11-06 13:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -5794,6 +5794,7 @@ local pMisc = M.addPage("杂项")
 local pTool = M.addPage("工具")
 
 print("[XHub][ui] build pMain")
+task.wait()
 M.addSection(pMain, "MOVEMENT")
 M.addToggle(pMain, "飞行 (V)", false, function(v) M.setFly(v) end)
 M.addButton(pMain, "飞行模式: Align 抗拉回（点我切换）", function()
@@ -5876,6 +5877,7 @@ end)
 M.addButton(pMain, "隐藏菜单", function() setVisible(false) end)
 
 print("[XHub][ui] build pVisual")
+task.wait()
 M.addSection(pVisual, "ESP")
 M.addToggle(pVisual, "启用 ESP", false, function(v)
     S.esp = v
@@ -5992,6 +5994,7 @@ M.addButton(pVisual, "诊断扫描（F9 + 弹窗）", function()
 end)
 
 print("[XHub][ui] build pCombat")
+task.wait()
 M.addToggle(pCombat, "远程改写：宽松模式（所有带方向的远程都改）", false, function(v)
     S.remoteAimAll = v
     notify(v and "宽松改写已开（可能影响交互类远程，谨慎）" or "宽松改写已关（只改武器类远程）", "warn", 3)
@@ -6142,6 +6145,7 @@ aimInfo = mk("TextLabel", { Text = "自瞄: 待触发（按住左键 / Q）", Ba
 
 if M.doorsAllowed() then
 print("[XHub][ui] build pAuto")
+task.wait()
 M.addSection(pAuto, "物品")
 M.addToggle(pAuto, "物品绘制（钥匙 / 道具 / 箱子）", false, function(v)
     S.itemEsp = v
@@ -6263,6 +6267,7 @@ task.spawn(function()
 end)
 
 print("[XHub][ui] build pGuard")
+task.wait()
 M.addSection(pGuard, "① 反检测（重要）")
 M.addToggle(pGuard, "安全模式：不挂钩子（防 267 namecall 检测）", true, function(v)
     S.noHook = v
@@ -6452,6 +6457,7 @@ M.addButton(pGuard, "打印 AC 脚本全名到 F9", function()
 end)
 
 print("[XHub][ui] build pMisc")
+task.wait()
 M.addSection(pMisc, "服务器档位")
 M.addButton(pMisc, "打印 PlaceId / 识别结果", function()
     print(("[profile] PlaceId=%d  JobId=%s  识别=%s")
@@ -6589,7 +6595,12 @@ pcall(function() tabBtns["主要"]:Fire("MouseButton1Click") end)
         print("[XHub][ui] 页面构建失败: " .. tostring(_err))
     end
 end
-pcall(BUILD_UI)
+M._uiBuilt = false
+function M.buildUI()
+    if M._uiBuilt then return end
+    M._uiBuilt = true
+    pcall(BUILD_UI)
+end
 
 --==================== 热键 ====================
 local function isMenuKey(code)
