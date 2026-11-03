@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.3"
-local BUILD   = "2026-11-06 02:50"
+local VERSION = "v19.4"
+local BUILD   = "2026-11-06 03:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -4737,17 +4737,7 @@ function M.poseGuardTick()
             end
             if not h.AutoRotate and not S.spin then h.AutoRotate = true end
         end
-        if hrp and not S.fly then
-            local up = hrp.CFrame.UpVector
-            if up.Y < 0.97 then
-                local lv = hrp.CFrame.LookVector
-                local flat = Vector3.new(lv.X, 0, lv.Z)
-                if flat.Magnitude > 0.01 then
-                    hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flat.Unit)
-                    fixed = fixed + 1
-                end
-            end
-        end
+        -- 不再写 HRP（写位置会让角色被钉在空中/抖动，导致"浮空"）
     end)
     return fixed
 end
@@ -4759,31 +4749,19 @@ function M.resetPose()
         local h = c and c:FindFirstChildOfClass("Humanoid")
         local hrp = c and c:FindFirstChild("HumanoidRootPart")
         if h then
-            h.PlatformStand = false
-            h.AutoRotate = true
-            h.CameraOffset = Vector3.zero
-            if h:GetState() == Enum.HumanoidStateType.Physics then
-                h:ChangeState(Enum.HumanoidStateType.GettingUp)
-            end
+            if h.PlatformStand then h.PlatformStand = false; okc = okc + 1 end
+            if not h.AutoRotate then h.AutoRotate = true; okc = okc + 1 end
+            local off = h.CameraOffset
+            if off and off.Magnitude > 0.02 then h.CameraOffset = Vector3.zero; okc = okc + 1 end
         end
         if hrp then
-            if hrp.Anchored then hrp.Anchored = false end
-            -- 只在明显歪斜时扶正（>20°），避免每帧干扰
-            local up = hrp.CFrame.UpVector
-            if up.Y < 0.94 then
-                local lv = hrp.CFrame.LookVector
-                local flat = Vector3.new(lv.X, 0, lv.Z)
-                if flat.Magnitude > 0.01 then
-                    hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flat.Unit)
-                    okc = okc + 1
-                end
-            end
+            if hrp.Anchored then hrp.Anchored = false; okc = okc + 1 end
         end
-        -- 相机去滚转/去残余俯仰
-        local look = cam.CFrame.LookVector
-        local flatLook = Vector3.new(look.X, 0, look.Z)
-        if flatLook.Magnitude > 0.01 then
-            cam.CFrame = CFrame.lookAt(cam.CFrame.Position, cam.CFrame.Position + flatLook.Unit)
+        -- 相机只去滚转，不动俯仰（避免视角被强制拉平）
+        local right = cam.CFrame.RightVector
+        if math.abs(right.Y) > 0.02 then
+            local lv = cam.CFrame.LookVector
+            cam.CFrame = CFrame.lookAt(cam.CFrame.Position, cam.CFrame.Position + lv)
             okc = okc + 1
         end
     end)
