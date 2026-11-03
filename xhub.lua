@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.9-lazy"
-local BUILD   = "2026-11-06 15:50"
+local VERSION = "v19.10"
+local BUILD   = "2026-11-06 16:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -811,15 +811,23 @@ RS.RenderStepped:Connect(function(dt)
         local A = M._flyAlign
         if not (A and A.ap and A.ap.Parent) then
             M.flyAlignStart(hrp, M.humOf(lp))
+            flyPos = hrp.Position
             S._alignFails = 0
             return
         end
         local speed = S.flySpeed or 60
         local moving = dir.Magnitude > 0
-        local tgt = hrp.Position + (moving and (dir.Unit * speed * dt) or Vector3.zero)
+        -- 用自己维护的锚点驱动 Align，避免 hrp.Position 反馈导致越飞越高
+        flyPos = flyPos or hrp.Position
+        if moving then
+            flyPos = flyPos + dir.Unit * speed * dt
+        elseif math.abs(hrp.Position.Y - flyPos.Y) > 2.5 then
+            flyPos = Vector3.new(flyPos.X, hrp.Position.Y, flyPos.Z)
+        end
+        local tgt = flyPos
         local okA = pcall(function()
             A.ap.Position = tgt
-            A.ap.MaxVelocity = math.max(120, speed * 6)
+            A.ap.MaxVelocity = math.max(60, speed * 1.6)
             A.ao.CFrame = CFrame.new(Vector3.zero)
         end)
         if moving then
