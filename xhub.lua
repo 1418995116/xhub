@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.16"
-local BUILD   = "2026-11-06 11:20"
+local VERSION = "v19.17"
+local BUILD   = "2026-11-06 12:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -88,7 +88,7 @@ local S = {
     fly = false, flySpeed = 120,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, antiLean = false, lockCamPitch = false, freezeMove = false, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
+    aim = false, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, antiLean = false, lockCamPitch = false, freezeMove = false, leanStrength = 60, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "align", antiSnap = true, flyResp = 200, flyRigid = true,
@@ -712,7 +712,8 @@ function M.antiLeanTick()
                 local tr = d.Transform
                 local rx, ry, rz = tr:ToEulerAnglesXYZ()
                 if math.abs(math.deg(rx)) > 4 then
-                    d.Transform = CFrame.Angles(0, ry, rz)
+                    local k = math.clamp((S.leanStrength or 60) / 100, 0, 1) * 0.55
+                    d.Transform = tr:Lerp(CFrame.Angles(0, ry, rz), k)
                 end
             end
         end
@@ -736,6 +737,36 @@ function M.antiLeanTick()
             end
         end
     end)
+end
+--==== 仅执行修正（PreRender 调用）：平滑减小倾斜，避免硬清零造成震颤 ====
+function M.applyLeanFix()
+    local c = M.charOf(lp)
+    if not c then return end
+    local k = math.clamp((S.leanStrength or 60) / 100, 0, 1) * 0.55
+    pcall(function()
+        for _, d in ipairs(c:GetDescendants()) do
+            if d:IsA("Motor6D") and tostring(d.Name):sub(1, 4) ~= "XHub" then
+                local tr = d.Transform
+                local rx, ry, rz = tr:ToEulerAnglesXYZ()
+                if math.abs(math.deg(rx)) > 4 then
+                    d.Transform = tr:Lerp(CFrame.Angles(0, ry, rz), k)
+                end
+            end
+        end
+    end)
+    -- 根部件只做轻微扶正，避免与游戏每帧写 CFrame 打架
+    local hrp = c:FindFirstChild("HumanoidRootPart")
+    if hrp and not S.fly then
+        local cf = hrp.CFrame
+        if cf.UpVector.Y < 0.995 then
+            local lv = cf.LookVector
+            local flat = Vector3.new(lv.X, 0, lv.Z)
+            if flat.Magnitude > 0.01 then
+                local target = CFrame.lookAt(cf.Position, cf.Position + flat.Unit)
+                pcall(function() hrp.CFrame = cf:Lerp(target, k) end)
+            end
+        end
+    end
 end
 --==== 冻结自动移动（opt-in）：没按键却 moveDir>0 时，清零水平速度 ====
 function M.freezeMoveTick()
@@ -5282,7 +5313,7 @@ end)
 pcall(function()
     if M._leanPre then M._leanPre:Disconnect(); M._leanPre = nil end
     M._leanPre = RS.PreRender:Connect(function()
-        if RUNNING and S.antiLean then pcall(M.antiLeanTick) end
+        if RUNNING and S.antiLean then pcall(M.applyLeanFix) end
     end)
 end)
 
@@ -6151,6 +6182,7 @@ M.addToggle(pMain, "相机水平锁定（测试前倾感是否来自视角）", 
     S.lockCamPitch = v
     notify(v and "相机已锁水平：看还歪不歪" or "相机已恢复", "info", 3)
 end)
+M.addSlider(pMain, "防前倾强度 %（高了会抖，60 平衡）", 20, 100, 60, function(v) S.leanStrength = v end)
 M.addToggle(pMain, "防走路前倾（锁定直立，opt-in）", false, function(v)
     S.antiLean = v
     notify(v and "已开启：走路时强制躯干/腰保持直立" or "已关闭防前倾", "info", 3)
