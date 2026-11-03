@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.15"
-local BUILD   = "2026-11-06 10:40"
+local VERSION = "v19.16"
+local BUILD   = "2026-11-06 11:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -88,7 +88,7 @@ local S = {
     fly = false, flySpeed = 120,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, antiLean = false, lockCamPitch = false, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
+    aim = false, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, antiLean = false, lockCamPitch = false, freezeMove = false, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "align", antiSnap = true, flyResp = 200, flyRigid = true,
@@ -705,6 +705,18 @@ function M.antiLeanTick()
             end
         end
     end)
+    -- 骨骼层：把所有 Motor6D 的俯仰锁回 0（保留偏航/翻滚）
+    pcall(function()
+        for _, d in ipairs(c:GetDescendants()) do
+            if d:IsA("Motor6D") then
+                local tr = d.Transform
+                local rx, ry, rz = tr:ToEulerAnglesXYZ()
+                if math.abs(math.deg(rx)) > 4 then
+                    d.Transform = CFrame.Angles(0, ry, rz)
+                end
+            end
+        end
+    end)
     -- 1) 角色整体倾斜：只重设旋转，位置与速度都不碰
     if up.Y < 0.995 then
         local lv = cf.LookVector
@@ -724,6 +736,21 @@ function M.antiLeanTick()
             end
         end
     end)
+end
+--==== 冻结自动移动（opt-in）：没按键却 moveDir>0 时，清零水平速度 ====
+function M.freezeMoveTick()
+    local c = M.charOf(lp)
+    local h = c and c:FindFirstChildOfClass("Humanoid")
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not (h and hrp) then return end
+    local pressing = UIS:IsKeyDown(Enum.KeyCode.W) or UIS:IsKeyDown(Enum.KeyCode.A)
+        or UIS:IsKeyDown(Enum.KeyCode.S) or UIS:IsKeyDown(Enum.KeyCode.D)
+    if pressing then return end
+    local md = h.MoveDirection
+    if md and md.Magnitude > 0.1 then
+        local v = hrp.AssemblyLinearVelocity
+        hrp.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
+    end
 end
 --==== 姿态诊断：不修，只报数据（判断"到底是谁在动角色/相机"）====
 function M.poseDiag()
@@ -810,6 +837,16 @@ function M.poseDiag()
         add("leanMinUpY", string.format("%.3f", L.minUpY))
         add("leanMaxWaist", string.format("%.1f", L.maxWaist))
         add("leanMaxNeck", string.format("%.1f", L.maxNeck))
+        pcall(function()
+            local js = {}
+            for _, d in ipairs(c:GetDescendants()) do
+                if d:IsA("Motor6D") then
+                    local rx = math.deg(d.Transform:ToEulerAnglesXYZ())
+                    if math.abs(rx) > 4 then js[#js + 1] = d.Name .. ":" .. string.format("%.0f", rx) end
+                end
+            end
+            add("leanJoints", #js > 0 and table.concat(js, "|") or "none")
+        end)
         add("leanSamples", L.samples)
         add("leanLastUpY", string.format("%.3f", L.lastUpY or 1))
         add("camPitch", string.format("%.1f", math.deg(math.asin(math.clamp(look.Y, -1, 1)))))
@@ -6105,6 +6142,10 @@ M.addSlider(pMain, "解锁目标跳跃力", 30, 200, 55, function(v) S.unlockJum
 M.addToggle(pMain, "持续扶正姿态（清 CameraOffset，默认关）", false, function(v)
     S.poseFix = v
     notify(v and "持续扶正已开：每秒检查一次，只有歪了才动" or "持续扶正已关", "info", 2.6)
+end)
+M.addToggle(pMain, "冻结自动移动（没按键却自己走时用）", false, function(v)
+    S.freezeMove = v
+    notify(v and "已开启：未按键时清零水平速度" or "已关闭冻结移动", "info", 3)
 end)
 M.addToggle(pMain, "相机水平锁定（测试前倾感是否来自视角）", false, function(v)
     S.lockCamPitch = v
