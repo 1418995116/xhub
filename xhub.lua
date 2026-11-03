@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v18.0"
-local BUILD   = "2026-11-05 14:20"
+local VERSION = "v18.1"
+local BUILD   = "2026-11-05 15:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -530,6 +530,11 @@ function M.flyStop()
     if flyBV then flyBV:Destroy(); flyBV = nil end
     pcall(M.flyAlignStop)
     pcall(function()
+        local c0 = M.charOf(lp)
+        local hrp0 = c0 and c0:FindFirstChild("HumanoidRootPart")
+        if hrp0 and hrp0.Anchored then hrp0.Anchored = false end
+    end)
+    pcall(function()
         local h0 = M.humOf(lp)
         if h0 then h0:ChangeState(Enum.HumanoidStateType.GettingUp) end
     end)
@@ -671,14 +676,47 @@ RS.RenderStepped:Connect(function(dt)
         local A = M._flyAlign
         if not (A and A.ap and A.ap.Parent) then
             M.flyAlignStart(hrp, M.humOf(lp))
+            S._alignFails = 0
             return
         end
         local speed = S.flySpeed or 60
         local moving = dir.Magnitude > 0
         local tgt = hrp.Position + (moving and (dir.Unit * speed * dt) or Vector3.zero)
-        A.ap.Position = tgt
-        A.ap.MaxVelocity = math.max(80, speed * 4)
-        A.ao.CFrame = CFrame.new(Vector3.zero)
+        local okA = pcall(function()
+            A.ap.Position = tgt
+            A.ap.MaxVelocity = math.max(120, speed * 6)
+            A.ao.CFrame = CFrame.new(Vector3.zero)
+        end)
+        if moving then
+            if lastHrpPos and (hrp.Position - lastHrpPos).Magnitude < 0.02 then
+                S._alignFails = (S._alignFails or 0) + 1
+            else
+                S._alignFails = 0
+            end
+            if (S._alignFails or 0) > 45 then
+                S.flyMode = "teleport"
+                S._alignFails = 0
+                M.flyAlignStop()
+                pcall(function() notify("Align 未生效 → 已自动切 Teleport", "warn", 3) end)
+            end
+        end
+        if not okA then S.flyMode = "teleport"; M.flyAlignStop() end
+        lastHrpPos = hrp.Position
+        return
+    end
+
+    if S.flyMode == "teleport" then
+        local h3 = M.humOf(lp)
+        if h3 then pcall(function() h3.PlatformStand = true; h3:ChangeState(Enum.HumanoidStateType.Physics) end) end
+        if not hrp.Anchored then pcall(function() hrp.Anchored = true end) end
+        local step = (S.flySpeed or 60) * dt * 2.2
+        if dir.Magnitude > 0 then
+            local np0 = hrp.Position + dir.Unit * step
+            pcall(function()
+                hrp.CFrame = CFrame.new(np0) * (hrp.CFrame - hrp.CFrame.Position)
+                hrp.AssemblyLinearVelocity = Vector3.zero
+            end)
+        end
         lastHrpPos = hrp.Position
         return
     end
@@ -5323,8 +5361,8 @@ print("[XHub][ui] build pMain")
 M.addSection(pMain, "MOVEMENT")
 M.addToggle(pMain, "飞行 (F)", false, function(v) M.setFly(v) end)
 M.addButton(pMain, "飞行模式: Align 抗拉回（点我切换）", function()
-    local order = { "align", "body", "cframe" }
-    local label = { align = "Align 抗拉回", body = "物理速度", cframe = "CFrame 直写" }
+    local order = { "align", "teleport", "body", "cframe" }
+    local label = { align = "Align 抗拉回", teleport = "Teleport 锚定", body = "物理速度", cframe = "CFrame 直写" }
     local cur = S.flyMode or "align"
     local idx = 1
     for i, v in ipairs(order) do if v == cur then idx = i end end
@@ -5335,6 +5373,19 @@ M.addButton(pMain, "飞行模式: Align 抗拉回（点我切换）", function()
 end)
 M.addSlider(pMain, "飞行速度", 10, 500, S.flySpeed, function(v) S.flySpeed = v end)
 M.addSlider(pMain, "飞行响应 (Align)", 20, 200, 200, function(v) S.flyResp = v end)
+M.addButton(pMain, "飞行自检（打印为什么不动）", function()
+    local c = M.charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    local h = c and c:FindFirstChildOfClass("Humanoid")
+    local A = M._flyAlign or {}
+    local info = ("fly=%s mode=%s safeMode=%s anchored=%s hrp=%s alignAp=%s state=%s speed=%d")
+        :format(tostring(S.fly), tostring(S.flyMode), tostring(S.safeMode),
+                tostring(hrp and hrp.Anchored), tostring(hrp ~= nil),
+                tostring(A.ap ~= nil), tostring(h and h:GetState()), S.flySpeed or 0)
+    print("[XHub][fly] " .. info)
+    notify(info, "info", 6)
+    S.flyDiag = info
+end)
 M.addToggle(pMain, "反拉回（被拉回自动降速）", true, function(v) S.antiSnap = v end)
 M.addToggle(pMain, "只留视觉（临时禁飞/禁加速）", false, function(v)
     S.safeMode = v
