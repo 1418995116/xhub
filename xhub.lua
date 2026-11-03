@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.10"
-local BUILD   = "2026-11-06 07:30"
+local VERSION = "v19.11"
+local BUILD   = "2026-11-06 08:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -88,7 +88,7 @@ local S = {
     fly = false, flySpeed = 120,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
+    aim = false, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, antiLean = false, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "align", antiSnap = true, flyResp = 200, flyRigid = true,
@@ -672,6 +672,49 @@ function M.flyStop()
     flyPos, lastHrpPos, flySnaps = nil, nil, 0
     task.delay(0.35, function() pcall(M.fixFloat) end)
 end
+--==== 防走路前倾：只纠旋转，不动位置（opt-in）====
+M._lean = { minUpY = 1, maxWaist = 0, maxNeck = 0, samples = 0 }
+function M.antiLeanTick()
+    local c = M.charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local cf = hrp.CFrame
+    local up = cf.UpVector
+    local L = M._lean
+    if up.Y < L.minUpY then L.minUpY = up.Y end
+    L.samples = L.samples + 1
+    -- 记录 Waist/Neck 动画倾斜（用于诊断）
+    pcall(function()
+        for _, nm in ipairs({ "Waist", "Neck" }) do
+            local j = c:FindFirstChild(nm, true)
+            if j and j:IsA("Motor6D") then
+                local rx = math.deg(j.Transform:ToEulerAnglesXYZ())
+                if nm == "Waist" and math.abs(rx) > L.maxWaist then L.maxWaist = math.abs(rx) end
+                if nm == "Neck" and math.abs(rx) > L.maxNeck then L.maxNeck = math.abs(rx) end
+            end
+        end
+    end)
+    if not S.antiLean then return end
+    -- 1) 角色整体倾斜：只重设旋转，位置与速度都不碰
+    if up.Y < 0.995 then
+        local lv = cf.LookVector
+        local flat = Vector3.new(lv.X, 0, lv.Z)
+        if flat.Magnitude > 0.01 then
+            local fixed = CFrame.lookAt(cf.Position, cf.Position + flat.Unit)
+            pcall(function() hrp.CFrame = fixed end)
+        end
+    end
+    -- 2) 动画弯腰：把 Waist 的俯仰拉回 0（保留偏航/翻滚）
+    pcall(function()
+        local w = c:FindFirstChild("Waist", true)
+        if w and w:IsA("Motor6D") then
+            local rx, ry, rz = w.Transform:ToEulerAnglesXYZ()
+            if math.abs(math.deg(rx)) > 6 then
+                w.Transform = CFrame.Angles(0, ry, rz)
+            end
+        end
+    end)
+end
 --==== 姿态诊断：不修，只报数据（判断"到底是谁在动角色/相机"）====
 function M.poseDiag()
     local out = {}
@@ -742,6 +785,11 @@ function M.poseDiag()
             end
         end
         local look = cam.CFrame.LookVector
+        local L = M._lean
+        add("leanMinUpY", string.format("%.3f", L.minUpY))
+        add("leanMaxWaist", string.format("%.1f", L.maxWaist))
+        add("leanMaxNeck", string.format("%.1f", L.maxNeck))
+        add("leanSamples", L.samples)
         add("camPitch", string.format("%.1f", math.deg(math.asin(math.clamp(look.Y, -1, 1)))))
         add("camRoll", string.format("%.2f", cam.CFrame.RightVector.Y))
         add("camType", tostring(cam.CameraType):gsub("Enum.CameraType.", ""))
@@ -5149,6 +5197,11 @@ end)
 local spinYaw = 0
 local spinLocked = false
 pcall(function() RS:UnbindFromRenderStep("XHubRecoil") end)
+pcall(function() RS:UnbindFromRenderStep("XHubLean") end)
+RS:BindToRenderStep("XHubLean", Enum.RenderPriority.Camera.Value + 3, function()
+    if RUNNING then pcall(M.antiLeanTick) end
+end)
+
 RS:BindToRenderStep("XHubRecoil", Enum.RenderPriority.Last.Value - 2, function()
     if S.noRecoil then pcall(M.noRecoilTick) end
 end)
@@ -6005,6 +6058,10 @@ M.addSlider(pMain, "解锁目标跳跃力", 30, 200, 55, function(v) S.unlockJum
 M.addToggle(pMain, "持续扶正姿态（清 CameraOffset，默认关）", false, function(v)
     S.poseFix = v
     notify(v and "持续扶正已开：每秒检查一次，只有歪了才动" or "持续扶正已关", "info", 2.6)
+end)
+M.addToggle(pMain, "防走路前倾（锁定直立，opt-in）", false, function(v)
+    S.antiLean = v
+    notify(v and "已开启：走路时强制躯干/腰保持直立" or "已关闭防前倾", "info", 3)
 end)
 M.addButton(pMain, "姿态诊断（打印数据，复制给我）", function()
     local line = M.poseDiag()
