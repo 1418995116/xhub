@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.23"
-local BUILD   = "2026-11-07 04:00"
+local VERSION = "v19.24"
+local BUILD   = "2026-11-07 04:50"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -5996,6 +5996,12 @@ M.addToggle(pVisual, "射线后视（软件渲染·真实几何）", false, func
     pcall(function() M.rvSet(v) end)
     notify(v and "射线后视已开：直接对背后打射线，画真实几何" or "射线后视已关", "info", 3)
 end)
+M.addButton(pVisual, "射线后视模式: 列扫描（清晰）点我切换", function()
+    M.rv.mode = (M.rv.mode == "cols") and "grid" or "cols"
+    notify("射线后视模式 = " .. (M.rv.mode == "cols" and "列扫描（清晰）" or "网格（马赛克）"), "info", 2.5)
+end)
+M.addStepper(pVisual, "列扫描列数（越大越清晰）", 200, 20, 40, 600, function(v) M.rv.cols = v end)
+M.addSlider(pVisual, "列扫描刷新率", 8, 60, 20, function(v) M.rv.fps2 = v end)
 M.addStepper(pVisual, "射线后视分辨率宽", 28, 4, 8, 64, function(v) M.rv.gw = v end)
 M.addStepper(pVisual, "射线后视分辨率高", 16, 2, 6, 40, function(v) M.rv.gh = v end)
 M.addSlider(pVisual, "射线后视刷新率", 4, 30, 12, function(v) M.rv.fps = v end)
@@ -6685,7 +6691,7 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
 -- 菜单打开/关闭时只设置一次鼠标状态；不再每帧抢（坐着+第一人称游戏会抖动）
 
 --==== 射线后视（软件渲染）：不克隆世界，直接对背后打射线阵，画"像素级"真实画面 ====
-M.rv = { on = false, gw = 28, gh = 16, fov = 95, range = 300, pixels = {}, last = 0, fps = 12 }
+M.rv = { on = false, mode = "cols", gw = 40, gh = 24, cols = 200, fov = 95, range = 400, pixels = {}, pivots = {}, last = 0, last2 = 0, fps = 14, fps2 = 20 }
 
 function M.rvBuild()
     local R = M.rv
@@ -6706,6 +6712,72 @@ function M.rvBuild()
     R.canvas, R.win = canvas, win
 end
 
+-- 列扫描模式（类似 Wolfenstein）：每列一条射线，画竖条墙 + 天地渐变，比网格清晰得多
+function M.rvColumns()
+    local R = M.rv
+    if not (R.canvas and R.canvas.Parent) then pcall(M.rvBuild); if not R.canvas then return end end
+    if os.clock() - (R.last2 or 0) < 1 / (R.fps2 or 20) then return end
+    R.last2 = os.clock()
+    local cs = R.canvas.AbsoluteSize
+    if cs.X < 20 then return end
+    local cols = R.cols or 160
+    local cw = cs.X / cols
+    local ccf = cam.CFrame
+    local look = ccf.LookVector
+    local back = Vector3.new(-look.X, look.Y, -look.Z)
+    local right = ccf.RightVector * -1
+    local origin = ccf.Position + Vector3.new(look.X, 0, look.Z) * -2.0 + Vector3.new(0, 0.4, 0)
+    local pr = RaycastParams.new()
+    pcall(function() pr.FilterType = Enum.RaycastFilterType.Exclude end)
+    pr.FilterDescendantsInstances = { lp.Character }
+    local skyC, floorC = Color3.fromRGB(28, 32, 40), Color3.fromRGB(52, 54, 60)
+    pcall(function()
+        local L = Lighting
+        skyC = L.FogColor:Lerp(L.Ambient, 0.35)
+        floorC = L.Ambient:Lerp(Color3.fromRGB(60, 60, 60), 0.5)
+    end)
+    local tanF = math.tan(math.rad((R.fov or 95) / 2))
+    local aspect = cs.X / math.max(cs.Y, 1)
+    local horizon = cs.Y * 0.55
+    R.pivots = R.pivots or {}
+    for col = 1, cols do
+        local pv = R.pivots[col]
+        if not pv then
+            local bgTop = mk("Frame", { BorderSizePixel = 0, BackgroundColor3 = skyC }, R.canvas)
+            local wall = mk("Frame", { BorderSizePixel = 0 }, R.canvas)
+            local bgBot = mk("Frame", { BorderSizePixel = 0, BackgroundColor3 = floorC }, R.canvas)
+            pv = { top = bgTop, wall = wall, bot = bgBot }
+            R.pivots[col] = pv
+        end
+        local sx = ((col - 0.5) / cols * 2 - 1) * tanF * aspect
+        local dir = Vector3.new(back.X + right.X * sx, 0, back.Z + right.Z * sx).Unit
+        local okr, hit = pcall(function() return workspace:Raycast(origin, dir * (R.range or 400), pr) end)
+        local wallY, wallH, col3 = horizon, 0, skyC
+        if okr and hit then
+            local d = math.clamp((hit.Position - origin).Magnitude, 1, R.range or 400)
+            wallH = math.clamp(cs.Y * 2.2 / d, 3, cs.Y)
+            wallY = horizon - wallH * 0.5
+            col3 = hit.Instance.Color
+            pcall(function()
+                local shade = 0.55 + 0.45 * math.clamp(hit.Normal:Dot(Vector3.new(0.4, 0.85, 0.2).Unit), 0, 1)
+                col3 = Color3.new(col3.R * shade, col3.G * shade, col3.B * shade)
+                local f = math.clamp(d / (R.range or 400), 0, 0.55)
+                col3 = col3:Lerp(skyC, f)
+            end)
+        end
+        pv.top.Visible, pv.wall.Visible, pv.bot.Visible = true, hit ~= nil and okr, true
+        pv.top.Size = UDim2.fromOffset(math.ceil(cw) + 1, math.max(0, math.floor(wallY)))
+        pv.top.Position = UDim2.fromOffset((col - 1) * cw, 0)
+        pv.top.BackgroundColor3 = skyC
+        pv.wall.Size = UDim2.fromOffset(math.ceil(cw) + 1, math.floor(wallH))
+        pv.wall.Position = UDim2.fromOffset((col - 1) * cw, math.floor(wallY))
+        pv.wall.BackgroundColor3 = col3
+        pv.bot.Size = UDim2.fromOffset(math.ceil(cw) + 1, math.max(0, math.floor(cs.Y - (wallY + wallH))))
+        pv.bot.Position = UDim2.fromOffset((col - 1) * cw, math.floor(wallY + wallH))
+        pv.bot.BackgroundColor3 = floorC
+        pv.top.ZIndex, pv.wall.ZIndex, pv.bot.ZIndex = 2, 3, 2
+    end
+end
 function M.rvSet(on)
     local R = M.rv
     R.on = on
