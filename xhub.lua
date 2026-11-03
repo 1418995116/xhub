@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v18.7"
-local BUILD   = "2026-11-05 21:55"
+local VERSION = "v18.8"
+local BUILD   = "2026-11-05 22:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -108,7 +108,8 @@ local captureMode = false
 local MADE = {}                 -- 本脚本创建的所有实例（退出时统一销毁）
 _G.__XHubMade = _G.__XHubMade or {}   -- 跨注入共享的实例登记表（清残留用）
 local function regMade(o)
-    regMade(o)
+    MADE[#MADE + 1] = o
+    if #MADE > 4000 then table.remove(MADE, 1) end
     local g = _G.__XHubMade
     g[#g + 1] = o
     if #g > 6000 then table.remove(g, 1) end
@@ -117,8 +118,7 @@ local function mk(class, props, parent)
     local o = Instance.new(class)
     for k, v in pairs(props or {}) do o[k] = v end
     if parent then o.Parent = parent end
-    MADE[#MADE + 1] = o
-    if #MADE > 4000 then table.remove(MADE, 1) end
+    regMade(o)
     return o
 end
 local function hover(row, base)
@@ -5633,7 +5633,7 @@ local pTool = M.addPage("工具")
 
 print("[XHub][ui] build pMain")
 M.addSection(pMain, "MOVEMENT")
-M.addToggle(pMain, "飞行 (F)", false, function(v) M.setFly(v) end)
+M.addToggle(pMain, "飞行 (V)", false, function(v) M.setFly(v) end)
 M.addButton(pMain, "飞行模式: Align 抗拉回（点我切换）", function()
     local order = { "align", "teleport", "body", "cframe" }
     local label = { align = "Align 抗拉回", teleport = "Teleport 锚定", body = "物理速度", cframe = "CFrame 直写" }
