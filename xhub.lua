@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v17.8"
-local BUILD   = "2026-11-05 12:10"
+local VERSION = "v17.9"
+local BUILD   = "2026-11-05 13:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -74,13 +74,13 @@ local Lighting, TweenService = game:GetService("Lighting"), game:GetService("Twe
 local lp, cam = Players.LocalPlayer, workspace.CurrentCamera
 
 local S = {
-    fly = false, flySpeed = 55,
+    fly = false, flySpeed = 120,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
     aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
-    flyMode = "cframe", antiSnap = true,
+    flyMode = "align", antiSnap = true, flyResp = 200, flyRigid = true,
     noclip = false, walkSpeed = 20, safeMode = false, autoTune = true, ghost = false,
     night = false, entityEsp = false, entNotify = true, hudNearest = true,
     itemEsp = false, pickup = false, pickupRadius = 25, pickupInterval = 0.12,
@@ -528,12 +528,62 @@ local flySnaps = 0
 function M.flyStop()
     S.fly = false
     if flyBV then flyBV:Destroy(); flyBV = nil end
+    pcall(M.flyAlignStop)
+    pcall(function()
+        local h0 = M.humOf(lp)
+        if h0 then h0:ChangeState(Enum.HumanoidStateType.GettingUp) end
+    end)
     local h = M.humOf(lp)
     if h then pcall(function() h.PlatformStand = false end) end
     cam.CameraType = Enum.CameraType.Custom
     flyPos, lastHrpPos, flySnaps = nil, nil, 0
 end
 
+--==== 飞行 align 模式：AlignPosition + AlignOrientation（服务端友好、抗拉回）====
+M._flyAlign = M._flyAlign or {}
+function M.flyAlignStart(hrp, hum)
+    local A = M._flyAlign
+    M.flyAlignStop()
+    pcall(function()
+        local ap0 = Instance.new("Attachment"); ap0.Name = "XHubFlyA"; ap0.Parent = hrp
+        local ao0 = Instance.new("Attachment"); ao0.Name = "XHubFlyB"; ao0.Parent = hrp
+        local ap = Instance.new("AlignPosition")
+        ap.Name = "XHubAlignPos"
+        ap.Attachment0 = ap0
+        ap.Mode = Enum.PositionAlignmentMode.OneAttachment
+        ap.Position = hrp.Position
+        ap.Responsiveness = math.clamp((S.flyResp or 200), 10, 200)
+        ap.MaxForce = 1e6
+        ap.MaxVelocity = math.max(50, (S.flySpeed or 60) * 4)
+        ap.ApplyAtCenterOfMass = true
+        ap.RigidityEnabled = (S.flyRigid ~= false)
+        ap.Parent = hrp
+        local ao = Instance.new("AlignOrientation")
+        ao.Name = "XHubAlignOr"
+        ao.Attachment0 = ao0
+        ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
+        ao.CFrame = CFrame.new(Vector3.zero)
+        ao.MaxTorque = 1e6
+        ao.RigidityEnabled = true
+        ao.Parent = hrp
+        A.ap0, A.ao0, A.ap, A.ao = ap0, ao0, ap, ao
+    end)
+    if hum then
+        pcall(function()
+            hum.PlatformStand = true
+            hum:ChangeState(Enum.HumanoidStateType.Physics)
+        end)
+    end
+end
+
+function M.flyAlignStop()
+    local A = M._flyAlign
+    if not A then return end
+    for _, k in ipairs({ "ap", "ao", "ap0", "ao0" }) do
+        pcall(function() if A[k] then A[k]:Destroy() end end)
+        A[k] = nil
+    end
+end
 function M.setFly(on)
     if on and S.safeMode then
         notify("安全模式开启：位移类功能已禁用（先关掉安全模式）", "err", 3)
@@ -546,13 +596,18 @@ function M.setFly(on)
         lastHrpPos = nil
         flySnaps = 0
         local h = M.humOf(lp)
-        if S.flyMode == "cframe" and h then pcall(function() h.PlatformStand = true end) end
+        if S.flyMode == "align" then
+            M.flyAlignStart(hrp, h)
+        elseif S.flyMode == "cframe" and h then
+            pcall(function() h.PlatformStand = true end)
+        end
         if S.flyMode == "body" then
             if flyBV then flyBV:Destroy() end
             flyBV = mk("BodyVelocity", { Name = "XHubFly", MaxForce = Vector3.new(1e5, 1e5, 1e5),
                 Velocity = Vector3.zero, P = 1250 }, hrp)
         end
-        notify(("飞行已开启 · %s · 速度 %d"):format(S.flyMode == "body" and "物理" or "CFrame", S.flySpeed), "ok", 1.6)
+        local modeName = (S.flyMode == "align" and "Align 抗拉回") or (S.flyMode == "body" and "物理" or "CFrame")
+        notify(("飞行已开启 · %s · 速度 %d"):format(modeName, S.flySpeed), "ok", 1.6)
     else
         M.flyStop()
         notify("飞行已关闭", "info", 1.2)
@@ -611,6 +666,22 @@ RS.RenderStepped:Connect(function(dt)
     local c = M.charOf(lp); local hrp = c and c:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
     local dir = M.flyDir()
+
+    if S.flyMode == "align" then
+        local A = M._flyAlign
+        if not (A and A.ap and A.ap.Parent) then
+            M.flyAlignStart(hrp, M.humOf(lp))
+            return
+        end
+        local speed = S.flySpeed or 60
+        local moving = dir.Magnitude > 0
+        local tgt = hrp.Position + (moving and (dir.Unit * speed * dt) or Vector3.zero)
+        A.ap.Position = tgt
+        A.ap.MaxVelocity = math.max(80, speed * 4)
+        A.ao.CFrame = CFrame.new(Vector3.zero)
+        lastHrpPos = hrp.Position
+        return
+    end
 
     if S.flyMode == "body" then
         if not flyBV or flyBV.Parent ~= hrp then
@@ -5251,7 +5322,19 @@ local pTool = M.addPage("工具")
 print("[XHub][ui] build pMain")
 M.addSection(pMain, "MOVEMENT")
 M.addToggle(pMain, "飞行 (F)", false, function(v) M.setFly(v) end)
-M.addSlider(pMain, "飞行速度", 10, 200, S.flySpeed, function(v) S.flySpeed = v end)
+M.addButton(pMain, "飞行模式: Align 抗拉回（点我切换）", function()
+    local order = { "align", "body", "cframe" }
+    local label = { align = "Align 抗拉回", body = "物理速度", cframe = "CFrame 直写" }
+    local cur = S.flyMode or "align"
+    local idx = 1
+    for i, v in ipairs(order) do if v == cur then idx = i end end
+    local nxt = order[(idx % #order) + 1]
+    S.flyMode = nxt
+    if S.fly then M.setFly(false); M.setFly(true) end
+    notify("飞行模式: " .. (label[nxt] or nxt), "info", 2.4)
+end)
+M.addSlider(pMain, "飞行速度", 10, 500, S.flySpeed, function(v) S.flySpeed = v end)
+M.addSlider(pMain, "飞行响应 (Align)", 20, 200, 200, function(v) S.flyResp = v end)
 local setModeBtn
 setModeBtn = M.addButton(pMain, "飞行模式: " .. (S.flyMode == "cframe" and "CFrame" or "物理"), function()
     S.flyMode = (S.flyMode == "cframe") and "body" or "cframe"
