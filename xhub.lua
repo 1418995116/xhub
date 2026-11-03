@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.12"
-local BUILD   = "2026-11-06 18:40"
+local VERSION = "v19.13"
+local BUILD   = "2026-11-06 19:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6561,7 +6561,7 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
 -- 菜单打开/关闭时只设置一次鼠标状态；不再每帧抢（坐着+第一人称游戏会抖动）
 
 --==== 真实后视：ViewportFrame + WorldModel（克隆附近几何，非镜像，头部跟随玩家俯仰）====
-M.rear = { on = false, w = 360, h = 200, radius = 120, maxParts = 220,
+M.rear = { on = false, w = 360, h = 200, radius = 120, maxParts = 150,
            gui = nil, vp = nil, camObj = nil, world = nil, lastBuild = 0, map = {} }
 
 function M.rearDestroy()
@@ -6622,7 +6622,7 @@ function M.rearRebuildWorld()
     pcall(function()
         for _, d in ipairs(workspace:GetDescendants()) do
             if n >= R.maxParts then break end
-            if d:IsA("BasePart") and d ~= (lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")) then
+            if d:IsA("BasePart") and not (lp.Character and d:IsDescendantOf(lp.Character)) then
                 local dist = (d.Position - camPos).Magnitude
                 if dist <= R.radius and d.Transparency < 0.95 then
                     local c = Instance.new("Part")
@@ -6635,21 +6635,23 @@ function M.rearRebuildWorld()
             end
         end
     end)
+    -- 关键：WorldModel 必须"挂在 ViewportFrame 里面"才会渲染
+    if R.world then pcall(function() R.world:Destroy() end) end
+    wm.Parent = R.vp
     R.world, R.map, R.lastBuild = wm, map, os.clock()
-    R.vp.Parent.WorldModel = wm
-    pcall(function() R.vp.WorldModel = wm end)
+    if n == 0 then print("[XHub][rear] 克隆到 0 个部件（半径太小或附近无实体）") end
 end
 
 function M.rearTick()
     local R = M.rear
     if not R.on then return end
     if not (R.vp and R.vp.Parent) then M.rearBuild(); if not R.vp then return end end
-    if os.clock() - (R.lastBuild or 0) > 0.8 then pcall(M.rearRebuildWorld) end
+    if os.clock() - (R.lastBuild or 0) > 2.0 then pcall(M.rearRebuildWorld) end
     -- 相机：位于头后方，朝向"玩家视角反方向"，俯仰跟随玩家（不做镜像）
     local ccf = cam.CFrame
     local look = ccf.LookVector
     local back = Vector3.new(-look.X, look.Y, -look.Z)      -- 水平反转、垂直保持
-    local pos = ccf.Position + Vector3.new(look.X, 0, look.Z) * 1.5
+    local pos = ccf.Position + Vector3.new(look.X, 0, look.Z) * 0.6
     pcall(function()
         R.camObj.CFrame = CFrame.lookAt(pos, pos + back)
         R.camObj.FieldOfView = cam.FieldOfView
