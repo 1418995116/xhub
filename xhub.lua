@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.8"
-local BUILD   = "2026-11-06 06:30"
+local VERSION = "v19.9"
+local BUILD   = "2026-11-06 07:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -710,6 +710,34 @@ function M.poseDiag()
                 add("ground", tostring(hit.Instance and hit.Instance.Name))
             else
                 add("ground", "no-hit")
+            end
+        end
+        if c then
+            local okb, cf, sz = pcall(function() return c:GetBoundingBox() end)
+            if okb and cf and sz then
+                local feetY = cf.Position.Y - sz.Y / 2
+                add("bboxBottom", string.format("%.2f", feetY))
+                add("feetGap", string.format("%.2f", feetY - (hitY or 0)))
+                add("modelSize", string.format("%.1fx%.1fx%.1f", sz.X, sz.Y, sz.Z))
+            end
+            if h then
+                add("floorMat", tostring(h.FloorMaterial):gsub("Enum.Material.", ""))
+                add("gravity", string.format("%.0f", workspace.Gravity))
+                pcall(function()
+                    for _, nm in ipairs({ "Waist", "Neck" }) do
+                        local j = c:FindFirstChild(nm, true)
+                        if j and j:IsA("Motor6D") then
+                            local tr = j.Transform
+                            local rx = math.deg(tr:ToEulerAnglesXYZ())
+                            add(nm, string.format("%.1f", rx))
+                        end
+                    end
+                end)
+                pcall(function()
+                    local nAnim = 0
+                    for _ in ipairs(h:GetPlayingAnimationTracks()) do nAnim = nAnim + 1 end
+                    add("animTracks", nAnim)
+                end)
             end
         end
         local look = cam.CFrame.LookVector
