@@ -1,14 +1,14 @@
 --=====================================================================
 --  XHub v4.1 · Fly / ESP / Aimbot / AC压制 / AC-Guard / ThreadCleaner
---  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
+--  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v18.6"
-local BUILD   = "2026-11-05 21:20"
+local VERSION = "v18.7"
+local BUILD   = "2026-11-05 21:55"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
-    FlyKey   = Enum.KeyCode.F,
+    FlyKey   = Enum.KeyCode.V,
     AimKey   = Enum.KeyCode.Q,
     Accent   = Color3.fromRGB(0, 200, 255),
     Enemy    = Color3.fromRGB(255, 70, 70),
