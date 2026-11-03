@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v18.8"
-local BUILD   = "2026-11-05 22:30"
+local VERSION = "v18.9"
+local BUILD   = "2026-11-05 23:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -88,7 +88,7 @@ local S = {
     fly = false, flySpeed = 120,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
+    aim = false, aimSmooth = 12, aimStrength = 45, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "align", antiSnap = true, flyResp = 200, flyRigid = true,
@@ -138,15 +138,47 @@ function M.isSafeName(s)
     return false
 end
 
-local APARTS = { Head = {"Head"}, Root = {"HumanoidRootPart"}, Torso = {"UpperTorso","Torso","HumanoidRootPart"} }
-function M.aimPartOf(p)
-    local c = M.charOf(p); if not c then return nil end
-    for _, n in ipairs(APARTS[S.aimPart] or {"Head"}) do
-        local v = c:FindFirstChild(n)
+local APARTS = {
+    Head = {"Head"},
+    Root = {"HumanoidRootPart"},
+    Torso = {"UpperTorso", "Torso", "HumanoidRootPart"},
+    UpperTorso = {"UpperTorso", "Torso", "HumanoidRootPart"},
+    LowerTorso = {"LowerTorso", "Torso", "HumanoidRootPart"},
+    nearest = nil,   -- 特殊：取"离准星最近的部件"
+}
+
+-- 玩家/NPC 共用的部位选择：pref = "Head"|"Torso"|"UpperTorso"|"LowerTorso"|"Root"|"nearest"
+function M.pickAimPart(model, pref)
+    if not model then return nil end
+    if pref == "nearest" then
+        local vp = cam.ViewportSize
+        local center = Vector2.new(vp.X / 2, vp.Y / 2)
+        local best, bestD = nil, math.huge
+        local ok = pcall(function()
+            for _, d in ipairs(model:GetDescendants()) do
+                if d:IsA("BasePart") and d.Transparency < 0.95 then
+                    local sp, on = cam:WorldToViewportPoint(d.Position)
+                    if on then
+                        local dist = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+                        if dist < bestD then bestD, best = dist, d end
+                    end
+                end
+            end
+        end)
+        if ok and best then return best end
+        pref = "Head"
+    end
+    for _, n in ipairs(APARTS[pref] or APARTS.Head) do
+        local v = model:FindFirstChild(n)
         if v and v:IsA("BasePart") then return v end
     end
+    local any = model:FindFirstChildWhichIsA("BasePart", true)
+    return any
 end
-
+function M.aimPartOf(p)
+    local c = M.charOf(p); if not c then return nil end
+    return M.pickAimPart(c, S.aimPart or "Head")
+end
 local rp = RaycastParams.new()
 pcall(function() rp.FilterType = Enum.RaycastFilterType.Exclude end)
 if rp.FilterType ~= Enum.RaycastFilterType.Exclude then
@@ -949,7 +981,7 @@ function M.findTarget()
                 if m:IsA("Model") and not Players:GetPlayerFromCharacter(m) then
                     local hum = m:FindFirstChildOfClass("Humanoid")
                     if hum and hum.Health > 0 then
-                        local part = m:FindFirstChild("Head") or m:FindFirstChild("HumanoidRootPart", true)
+                        local part = M.pickAimPart(m, S.aimPart or "Head")
                         if part then
                             local sp, onScreen = cam:WorldToViewportPoint(part.Position)
                             if onScreen then
@@ -1633,7 +1665,8 @@ end)
 -- 双保险: 有些游戏在 RenderStepped 里覆写相机,同帧再补一次
 RS.RenderStepped:Connect(function()
     if not (S.aim and aimWant and aimGoal) then return end
-    cam.CFrame = cam.CFrame:Lerp(aimGoal, 0.45)
+    local alpha = math.clamp((S.aimStrength or 45) / 100, 0.03, 1)
+    cam.CFrame = cam.CFrame:Lerp(aimGoal, alpha)
 end)
 
 --==================== 可回滚记录 + 输入修复 ====================
@@ -5934,8 +5967,23 @@ M.addToggle(pCombat, "瞄准 NPC / 怪物", false, function(v)
     S.aimNpc = v
     notify(v and "自瞄已包含 NPC/怪物" or "自瞄只锁玩家", "info", 2.2)
 end)
+M.addToggle(pCombat, "显示自瞄 FOV 圈（青色）", true, function(v) S.showFov = v end)
 M.addToggle(pCombat, "隔墙忽略", true, function(v) S.aimWall = v end)
-M.addSlider(pCombat, "FOV 像素", 20, 400, S.aimFov, function(v) S.aimFov = v end)
+M.addSlider(pCombat, "FOV 像素（=锁定范围，圈多大就锁多远）", 20, 600, S.aimFov, function(v) S.aimFov = v end)
+M.addSlider(pCombat, "自瞄强度（越大越快锁死）", 5, 100, 45, function(v) S.aimStrength = v end)
+UIKEYS.aimPartBtn = M.addButton(pCombat, "自瞄部位（玩家+NPC通用）: 头部（点我切换）", function()
+    local order = { "Head", "UpperTorso", "LowerTorso", "Torso", "Root", "nearest" }
+    local label = { Head = "头部", UpperTorso = "上半身", LowerTorso = "下半身",
+                    Torso = "躯干", Root = "根部", nearest = "离准星最近的部位" }
+    local cur = S.aimPart or "Head"
+    local idx = 1
+    for i, v in ipairs(order) do if v == cur then idx = i end end
+    local nxt = order[(idx % #order) + 1]
+    S.aimPart = nxt
+    S.npcPart = (nxt == "nearest") and "nearest" or nxt
+    UIKEYS.aimPartBtn("自瞄部位（玩家+NPC通用）: " .. (label[nxt] or nxt) .. "（点我切换）")
+    notify("自瞄部位: " .. (label[nxt] or nxt), "info", 2)
+end)
 local setPartBtn = M.addButton(pCombat, "部位: Head", function()
     local list = { "Head", "Root", "Torso" }
     local i = 1
