@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v17.9"
-local BUILD   = "2026-11-05 13:40"
+local VERSION = "v18.0"
+local BUILD   = "2026-11-05 14:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -5335,15 +5335,8 @@ M.addButton(pMain, "飞行模式: Align 抗拉回（点我切换）", function()
 end)
 M.addSlider(pMain, "飞行速度", 10, 500, S.flySpeed, function(v) S.flySpeed = v end)
 M.addSlider(pMain, "飞行响应 (Align)", 20, 200, 200, function(v) S.flyResp = v end)
-local setModeBtn
-setModeBtn = M.addButton(pMain, "飞行模式: " .. (S.flyMode == "cframe" and "CFrame" or "物理"), function()
-    S.flyMode = (S.flyMode == "cframe") and "body" or "cframe"
-    setModeBtn("飞行模式: " .. (S.flyMode == "cframe" and "CFrame（防拉回更好）" or "物理 BodyVelocity"))
-    if S.fly then M.setFly(false); M.setFly(true) end
-    notify("飞行模式 = " .. S.flyMode, "info", 1.6)
-end)
 M.addToggle(pMain, "反拉回（被拉回自动降速）", true, function(v) S.antiSnap = v end)
-M.addToggle(pMain, "安全模式（禁飞/禁加速，只留视觉）", false, function(v)
+M.addToggle(pMain, "只留视觉（临时禁飞/禁加速）", false, function(v)
     S.safeMode = v
     if v and S.fly then M.setFly(false) end
     notify(v and "安全模式: 位移类功能已禁用" or "安全模式: 已关闭", v and "warn" or "info", 2.5)
@@ -6192,7 +6185,8 @@ shutdownXHub = function()
     -- 4.2) 清掉残留 Highlight / BillBoard / Line
     pcall(function()
         for _, d in ipairs(game:GetDescendants()) do
-            if d.Name == "XHubNpcEsp" or d.Name == "XHubEsp" or d.Name == "XHubEnt" or d.Name == "XHubHitProbe" then
+            local nm0 = tostring(d.Name)
+            if nm0:sub(1, 4) == "XHub" then
                 pcall(function() d:Destroy() end)
             end
         end
