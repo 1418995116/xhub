@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v17.6"
-local BUILD   = "2026-11-04 21:30"
+local VERSION = "v17.7"
+local BUILD   = "2026-11-05 10:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -1795,6 +1795,62 @@ local function isTarget(s)
         if low:find(k:lower(), 1, true) then return true end
     end
     return false
+end
+--==== 反作弊压制（无钩子版）：只断 AC 自己的事件连接，不碰 metatable ====
+function M.acQuiet()
+    local killed, scanned = 0, 0
+    if not getconnections then return -1, 0 end
+    local c = M.charOf(lp)
+    local function looksAC(name)
+        local s = tostring(name):lower()
+        for _, k in ipairs({ "anti", "cheat", "ac_", "bs_", "防御", "report", "ban", "kick", "detect", "guard" }) do
+            if s:find(k, 1, true) then return true end
+        end
+        return false
+    end
+    local roots = { game, workspace, RStorage }
+    for _, root in ipairs(roots) do
+        pcall(function()
+            for _, d in ipairs(root:GetDescendants()) do
+                scanned = scanned + 1
+                if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") or d:IsA("BindableEvent") then
+                    local full = d:GetFullName()
+                    if looksAC(full) then
+                        local ok, conns = pcall(getconnections, d.OnClientEvent)
+                        if ok and type(conns) == "table" then
+                            for _, conn in ipairs(conns) do
+                                pcall(function()
+                                    if conn.Disable then conn:Disable() else conn:Disconnect() end
+                                end)
+                                killed = killed + 1
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+    -- 角色自身的异常属性检测连接（多数 AC 靠这个上报）
+    if c then
+        pcall(function()
+            local h = c:FindFirstChildOfClass("Humanoid")
+            if h then
+                local ok, conns = pcall(getconnections, h.Changed)
+                if ok and type(conns) == "table" then
+                    for _, conn in ipairs(conns) do
+                        pcall(function()
+                            local fn = conn.Function
+                            if fn and looksAC(tostring(fn)) then
+                                if conn.Disable then conn:Disable() else conn:Disconnect() end
+                                killed = killed + 1
+                            end
+                        end)
+                    end
+                end
+            end
+        end)
+    end
+    return killed, scanned
 end
 function M.collectScripts()
     local byName = {}
@@ -5429,6 +5485,11 @@ M.addSection(pGuard, "① 反检测（重要）")
 M.addToggle(pGuard, "安全模式：不挂钩子（防 267 namecall 检测）", true, function(v)
     S.noHook = v
     notify(v and "安全模式开启：不装 namecall 钩子（推荐）" or "已关闭：远程改写可用但可能被检测", v and "ok" or "warn", 4)
+end)
+M.addButton(pGuard, "反作弊压制（无钩子·断 AC 事件）", function()
+    local k, sc = M.acQuiet()
+    if k == -1 then notify("执行器不支持 getconnections", "err", 3) return end
+    notify(("已断开 AC 连接 %d 个（扫描 %d 个对象）"):format(k, sc or 0), "ok", 4)
 end)
 M.addButton(pGuard, "立即还原 namecall 钩子（解除 267 风险）", function()
     pcall(function() if _G.__XHubRestoreNamecall then _G.__XHubRestoreNamecall() end end)
