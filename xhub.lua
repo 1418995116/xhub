@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v18.9"
-local BUILD   = "2026-11-05 23:20"
+local VERSION = "v19.0"
+local BUILD   = "2026-11-06 00:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -88,7 +88,7 @@ local S = {
     fly = false, flySpeed = 120,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimStrength = 45, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
+    aim = false, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "align", antiSnap = true, flyResp = 200, flyRigid = true,
@@ -147,6 +147,57 @@ local APARTS = {
     nearest = nil,   -- 特殊：取"离准星最近的部件"
 }
 
+--==== 无后座（相机后坐补偿，纯客户端、无钩子）====
+M._rc = { last = nil, accum = 0 }
+function M.noRecoilTick()
+    if not S.noRecoil then M._rc.last = cam.CFrame; return end
+    local cur = cam.CFrame
+    local last = M._rc.last
+    M._rc.last = cur
+    if not last then return end
+    -- 计算本帧相机俯仰变化
+    local dx, dy = cur.LookVector, last.LookVector
+    local pitchNow = math.asin(math.clamp(dx.Y, -1, 1))
+    local pitchOld = math.asin(math.clamp(dy.Y, -1, 1))
+    local dPitch = pitchNow - pitchOld
+    -- 鼠标输入本身的俯仰（同一帧）需要扣除，只抵消"额外的上跳"
+    local md = UIS:GetMouseDelta()
+    local mousePitch = -math.rad(md.Y) * (S.invertY and -1 or 1) * 0.06
+    local recoil = dPitch - mousePitch
+    if recoil > math.rad(0.25) then          -- 明显上跳才处理
+        local comp = math.clamp((S.recoilComp or 100) / 100, 0, 1)
+        local fix = recoil * comp
+        pcall(function()
+            cam.CFrame = cur * CFrame.Angles(-fix, 0, 0)
+        end)
+    end
+end
+-- 预判（Lead）：去抖 + 限幅，避免乱瞄
+M._leadVel = M._leadVel or {}
+function M.leadOffset(model, part, dist)
+    if not part then return Vector3.zero end
+    local key = model or part
+    local raw = Vector3.zero
+    pcall(function()
+        raw = part.AssemblyLinearVelocity or Vector3.zero
+        if raw.Magnitude < 1 then
+            local hrp = model and model:FindFirstChild("HumanoidRootPart")
+            if hrp then raw = hrp.AssemblyLinearVelocity or Vector3.zero end
+        end
+    end)
+    -- 低通滤波：平滑速度，避免逐帧抖动导致的乱瞄
+    local prev = M._leadVel[key] or raw
+    local smooth = prev:Lerp(raw, 0.25)
+    M._leadVel[key] = smooth
+    if smooth.Magnitude < 2.5 then return Vector3.zero end   -- 目标几乎静止就不预判
+    local speed = math.max(200, S.leadSpeed or 600)
+    local t = math.clamp((dist or 100) / speed, 0, 0.6)       -- 飞行时间上限 0.6s
+    local off = smooth * t * (S.leadScale or 1)
+    -- 垂直分量压小（跳跃/下落不该带偏准星）
+    off = Vector3.new(off.X, math.clamp(off.Y, -2.5, 2.5), off.Z)
+    if off.Magnitude > 30 then off = off.Unit * 30 end
+    return off
+end
 -- 玩家/NPC 共用的部位选择：pref = "Head"|"Torso"|"UpperTorso"|"LowerTorso"|"Root"|"nearest"
 function M.pickAimPart(model, pref)
     if not model then return nil end
@@ -999,11 +1050,9 @@ end
 function M.leadPoint(part)
     if not part then return nil end
     if not S.leadEnabled then return part.Position end
-    local spd = math.max(S.leadSpeed or 600, 50)
-    local vel = part.AssemblyLinearVelocity
+    local model = part.Parent
     local dist = (part.Position - cam.CFrame.Position).Magnitude
-    local tt = dist / spd
-    return part.Position + vel * tt * (S.leadScale or 1)
+    return part.Position + M.leadOffset(model, part, dist)
 end
 
 local aimInfo
@@ -1248,13 +1297,8 @@ local function aimTick(dt)
         if npPos then
             local goal = npPos
             if S.npcLead then
-                local vv = Vector3.zero
-                pcall(function()
-                    local ref = nm2 and (M.modelAnchor(nm2))
-                    if ref then vv = ref.AssemblyLinearVelocity end
-                end)
                 local dd = (npPos - cam.CFrame.Position).Magnitude
-                goal = npPos + vv * (dd / math.max(50, S.leadSpeed)) * (S.leadScale or 1)
+                goal = npPos + M.leadOffset(nm2, M.modelAnchor(nm2), dd)
             end
             npcAimGoal = goal
             pcall(function()
@@ -4891,6 +4935,11 @@ end)
 --==== 玩家旋转（Spin）：RenderStepped 最高优先级 + 关掉 AutoRotate 才不会被打回 ====
 local spinYaw = 0
 local spinLocked = false
+pcall(function() RS:UnbindFromRenderStep("XHubRecoil") end)
+RS:BindToRenderStep("XHubRecoil", Enum.RenderPriority.Last.Value - 2, function()
+    if S.noRecoil then pcall(M.noRecoilTick) end
+end)
+
 pcall(function() RS:UnbindFromRenderStep("XHubNpcAim") end)
 RS:BindToRenderStep("XHubNpcAim", Enum.RenderPriority.Last.Value - 1, function()
     if not npcAimGoal then return end
@@ -5971,6 +6020,11 @@ M.addToggle(pCombat, "显示自瞄 FOV 圈（青色）", true, function(v) S.sho
 M.addToggle(pCombat, "隔墙忽略", true, function(v) S.aimWall = v end)
 M.addSlider(pCombat, "FOV 像素（=锁定范围，圈多大就锁多远）", 20, 600, S.aimFov, function(v) S.aimFov = v end)
 M.addSlider(pCombat, "自瞄强度（越大越快锁死）", 5, 100, 45, function(v) S.aimStrength = v end)
+M.addToggle(pCombat, "无后座（相机后坐补偿）", false, function(v)
+    S.noRecoil = v
+    notify(v and "无后座已开（补偿开火时的镜头上跳）" or "无后座已关", "info", 3)
+end)
+M.addSlider(pCombat, "无后座补偿强度 %", 20, 100, 100, function(v) S.recoilComp = v end)
 UIKEYS.aimPartBtn = M.addButton(pCombat, "自瞄部位（玩家+NPC通用）: 头部（点我切换）", function()
     local order = { "Head", "UpperTorso", "LowerTorso", "Torso", "Root", "nearest" }
     local label = { Head = "头部", UpperTorso = "上半身", LowerTorso = "下半身",
@@ -6525,7 +6579,7 @@ shutdownXHub = function()
     RUNNING = false
 
     -- 1) 解绑全部渲染回调
-    for _, name in ipairs({ "XHubAim", "XHubSilent", "XHubCam", "XHubSky", "XHubSpin", "XHubMouse", "XHubNpcAim" }) do
+    for _, name in ipairs({ "XHubAim", "XHubSilent", "XHubCam", "XHubSky", "XHubSpin", "XHubMouse", "XHubNpcAim", "XHubRecoil" }) do
         pcall(function() RS:UnbindFromRenderStep(name) end)
     end
 
