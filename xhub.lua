@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.25"
-local BUILD   = "2026-11-07 05:40"
+local VERSION = "v19.26"
+local BUILD   = "2026-11-07 06:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6995,8 +6995,21 @@ function M.rearRebuildWorld()
                 c.Size = d.Size
             end
             c.CFrame, c.Color, c.Transparency = d.CFrame, d.Color, d.Transparency
+            c.CFrame, c.Color, c.Transparency = d.CFrame, d.Color, d.Transparency
             c.Material = d.Material
-            c.Anchored, c.CanCollide, c.CanQuery, c.CanTouch = true, false, false, false
+            -- 保留 SpecialMesh（家具/道具靠它，缺失会变方块）
+            pcall(function()
+                local sm = d:FindFirstChildOfClass("SpecialMesh")
+                if sm then local nsm = sm:Clone(); nsm.Parent = c end
+            end)
+            -- 保留贴图/贴花
+            pcall(function()
+                for _, ch in ipairs(d:GetChildren()) do
+                    if ch:IsA("Decal") or ch:IsA("Texture") then
+                        local nc = ch:Clone(); nc.Parent = c
+                    end
+                end
+            end)
             pcall(function() c.Reflectance = d.Reflectance end)
             c.Parent = wm
             map[d] = c
