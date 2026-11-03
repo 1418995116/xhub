@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.5"
-local BUILD   = "2026-11-06 04:10"
+local VERSION = "v19.6"
+local BUILD   = "2026-11-06 05:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6759,23 +6759,28 @@ if S.noclip then
     task.delay(0.6, function() pcall(function() M.setNoclip(true) end) end)
 end
 
--- 进服/重注入立刻清掉残留的"飞行状态"（服务器会据此踢人）
+-- 进服/重注入：仅在"检测到我们自己的飞行残留"时才清理，否则完全不碰角色
 task.delay(0.8, function()
     pcall(function()
         local c0 = M.charOf(lp)
-        local h0 = c0 and c0:FindFirstChildOfClass("Humanoid")
         local hrp0 = c0 and c0:FindFirstChild("HumanoidRootPart")
-        if hrp0 then
-            if hrp0.Anchored then hrp0.Anchored = false end
-            for _, nmx in ipairs({ "XHubFlyA", "XHubFlyB", "XHubAlignPos", "XHubAlignOr", "XHubFly" }) do
-                local o0 = hrp0:FindFirstChild(nmx)
-                if o0 then pcall(function() o0:Destroy() end) end
-            end
+        local h0 = c0 and c0:FindFirstChildOfClass("Humanoid")
+        if not hrp0 then return end
+        local residue = false
+        for _, nmx in ipairs({ "XHubFlyA", "XHubFlyB", "XHubAlignPos", "XHubAlignOr", "XHubFly" }) do
+            if hrp0:FindFirstChild(nmx) then residue = true end
         end
-        print("[XHub][fly] 已清理残留飞行状态")
+        if not residue and not hrp0.Anchored then return end
+        for _, nmx in ipairs({ "XHubFlyA", "XHubFlyB", "XHubAlignPos", "XHubAlignOr", "XHubFly" }) do
+            local o0 = hrp0:FindFirstChild(nmx)
+            if o0 then pcall(function() o0:Destroy() end) end
+        end
+        if hrp0.Anchored then hrp0.Anchored = false end
+        if h0 and h0.PlatformStand then h0.PlatformStand = false end
+        print("[XHub][fly] 已清理上一版飞行残留（锚定/约束/PlatformStand）")
     end)
 end)
 
--- 注入后不自动干预角色状态（避免浮空/前倾）；需要手动点「立即复位视角/姿态」
+-- 启动完成日志
 print(("[XHub] %s (build %s) loaded · 7 页 · 菜单键 %s · 档位=%s (PlaceId=%d)"):format(
     VERSION, BUILD, CONFIG.MenuKeys[1].Name, currentProfileKey, game.PlaceId))
