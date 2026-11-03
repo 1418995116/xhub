@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.14"
-local BUILD   = "2026-11-06 20:20"
+local VERSION = "v19.15"
+local BUILD   = "2026-11-06 21:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -5904,7 +5904,8 @@ M.addToggle(pVisual, "真实后视（实时画面·非镜像）", false, functio
     notify(v and "真实后视已开：小窗显示背后实时画面" or "真实后视已关", "info", 3)
 end)
 M.addSlider(pVisual, "真实后视半径", 40, 400, 120, function(v) M.rear.radius = v; M.rear.lastBuild = 0 end)
-M.addSlider(pVisual, "后视相机偏移(负=更靠后)", -40, 10, -8, function(v) M.rear.offset = v / 10 end)
+M.addToggle(pVisual, "后视自动避让（卡进桌椅时后退）", true, function(v) M.rear.autoAvoid = v end)
+M.addSlider(pVisual, "后视相机偏移(负=更靠后)", -60, 10, -8, function(v) M.rear.offset = v / 10 end)
 M.addSlider(pVisual, "后视相机高度偏移", -20, 40, 2, function(v) M.rear.yOff = v / 10 end)
 M.addSlider(pVisual, "真实后视高度", 120, 400, 200, function(v)
     M.rear.h = v
@@ -6563,7 +6564,7 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
 -- 菜单打开/关闭时只设置一次鼠标状态；不再每帧抢（坐着+第一人称游戏会抖动）
 
 --==== 真实后视：ViewportFrame + WorldModel（克隆附近几何，非镜像，头部跟随玩家俯仰）====
-M.rear = { on = false, w = 360, h = 200, radius = 120, maxParts = 400,
+M.rear = { on = false, w = 360, h = 200, radius = 120, maxParts = 400, autoAvoid = true,
            gui = nil, vp = nil, camObj = nil, world = nil, lastBuild = 0, map = {} }
 
 function M.rearDestroy()
@@ -6664,6 +6665,21 @@ function M.rearTick()
     local off = R.offset or -0.8
     local yoff = R.yOff or 0.25
     local pos = ccf.Position + Vector3.new(look.X, 0, look.Z) * off + Vector3.new(0, yoff, 0)
+    -- 自动避让：相机点卡在模型里时继续往后退（第一人称坐姿最容易贴在桌椅里）
+    if R.autoAvoid ~= false then
+        local pr = RaycastParams.new()
+        pcall(function() pr.FilterType = Enum.RaycastFilterType.Exclude end)
+        pr.FilterDescendantsInstances = { lp.Character }
+        local flat = Vector3.new(look.X, 0, look.Z)
+        local o, tries = off, 0
+        while o > -16 and tries < 18 do
+            local p = ccf.Position + flat * o + Vector3.new(0, yoff, 0)
+            local okq, parts = pcall(function() return workspace:GetPartBoundsInRadius(p, 0.9, pr) end)
+            if (not okq) or (not parts) or #parts == 0 then pos = p; break end
+            o = o - 0.8
+            tries = tries + 1
+        end
+    end
     pcall(function()
         R.camObj.CFrame = CFrame.lookAt(pos, pos + back)
         R.camObj.FieldOfView = cam.FieldOfView
