@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.10"
-local BUILD   = "2026-11-06 16:40"
+local VERSION = "v19.11"
+local BUILD   = "2026-11-06 17:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -5898,6 +5898,21 @@ M.addButton(pMain, "隐藏菜单", function() setVisible(false) end)
 
 print("[XHub][ui] build pVisual")
 task.wait()
+M.addSection(pVisual, "后视镜")
+M.addToggle(pVisual, "后视镜窗口（背后 180° 投影）", false, function(v)
+    pcall(function() M.mirrorSet(v) end)
+    notify(v and "后视镜已开（独立小窗，可拖动）" or "后视镜已关", "info", 2.6)
+end)
+M.addSlider(pVisual, "后视镜距离", 50, 400, 200, function(v) M.mirror.range = v end)
+M.addSlider(pVisual, "后视镜宽度", 220, 700, 340, function(v)
+    M.mirror.w = v
+    pcall(function()
+        if M.mirror.gui then
+            local win = M.mirror.gui:FindFirstChild("Win")
+            if win then win.Size = UDim2.fromOffset(v, M.mirror.h) end
+        end
+    end)
+end)
 M.addSection(pVisual, "ESP")
 M.addToggle(pVisual, "启用 ESP", false, function(v)
     S.esp = v
@@ -6529,32 +6544,143 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
     TextSize = 10, TextColor3 = Color3.fromRGB(140, 148, 162), TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = rowOrder }, pMisc)
 
--- 菜单打开时每帧把鼠标交还出来（游戏通常在相机回调里锁回去，必须抢在它后面）
-pcall(function() RS:UnbindFromRenderStep("XHubMouse") end)
-RS:BindToRenderStep("XHubMouse", Enum.RenderPriority.Last.Value - 1, function()
-    if not main.Visible then return end
-    if UIS.MouseBehavior ~= Enum.MouseBehavior.Default then
-        pcall(function() UIS.MouseBehavior = Enum.MouseBehavior.Default end)
-    end
-    if not UIS.MouseIconEnabled then
-        pcall(function() UIS.MouseIconEnabled = true end)
-    end
-end)
+-- 菜单打开/关闭时只设置一次鼠标状态；不再每帧抢（坐着+第一人称游戏会抖动）
 
-task.spawn(function()
-    while RUNNING do
-        task.wait(0.25)
-        if main.Visible then
-            if UIS.MouseBehavior ~= Enum.MouseBehavior.Default then
-                pcall(function() UIS.MouseBehavior = Enum.MouseBehavior.Default end)
+--==== 后视镜：把背后 180° 的实体投影到一个独立小窗（不额外渲染 3D）====
+M.mirror = { on = false, range = 200, w = 340, h = 190, gui = nil, canvas = nil, pool = {} }
+
+function M.mirrorBuild()
+    local M2 = M.mirror
+    if M2.canvas and M2.canvas.Parent then return end
+    local g = mk("ScreenGui", { Name = "XHubMirror", ResetOnSpawn = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 998 }, CoreGui)
+    M2.gui = g
+    local win = mk("Frame", { Name = "Win", Size = UDim2.fromOffset(M2.w, M2.h),
+        Position = UDim2.new(1, -M2.w - 20, 0.5, -M2.h / 2),
+        BackgroundColor3 = Color3.fromRGB(10, 12, 16), BorderSizePixel = 0 }, g)
+    mk("UICorner", { CornerRadius = UDim.new(0, 8) }, win)
+    mk("TextLabel", { Text = "后视镜 · 180°", Size = UDim2.new(1, 0, 0, 20),
+        BackgroundColor3 = Color3.fromRGB(20, 24, 32), BorderSizePixel = 0,
+        Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Color3.fromRGB(150, 200, 255) }, win)
+    local canvas = mk("Frame", { Name = "Canvas", Size = UDim2.new(1, -8, 1, -26),
+        Position = UDim2.fromOffset(4, 22), BackgroundColor3 = Color3.fromRGB(16, 20, 26),
+        BorderSizePixel = 0, ClipsDescendants = true }, win)
+    mk("UICorner", { CornerRadius = UDim.new(0, 6) }, canvas)
+    M2.canvas = canvas
+    -- 地平线 + 中线
+    mk("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 0.55, 0),
+        BackgroundColor3 = Color3.fromRGB(60, 70, 90), BorderSizePixel = 0 }, canvas)
+    mk("Frame", { Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(0.5, 0, 0, 0),
+        BackgroundColor3 = Color3.fromRGB(45, 52, 66), BorderSizePixel = 0 }, canvas)
+    -- 拖动
+    pcall(function()
+        local dragging, start, startPos = false, nil, nil
+        win.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = true; start = i.Position; startPos = win.Position
             end
-            if not UIS.MouseIconEnabled then
-                pcall(function() UIS.MouseIconEnabled = true end)
+        end)
+        UIS.InputChanged:Connect(function(i)
+            if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+                local d = i.Position - start
+                win.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
+                                         startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            end
+        end)
+        UIS.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+        end)
+    end)
+end
+
+local function mirrorSlot(i)
+    local M2 = M.mirror
+    local s = M2.pool[i]
+    if s and s.box and s.box.Parent then return s end
+    local box = mk("Frame", { Size = UDim2.fromOffset(10, 16), BackgroundColor3 = Color3.fromRGB(255, 70, 70),
+        BackgroundTransparency = 0.55, BorderSizePixel = 0, Visible = false }, M2.canvas)
+    local fill = mk("Frame", { Size = UDim2.new(1, 0, 0.25, 0), Position = UDim2.new(0, 0, 1, 0),
+        BackgroundColor3 = Color3.fromRGB(255, 255, 255), BackgroundTransparency = 0.4,
+        BorderSizePixel = 0, Visible = false }, box)
+    local tag = mk("TextLabel", { Size = UDim2.new(0, 90, 0, 12), BackgroundTransparency = 1,
+        Font = Enum.Font.Code, TextSize = 10, TextColor3 = Color3.fromRGB(220, 230, 245),
+        TextXAlignment = Enum.TextXAlignment.Center, Visible = false }, M2.canvas)
+    s = { box = box, fill = fill, tag = tag }
+    M2.pool[i] = s
+    return s
+end
+
+function M.mirrorTick()
+    local M2 = M.mirror
+    if not M2.on then return end
+    if not (M2.canvas and M2.canvas.Parent) then M.mirrorBuild() ; if not M2.canvas then return end end
+    local cs = M2.canvas.AbsoluteSize
+    if cs.X < 10 then return end
+    local camPos = cam.CFrame.Position
+    local look = cam.CFrame.LookVector
+    local lookH = Vector3.new(look.X, 0, look.Z)
+    if lookH.Magnitude < 0.01 then return end
+    lookH = lookH.Unit
+    local right = Vector3.new(-lookH.Z, 0, lookH.X)
+    local used = 0
+    local range = M2.range
+    local function draw(pos, label, isPlayer)
+        if used >= 16 then return end
+        local d = pos - camPos
+        local depth = -d:Dot(lookH)                 -- 正数 = 在身后
+        if depth <= 1 or depth > range then return end
+        local side = d:Dot(right)
+        if math.abs(side) > depth then return end   -- 只画背后 180°
+        used = used + 1
+        local s = mirrorSlot(used)
+        local sx = cs.X * 0.5 - (side / depth) * (cs.X * 0.62)
+        local sy = cs.Y * 0.55 - ((pos.Y - camPos.Y) / depth) * (cs.Y * 0.9)
+        local sz = math.clamp(900 / depth, 3, 40)
+        s.box.Visible, s.tag.Visible, s.fill.Visible = true, true, true
+        s.box.Size = UDim2.fromOffset(math.max(3, sz * 0.7), math.max(6, sz))
+        s.box.Position = UDim2.fromOffset(sx - sz * 0.35, sy - sz * 0.5)
+        s.box.BackgroundColor3 = isPlayer and Color3.fromRGB(255, 80, 80) or Color3.fromRGB(255, 170, 60)
+        s.tag.Text = ("%s %dm"):format(label, math.floor(depth))
+        s.tag.Position = UDim2.fromOffset(sx - 45, sy + sz * 0.55)
+    end
+    pcall(function()
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= lp and p.Character then
+                local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then draw(hrp.Position, p.Name, true) end
             end
         end
+        if S.espNpc then
+            for m in pairs(npcStore) do
+                if m and m.Parent then
+                    local a = M.modelAnchor(m)
+                    if a then draw(a.Position, m.Name, false) end
+                end
+            end
+        end
+    end)
+    for i = used + 1, #M2.pool do
+        local s = M2.pool[i]
+        if s then s.box.Visible, s.tag.Visible, s.fill.Visible = false, false, false end
     end
-end)
+end
 
+function M.mirrorSet(on)
+    local M2 = M.mirror
+    M2.on = on
+    if on then
+        M.mirrorBuild()
+        if M2.gui then M2.gui.Enabled = true end
+    elseif M2.gui then
+        M2.gui.Enabled = false
+    end
+end
+
+pcall(function()
+    RS.RenderStepped:Connect(function()
+        if RUNNING and M.mirror.on then pcall(M.mirrorTick) end
+    end)
+end)
 --==== 工具页：Dex 快捷启动 ====
 M.addSection(pTool, "对象浏览器")
 M.addButton(pTool, "启动 Dex#（离线缓存优先·已汉化）", function()
