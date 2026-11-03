@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v17.7"
-local BUILD   = "2026-11-05 10:40"
+local VERSION = "v17.8"
+local BUILD   = "2026-11-05 12:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -89,7 +89,7 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = false, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, aimNo360 = true, aimMaxAngle = 60, aimMaxPitch = 35, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = false, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, noHook = true, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = false, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, aimNo360 = true, aimMaxAngle = 60, aimMaxPitch = 35, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = false, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, autoPick = false, pickRange = 12, seeInvis = false, itemEsp = false, itemEspDist = 150, noHook = true, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
@@ -1795,6 +1795,166 @@ local function isTarget(s)
         if low:find(k:lower(), 1, true) then return true end
     end
     return false
+end
+--==== 自动拾取 / 交互（无钩子）====
+function M.autoPickTick()
+    local c = M.charOf(lp)
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    if not hrp then return 0 end
+    local range = S.pickRange or 12
+    local n = 0
+    local roots = { workspace, RStorage }
+    for _, root in ipairs(roots) do
+        pcall(function()
+            for _, d in ipairs(root:GetDescendants()) do
+                if d:IsA("ProximityPrompt") then
+                    local obj = d.Parent
+                    local pos = nil
+                    pcall(function()
+                        if obj and obj:IsA("BasePart") then pos = obj.Position
+                        elseif obj and obj:IsA("Attachment") and obj.Parent then pos = obj.Parent.Position end
+                    end)
+                    if pos and (pos - hrp.Position).Magnitude <= range then
+                        pcall(function()
+                            d.HoldDuration = 0
+                            d.MaxActivationDistance = math.max(d.MaxActivationDistance or 0, range + 10)
+                        end)
+                        if fireproximityprompt then
+                            pcall(fireproximityprompt, d, 0)
+                            n = n + 1
+                        end
+                    end
+                elseif d:IsA("ClickDetector") then
+                    local obj = d.Parent
+                    local pos = obj and obj:IsA("BasePart") and obj.Position or nil
+                    if pos and (pos - hrp.Position).Magnitude <= range and fireclickdetector then
+                        pcall(fireclickdetector, d, range)
+                        n = n + 1
+                    end
+                end
+            end
+        end)
+    end
+    return n
+end
+
+--==== 隐身单位本地还原可见 ====
+M._invisSaved = M._invisSaved or {}
+function M.seeInvisTick(on)
+    if not on then
+        for part, t in pairs(M._invisSaved) do
+            pcall(function() if part and part.Parent then part.LocalTransparencyModifier = t end end)
+        end
+        M._invisSaved = {}
+        return 0
+    end
+    local n = 0
+    local function scanModel(m)
+        pcall(function()
+            for _, d in ipairs(m:GetDescendants()) do
+                if d:IsA("BasePart") then
+                    local ltm = d.LocalTransparencyModifier or 0
+                    if (d.Transparency or 0) >= 0.95 or ltm >= 0.95 then
+                        if M._invisSaved[d] == nil then M._invisSaved[d] = ltm end
+                        if ltm >= 0.95 then d.LocalTransparencyModifier = 0 end
+                        if (d.Transparency or 0) >= 0.95 then d.Transparency = 0.15 end
+                        n = n + 1
+                    end
+                end
+            end
+        end)
+    end
+    for _, pl in ipairs(Players:GetPlayers()) do
+        if pl ~= lp and pl.Character then scanModel(pl.Character) end
+    end
+    for m in pairs(npcStore) do if m and m.Parent then scanModel(m) end end
+    return n
+end
+
+--==== 掉落物 ESP ====
+local ITEM_KW = { "item", "tool", "pickup", "coin", "gem", "cash", "money", "weapon", "crate",
+                  "loot", "box", "drop", "reward", "key", "orb", "chest", "包", "箱", "钱" }
+function M.isItemName(nm)
+    local s = tostring(nm):lower()
+    for _, k in ipairs(ITEM_KW) do if s:find(k, 1, true) then return true end end
+    return false
+end
+
+function M.ensureItemEsp(part)
+    local d = M.distTo(part)
+    if d and d > (S.itemEspDist or 150) then
+        local o = itemStore[part]
+        if o then
+            pcall(function() if o.hl then o.hl.Enabled = false end end)
+            pcall(function() if o.tag then o.tag.Enabled = false end end)
+        end
+        return
+    end
+    local o = itemStore[part]
+    if not o then o = {}; itemStore[part] = o end
+    if not (o.hl and o.hl.Parent) then
+        o.hl = mk("Highlight", { Name = "XHubItemEsp", FillColor = Color3.fromRGB(255, 200, 60),
+            FillTransparency = 0.7, OutlineColor = Color3.fromRGB(255, 230, 140),
+            OutlineTransparency = 0, DepthMode = Enum.HighlightDepthMode.AlwaysOnTop }, part)
+    end
+    o.hl.Parent = part
+    if not (o.tag and o.tag.Parent) then
+        o.tag = mk("BillboardGui", { Name = "XHubItemTag", Size = UDim2.fromOffset(180, 34),
+            AlwaysOnTop = true, Adornee = part, StudsOffset = Vector3.new(0, 1.6, 0) }, part)
+        o.lbl = mk("TextLabel", { Text = part.Name, BackgroundTransparency = 1,
+            Size = UDim2.new(1, 0, 0, 16), Font = Enum.Font.GothamBold, TextSize = 12,
+            TextColor3 = Color3.fromRGB(255, 220, 120), TextStrokeTransparency = 0.4 }, o.tag)
+        o.dlbl = mk("TextLabel", { Text = "", BackgroundTransparency = 1,
+            Position = UDim2.new(0, 0, 0, 15), Size = UDim2.new(1, 0, 0, 14),
+            Font = Enum.Font.Gotham, TextSize = 11, TextColor3 = Color3.fromRGB(255, 240, 200),
+            TextStrokeTransparency = 0.5 }, o.tag)
+    end
+    o.tag.Adornee = part
+    o.tag.Parent = part
+    if o.hl then o.hl.Enabled = true end
+    if o.tag then o.tag.Enabled = true end
+    if o.lbl then o.lbl.Text = part.Name end
+    if o.dlbl then o.dlbl.Text = d and ("%.0f m"):format(d) or "" end
+end
+
+function M.itemEspTick()
+    local c = M.charOf(lp)
+    local charParts = {}
+    if c then
+        pcall(function() for _, d in ipairs(c:GetDescendants()) do if d:IsA("BasePart") then charParts[d] = true end end end)
+    end
+    for _, pl in ipairs(Players:GetPlayers()) do
+        if pl.Character then
+            pcall(function() for _, d in ipairs(pl.Character:GetDescendants()) do if d:IsA("BasePart") then charParts[d] = true end end end)
+        end
+    end
+    local n = 0
+    pcall(function()
+        for _, d in ipairs(workspace:GetDescendants()) do
+            n = n + 1
+            if n > 8000 then break end
+            if d:IsA("Tool") or (d:IsA("BasePart") and not charParts[d] and M.isItemName(d.Name)) then
+                if d:IsA("BasePart") then
+                    pcall(M.ensureItemEsp, d)
+                elseif d:IsA("Tool") then
+                    local h = d:FindFirstChild("Handle") or d:FindFirstChildWhichIsA("BasePart")
+                    if h then pcall(M.ensureItemEsp, h) end
+                end
+            end
+        end
+    end)
+    -- 清理消失的
+    local dead = {}
+    for p, o in pairs(itemStore) do
+        if not p.Parent then
+            pcall(function()
+                if o.hl then o.hl:Destroy() end
+                if o.tag then o.tag:Destroy() end
+            end)
+            dead[#dead + 1] = p
+        end
+    end
+    for _, p in ipairs(dead) do itemStore[p] = nil end
 end
 --==== 反作弊压制（无钩子版）：只断 AC 自己的事件连接，不碰 metatable ====
 function M.acQuiet()
@@ -5019,6 +5179,21 @@ task.spawn(function()
     end
 end)
 --==== 遇到 Eyes 自动背对（把角色朝向转成背对它） ====
+--==== 自动拾取 / 隐身可见 / 掉落物 ESP 循环 ====
+task.spawn(function()
+    while RUNNING do
+        task.wait(0.45)
+        if S.autoPick then pcall(M.autoPickTick) end
+        if S.seeInvis then pcall(M.seeInvisTick, true) end
+    end
+end)
+task.spawn(function()
+    while RUNNING do
+        task.wait(0.6)
+        if S.itemEsp then pcall(M.itemEspTick) end
+    end
+end)
+
 task.spawn(function()
     local locked = false
     while RUNNING do
@@ -5143,6 +5318,11 @@ M.addSlider(pVisual, "NPC 最多显示数量", 5, 200, 80, function(v) S.npcEspM
 M.addToggle(pVisual, "穿墙可见", true, function(v) S.espOccluded = v end)
 M.addToggle(pVisual, "彩虹上色", false, function(v) S.espRainbow = v end)
 M.addSection(pVisual, "环境")
+M.addSlider(pVisual, "物品 ESP 距离 studs", 30, 400, 150, function(v) S.itemEspDist = v end)
+M.addToggle(pVisual, "透视隐身单位（本地还原可见）", false, function(v)
+    S.seeInvis = v
+    if not v then pcall(M.seeInvisTick, false) end
+end)
 M.addToggle(pVisual, "夜视（提亮+去雾，纯客户端）", false, function(v) M.setNight(v) end)
 M.addSlider(pVisual, "夜视亮度", 1, 10, 3, function(v)
     S.nvBright = v
@@ -5375,6 +5555,11 @@ M.addSlider(pAuto, "拾取半径", 5, 60, S.pickupRadius, function(v) S.pickupRa
 M.addSlider(pAuto, "拾取间隔 ×0.01s（12 = 0.12s）", 5, 50, 12, function(v) S.pickupInterval = v / 100 end)
 
 M.addSection(pAuto, "交互")
+M.addToggle(pAuto, "自动拾取（ProximityPrompt + ClickDetector 全扫）", false, function(v)
+    S.autoPick = v
+    notify(v and "自动拾取已开：靠近可交互物件自动触发" or "自动拾取已关", "info", 2.6)
+end)
+M.addSlider(pAuto, "自动拾取半径 studs", 5, 40, 12, function(v) S.pickRange = v end)
 M.addToggle(pAuto, "自动交互（ProximityPrompt）", false, function(v) S.autoPrompt = v end)
 M.addSlider(pAuto, "交互半径", 5, 40, S.promptRadius, function(v) S.promptRadius = v end)
 M.addToggle(pAuto, "瞬间交互（去掉长按）", true, function(v) S.instantPrompt = v end)
