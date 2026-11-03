@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.16"
-local BUILD   = "2026-11-06 22:10"
+local VERSION = "v19.17"
+local BUILD   = "2026-11-06 23:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -5915,7 +5915,12 @@ M.addToggle(pVisual, "真实后视（实时画面·非镜像）", false, functio
     pcall(function() M.rearSet(v) end)
     notify(v and "真实后视已开：小窗显示背后实时画面" or "真实后视已关", "info", 3)
 end)
-M.addSlider(pVisual, "真实后视半径", 30, 400, 60, function(v) M.rear.radius = v; M.rear.lastBuild = 0 end)
+M.addSlider(pVisual, "真实后视半径", 30, 1200, 150, function(v) M.rear.radius = v; M.rear.lastBuild = 0 end)
+M.addToggle(pVisual, "后视里显示玩家/NPC模型", false, function(v)
+    M.rear.includeChars = v
+    M.rear.lastBuild = 0
+    notify(v and "后视将包含角色模型" or "后视只显示场景（默认）", "info", 2.4)
+end)
 M.addToggle(pVisual, "后视自动避让（卡进桌椅时后退）", true, function(v) M.rear.autoAvoid = v end)
 M.addSlider(pVisual, "后视相机偏移(负=更靠后)", -60, 10, -8, function(v) M.rear.offset = v / 10 end)
 M.addSlider(pVisual, "后视相机高度偏移", -20, 40, 2, function(v) M.rear.yOff = v / 10 end)
@@ -6576,7 +6581,7 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
 -- 菜单打开/关闭时只设置一次鼠标状态；不再每帧抢（坐着+第一人称游戏会抖动）
 
 --==== 真实后视：ViewportFrame + WorldModel（克隆附近几何，非镜像，头部跟随玩家俯仰）====
-M.rear = { on = false, w = 360, h = 200, radius = 120, maxParts = 400, autoAvoid = true,
+M.rear = { on = false, w = 360, h = 220, radius = 150, maxParts = 900, autoAvoid = true, includeChars = false,
            gui = nil, vp = nil, camObj = nil, world = nil, lastBuild = 0, map = {} }
 
 function M.rearDestroy()
@@ -6633,38 +6638,60 @@ function M.rearRebuildWorld()
     if not R.vp then return end
     local camPos = cam.CFrame.Position
     local wm = Instance.new("WorldModel")
-    local n, map = 0, {}
-    pcall(function()
+    local map, built = {}, 0
+    local okAll = pcall(function()
+        -- 1) 收集候选（按距离排序，近处优先；可排除角色模型）
+        local cands = {}
         for _, d in ipairs(workspace:GetDescendants()) do
-            if n >= R.maxParts then break end
-            if d:IsA("BasePart") and not (lp.Character and d:IsDescendantOf(lp.Character)) then
-                local dist = (d.Position - camPos).Magnitude
-                if dist <= R.radius and d.Transparency < 0.95 then
-                    local c
-                    if d:IsA("MeshPart") then
-                        c = Instance.new("MeshPart")
-                        pcall(function() c.MeshId = d.MeshId; c.TextureID = d.TextureID end)
-                        c.Size = d.Size
-                    else
-                        c = Instance.new("Part")
-                        c.Size = d.Size
+            if d:IsA("BasePart") then
+                local skip = false
+                if not R.includeChars then
+                    local anc = d
+                    for _ = 1, 6 do
+                        anc = anc.Parent
+                        if not anc or anc == workspace then break end
+                        if anc:IsA("Model") and (anc:FindFirstChildOfClass("Humanoid") or Players:GetPlayerFromCharacter(anc)) then
+                            skip = true
+                            break
+                        end
                     end
-                    c.CFrame, c.Color, c.Transparency = d.CFrame, d.Color, d.Transparency
-                    c.Material, c.Anchored, c.CanCollide, c.CanQuery, c.CanTouch = d.Material, true, false, false, false
-                    c.Parent = wm
-                    map[d] = c
-                    n = n + 1
+                end
+                if not skip and d.Transparency < 0.95 then
+                    local dist = (d.Position - camPos).Magnitude
+                    if dist <= R.radius then
+                        cands[#cands + 1] = { d = d, dist = dist }
+                    end
                 end
             end
         end
+        table.sort(cands, function(a, b) return a.dist < b.dist end)
+        -- 2) 克隆
+        for _, item in ipairs(cands) do
+            if built >= R.maxParts then break end
+            local d = item.d
+            local c
+            if d:IsA("MeshPart") then
+                c = Instance.new("MeshPart")
+                pcall(function() c.MeshId = d.MeshId; c.TextureID = d.TextureID end)
+                c.Size = d.Size
+            else
+                c = Instance.new("Part")
+                c.Size = d.Size
+            end
+            c.CFrame, c.Color, c.Transparency = d.CFrame, d.Color, d.Transparency
+            c.Material = d.Material
+            c.Anchored, c.CanCollide, c.CanQuery, c.CanTouch = true, false, false, false
+            pcall(function() c.Reflectance = d.Reflectance end)
+            c.Parent = wm
+            map[d] = c
+            built = built + 1
+        end
     end)
-    -- 关键：WorldModel 必须"挂在 ViewportFrame 里面"才会渲染
     if R.world then pcall(function() R.world:Destroy() end) end
     wm.Parent = R.vp
     R.world, R.map, R.lastBuild = wm, map, os.clock()
-    if n == 0 then print("[XHub][rear] 克隆到 0 个部件（半径太小或附近无实体）") end
+    if built == 0 then print("[XHub][rear] 克隆到 0 个部件（半径太小或附近无实体）") end
 end
-
 function M.rearTick()
     local R = M.rear
     if not R.on then return end
