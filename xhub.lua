@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.4"
-local BUILD   = "2026-11-06 03:30"
+local VERSION = "v19.5"
+local BUILD   = "2026-11-06 04:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -88,7 +88,7 @@ local S = {
     fly = false, flySpeed = 120,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = true, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
+    aim = false, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "align", antiSnap = true, flyResp = 200, flyRigid = true,
@@ -4767,32 +4767,20 @@ function M.resetPose()
     end)
     return okc
 end
---==== 姿态/飞行残留守护：绝不写 HRP，只修服务端会判"飞行"的状态 ====
+--==== 飞行残留清理（默认关闭：避免干预游戏自身的角色状态）====
 task.spawn(function()
     while RUNNING do
         task.wait(1.0)
-        if not S.fly then
+        if S.flyGuard and not S.fly then
             pcall(function()
                 local c = M.charOf(lp)
-                local h = c and c:FindFirstChildOfClass("Humanoid")
                 local hrp = c and c:FindFirstChild("HumanoidRootPart")
-                if h and not h.AutoRotate then h.AutoRotate = true end
-                -- 关键：不留任何"像在飞"的状态（服务器据此踢人）
-                if h then
-                    if h.PlatformStand then h.PlatformStand = false end
-                    if h:GetState() == Enum.HumanoidStateType.Physics then
-                        h:ChangeState(Enum.HumanoidStateType.GettingUp)
-                    end
-                end
                 if hrp then
                     if hrp.Anchored then hrp.Anchored = false end
-                    local v = hrp.AssemblyLinearVelocity
-                    if v and math.abs(v.Y) > 4000 then hrp.AssemblyLinearVelocity = Vector3.zero end
-                end
-                -- 清掉残留飞行附件/约束
-                for _, nmx in ipairs({ "XHubFlyA", "XHubFlyB", "XHubAlignPos", "XHubAlignOr", "XHubFly" }) do
-                    local o0 = hrp and hrp:FindFirstChild(nmx)
-                    if o0 then pcall(function() o0:Destroy() end) end
+                    for _, nmx in ipairs({ "XHubFlyA", "XHubFlyB", "XHubAlignPos", "XHubAlignOr", "XHubFly" }) do
+                        local o0 = hrp:FindFirstChild(nmx)
+                        if o0 then pcall(function() o0:Destroy() end) end
+                    end
                 end
             end)
         end
@@ -5839,7 +5827,7 @@ M.addToggle(pMain, "动作解锁（服务器禁跳/禁跑/锁动作时抢回）"
 end)
 M.addSlider(pMain, "解锁目标走速", 16, 120, 22, function(v) S.unlockWalk = v end)
 M.addSlider(pMain, "解锁目标跳跃力", 30, 200, 55, function(v) S.unlockJump = v end)
-M.addToggle(pMain, "持续扶正姿态（清 CameraOffset / 纠歪）", true, function(v)
+M.addToggle(pMain, "持续扶正姿态（清 CameraOffset，默认关）", false, function(v)
     S.poseFix = v
     notify(v and "持续扶正已开：每秒检查一次，只有歪了才动" or "持续扶正已关", "info", 2.6)
 end)
@@ -6777,12 +6765,6 @@ task.delay(0.8, function()
         local c0 = M.charOf(lp)
         local h0 = c0 and c0:FindFirstChildOfClass("Humanoid")
         local hrp0 = c0 and c0:FindFirstChild("HumanoidRootPart")
-        if h0 then
-            h0.PlatformStand = false
-            if h0:GetState() == Enum.HumanoidStateType.Physics then
-                h0:ChangeState(Enum.HumanoidStateType.GettingUp)
-            end
-        end
         if hrp0 then
             if hrp0.Anchored then hrp0.Anchored = false end
             for _, nmx in ipairs({ "XHubFlyA", "XHubFlyB", "XHubAlignPos", "XHubAlignOr", "XHubFly" }) do
@@ -6794,15 +6776,6 @@ task.delay(0.8, function()
     end)
 end)
 
--- 注入后自动复位视角/姿态（前倾问题兜底）
-task.delay(1.2, function()
-    pcall(function()
-        local n = M.resetPose()
-        print(("[XHub][pose] 已复位视角/姿态（动作 %d）"):format(n or 0))
-    end)
-end)
-task.delay(3.0, function()
-    pcall(function() M.resetPose() end)
-end)
+-- 注入后不自动干预角色状态（避免浮空/前倾）；需要手动点「立即复位视角/姿态」
 print(("[XHub] %s (build %s) loaded · 7 页 · 菜单键 %s · 档位=%s (PlaceId=%d)"):format(
     VERSION, BUILD, CONFIG.MenuKeys[1].Name, currentProfileKey, game.PlaceId))
