@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v18.4"
-local BUILD   = "2026-11-05 18:10"
+local VERSION = "v18.5"
+local BUILD   = "2026-11-05 20:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -190,6 +190,13 @@ local PROFILES = {
         antiSnap = true, noclip = true, vehicleSafe = true, banRisk = "高",
         tip = "实测服务端会下发 600 封禁；速度已锁 18 以下，建议只开 ESP / Noclip",
     },
+    pf = {
+        label = "Phantom Forces · FPS 对战",
+        flySpeed = 30, flyCap = 45, flyMode = "teleport", walkSpeed = 20,
+        antiSnap = true, noclip = false, vehicleSafe = true, banRisk = "中",
+        tip = "FPS 服：ESP 用相机原点（死亡/观战也显示）；光环无效，用玩家自瞄+ESP",
+        fps = true,
+    },
     ["default"] = {
         label = "通用 · 未识别",
         flySpeed = 40, flyCap = 60, flyMode = "cframe", walkSpeed = 16,
@@ -202,6 +209,11 @@ function M.detectProfile()
     local ok, res = pcall(function()
         if RStorage:FindFirstChild("RemotesFolder") and workspace:FindFirstChild("CurrentRooms") then
             return "doors"
+        end
+        -- Phantom Forces（PlaceId 292439477）：FPS 对战，走观战 ESP
+        if game.PlaceId == 292439477
+           or (RStorage:FindFirstChild("ClientWeapons") and workspace:FindFirstChild("Map")) then
+            return "pf"
         end
         if game:GetService("ReplicatedFirst"):FindFirstChild("AntiCheat")
            or RStorage:FindFirstChild("BS_Script_Running_Marker") then
@@ -223,6 +235,13 @@ function M.applyProfile(key)
     S.antiSnap    = p.antiSnap
     S.noclip      = p.noclip
     S.vehicleSafe = p.vehicleSafe
+    if p.fps then
+        S.espPlayer = true
+        S.espNpc = false
+        S.killAura = false
+        S.auraNpc = false
+        pcall(function() notify("已识别 FPS 服：ESP 用相机原点，死亡也能看人", "info", 4) end)
+    end
     return p
 end
 
@@ -849,11 +868,11 @@ task.spawn(function()
         task.wait(0.1)
         if S.esp then
             for _, p in ipairs(Players:GetPlayers()) do
-                if p ~= lp and alive(p) and (S.espTeam or not M.isMate(p)) then M.ensureESP(p) end
+                if p ~= lp and M.charOf(p) and (S.espTeam or not M.isMate(p)) then M.ensureESP(p) end
             end
             local dead = {}
             for p, o in pairs(espStore) do
-                if not alive(p) or (M.isMate(p) and not S.espTeam) or p.Parent == nil then
+                if (not M.charOf(p)) or (M.isMate(p) and not S.espTeam) or p.Parent == nil then
                     M.destroyESP(o); dead[#dead + 1] = p
                 end
             end
@@ -2991,14 +3010,23 @@ function M.firstPart(inst)
     return inst:FindFirstChildWhichIsA("BasePart", true)
 end
 
-function M.distTo(m)
+-- 观察原点：活着用角色，死亡/观战用相机（FPS 游戏也能算距离）
+function M.originPos()
     local c = M.charOf(lp)
     local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    if not hrp then return nil end
+    if hrp then return hrp.Position end
+    local ok, p = pcall(function() return cam.CFrame.Position end)
+    if ok and p then return p end
+    return nil
+end
+
+function M.distTo(m)
+    local org = M.originPos()
+    if not org then return nil end
     local p = M.firstPart(m)
-    if p then return (p.Position - hrp.Position).Magnitude end
+    if p then return (p.Position - org).Magnitude end
     local ok, cf = pcall(function() return m:GetBoundingBox() end)
-    if ok and cf then return (cf.Position - hrp.Position).Magnitude end
+    if ok and cf then return (cf.Position - org).Magnitude end
     return nil
 end
 
@@ -3084,7 +3112,11 @@ task.spawn(function()
                 local hh = M.humOf(lp)
                 local dead = (hh == nil) or (hh.Health <= 0)
                 if dead then
-                    entHud.Text = "角色已死亡 · 房间已卸载，实体不可见（正常）"
+                    if bestN then
+                        entHud.Text = ("角色已死亡（观战）· 最近实体: %s · %.0f m"):format(bestN, bestD)
+                    else
+                        entHud.Text = "角色已死亡（观战中）· 附近没有实体"
+                    end
                     entHud.TextColor3 = Color3.fromRGB(255, 150, 150)
                 else
                     entHud.TextColor3 = Color3.fromRGB(255, 190, 120)
