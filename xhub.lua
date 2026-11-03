@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.24"
-local BUILD   = "2026-11-07 04:50"
+local VERSION = "v19.25"
+local BUILD   = "2026-11-07 05:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -5996,6 +5996,11 @@ M.addToggle(pVisual, "射线后视（软件渲染·真实几何）", false, func
     pcall(function() M.rvSet(v) end)
     notify(v and "射线后视已开：直接对背后打射线，画真实几何" or "射线后视已关", "info", 3)
 end)
+M.addToggle(pVisual, "第一人称隐藏自己（防头发/饰品挡视线）", false, function(v)
+    M.hideSelf = v
+    pcall(M.hideSelfTick)
+    notify(v and "已隐藏自己模型（仅本地）" or "已恢复自己模型", "info", 2.4)
+end)
 M.addButton(pVisual, "射线后视模式: 列扫描（清晰）点我切换", function()
     M.rv.mode = (M.rv.mode == "cols") and "grid" or "cols"
     notify("射线后视模式 = " .. (M.rv.mode == "cols" and "列扫描（清晰）" or "网格（马赛克）"), "info", 2.5)
@@ -6691,7 +6696,7 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
 -- 菜单打开/关闭时只设置一次鼠标状态；不再每帧抢（坐着+第一人称游戏会抖动）
 
 --==== 射线后视（软件渲染）：不克隆世界，直接对背后打射线阵，画"像素级"真实画面 ====
-M.rv = { on = false, mode = "cols", gw = 40, gh = 24, cols = 200, fov = 95, range = 400, pixels = {}, pivots = {}, last = 0, last2 = 0, fps = 14, fps2 = 20 }
+M.rv = { on = false, mode = "cols", gw = 40, gh = 24, cols = 260, fov = 95, range = 400, pixels = {}, pivots = {}, last = 0, last2 = 0, fps = 14, fps2 = 20 }
 
 function M.rvBuild()
     local R = M.rv
@@ -6712,6 +6717,29 @@ function M.rvBuild()
     R.canvas, R.win = canvas, win
 end
 
+-- 第一人称隐藏自己（头发/饰品会糊满屏幕时用）；只改本地透明度
+M.hideSelf = false
+function M.hideSelfTick()
+    local c = M.charOf(lp)
+    if not c then return end
+    pcall(function()
+        for _, d in ipairs(c:GetDescendants()) do
+            if d:IsA("BasePart") then
+                if M.hideSelf then
+                    if d.LocalTransparencyModifier ~= 1 then d.LocalTransparencyModifier = 1 end
+                else
+                    if d.LocalTransparencyModifier ~= 0 then d.LocalTransparencyModifier = 0 end
+                end
+            end
+        end
+    end)
+end
+
+pcall(function()
+    RS.RenderStepped:Connect(function()
+        if RUNNING and M.hideSelf then pcall(M.hideSelfTick) end
+    end)
+end)
 -- 列扫描模式（类似 Wolfenstein）：每列一条射线，画竖条墙 + 天地渐变，比网格清晰得多
 function M.rvColumns()
     local R = M.rv
