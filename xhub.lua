@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.11"
-local BUILD   = "2026-11-06 17:40"
+local VERSION = "v19.12"
+local BUILD   = "2026-11-06 18:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -5899,6 +5899,20 @@ M.addButton(pMain, "隐藏菜单", function() setVisible(false) end)
 print("[XHub][ui] build pVisual")
 task.wait()
 M.addSection(pVisual, "后视镜")
+M.addToggle(pVisual, "真实后视（实时画面·非镜像）", false, function(v)
+    pcall(function() M.rearSet(v) end)
+    notify(v and "真实后视已开：小窗显示背后实时画面" or "真实后视已关", "info", 3)
+end)
+M.addSlider(pVisual, "真实后视半径", 40, 250, 120, function(v) M.rear.radius = v; M.rear.lastBuild = 0 end)
+M.addSlider(pVisual, "真实后视高度", 120, 400, 200, function(v)
+    M.rear.h = v
+    pcall(function()
+        if M.rear.gui then
+            local win = M.rear.gui:FindFirstChild("Win")
+            if win then win.Size = UDim2.fromOffset(M.rear.w, v) end
+        end
+    end)
+end)
 M.addToggle(pVisual, "后视镜窗口（背后 180° 投影）", false, function(v)
     pcall(function() M.mirrorSet(v) end)
     notify(v and "后视镜已开（独立小窗，可拖动）" or "后视镜已关", "info", 2.6)
@@ -6546,6 +6560,129 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
 
 -- 菜单打开/关闭时只设置一次鼠标状态；不再每帧抢（坐着+第一人称游戏会抖动）
 
+--==== 真实后视：ViewportFrame + WorldModel（克隆附近几何，非镜像，头部跟随玩家俯仰）====
+M.rear = { on = false, w = 360, h = 200, radius = 120, maxParts = 220,
+           gui = nil, vp = nil, camObj = nil, world = nil, lastBuild = 0, map = {} }
+
+function M.rearDestroy()
+    local R = M.rear
+    pcall(function() if R.gui then R.gui:Destroy() end end)
+    R.gui, R.vp, R.camObj, R.world, R.map = nil, nil, nil, nil, {}
+    R.lastBuild = 0
+end
+
+function M.rearBuild()
+    local R = M.rear
+    if R.vp and R.vp.Parent then return end
+    local g = mk("ScreenGui", { Name = "XHubRear", ResetOnSpawn = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 998 }, CoreGui)
+    R.gui = g
+    local win = mk("Frame", { Name = "Win", Size = UDim2.fromOffset(R.w, R.h),
+        Position = UDim2.new(1, -R.w - 20, 0.5, -R.h / 2),
+        BackgroundColor3 = Color3.fromRGB(8, 10, 14), BorderSizePixel = 0 }, g)
+    mk("UICorner", { CornerRadius = UDim.new(0, 8) }, win)
+    mk("TextLabel", { Text = "后视 · 实时画面", Size = UDim2.new(1, 0, 0, 18),
+        BackgroundColor3 = Color3.fromRGB(18, 22, 30), BorderSizePixel = 0,
+        Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = Color3.fromRGB(150, 200, 255) }, win)
+    local vp = mk("ViewportFrame", { Size = UDim2.new(1, -8, 1, -24), Position = UDim2.fromOffset(4, 20),
+        BackgroundColor3 = Color3.fromRGB(12, 16, 22), BorderSizePixel = 0, Ambient = Color3.fromRGB(200, 200, 200),
+        LightColor = Color3.fromRGB(255, 255, 255), LightDirection = Vector3.new(-0.4, -1, -0.3) }, win)
+    mk("UICorner", { CornerRadius = UDim.new(0, 6) }, vp)
+    local camObj = Instance.new("Camera")
+    camObj.FieldOfView = 70
+    camObj.Parent = vp
+    vp.CurrentCamera = camObj
+    R.vp, R.camObj = vp, camObj
+    pcall(function()
+        local dragging, start, startPos = false, nil, nil
+        win.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = true; start = i.Position; startPos = win.Position
+            end
+        end)
+        UIS.InputChanged:Connect(function(i)
+            if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+                local d = i.Position - start
+                win.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            end
+        end)
+        UIS.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+        end)
+    end)
+end
+
+-- 把附近几何克隆进 WorldModel（低频重建；每帧只更新玩家克隆的位置）
+function M.rearRebuildWorld()
+    local R = M.rear
+    if not R.vp then return end
+    local camPos = cam.CFrame.Position
+    local wm = Instance.new("WorldModel")
+    local n, map = 0, {}
+    pcall(function()
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if n >= R.maxParts then break end
+            if d:IsA("BasePart") and d ~= (lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")) then
+                local dist = (d.Position - camPos).Magnitude
+                if dist <= R.radius and d.Transparency < 0.95 then
+                    local c = Instance.new("Part")
+                    c.Size, c.CFrame, c.Color, c.Transparency = d.Size, d.CFrame, d.Color, d.Transparency
+                    c.Material, c.Anchored, c.CanCollide, c.CanQuery, c.CanTouch = d.Material, true, false, false, false
+                    c.Parent = wm
+                    map[d] = c
+                    n = n + 1
+                end
+            end
+        end
+    end)
+    R.world, R.map, R.lastBuild = wm, map, os.clock()
+    R.vp.Parent.WorldModel = wm
+    pcall(function() R.vp.WorldModel = wm end)
+end
+
+function M.rearTick()
+    local R = M.rear
+    if not R.on then return end
+    if not (R.vp and R.vp.Parent) then M.rearBuild(); if not R.vp then return end end
+    if os.clock() - (R.lastBuild or 0) > 0.8 then pcall(M.rearRebuildWorld) end
+    -- 相机：位于头后方，朝向"玩家视角反方向"，俯仰跟随玩家（不做镜像）
+    local ccf = cam.CFrame
+    local look = ccf.LookVector
+    local back = Vector3.new(-look.X, look.Y, -look.Z)      -- 水平反转、垂直保持
+    local pos = ccf.Position + Vector3.new(look.X, 0, look.Z) * 1.5
+    pcall(function()
+        R.camObj.CFrame = CFrame.lookAt(pos, pos + back)
+        R.camObj.FieldOfView = cam.FieldOfView
+    end)
+    -- 玩家克隆跟随
+    pcall(function()
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= lp and p.Character then
+                local src = p.Character:FindFirstChild("HumanoidRootPart")
+                local dst = R.map and R.map[src]
+                if src and dst then dst.CFrame = src.CFrame end
+            end
+        end
+    end)
+end
+
+function M.rearSet(on)
+    local R = M.rear
+    R.on = on
+    if on then
+        M.rearBuild()
+        if R.gui then R.gui.Enabled = true end
+        task.spawn(function() pcall(M.rearRebuildWorld) end)
+    elseif R.gui then
+        R.gui.Enabled = false
+    end
+end
+
+pcall(function()
+    RS.RenderStepped:Connect(function()
+        if RUNNING and M.rear.on then pcall(M.rearTick) end
+    end)
+end)
 --==== 后视镜：把背后 180° 的实体投影到一个独立小窗（不额外渲染 3D）====
 M.mirror = { on = false, range = 200, w = 340, h = 190, gui = nil, canvas = nil, pool = {} }
 
