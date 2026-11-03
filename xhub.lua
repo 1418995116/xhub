@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v18.1"
-local BUILD   = "2026-11-05 15:10"
+local VERSION = "v18.2"
+local BUILD   = "2026-11-05 16:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -89,15 +89,18 @@ local S = {
     entColor = true, thirdPerson = false, autoHide = false, hideDist = 130,
     hideMode = "sky", skyHeight = 300, skyTime = 8, instantPrompt = true,
     hideOnlyRush = true, invertY = true, fastScan = true, scenery = false,
-    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = false, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, aimNo360 = true, aimMaxAngle = 60, aimMaxPitch = 35, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = false, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, autoPick = false, pickRange = 12, seeInvis = false, itemEsp = false, itemEspDist = 150, noHook = true, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
+    tpMode = "orbit", tpDebug = false, doors = false, eyesAway = false, leverAuto = false, lever = false, hidePrefer = "sky", hideTier2 = false, hideSound = false, hideDebug = false, spin = false, spinSpeed = 180, npcAim = false, npcAimDist = 200, npcWall = true, aimNo360 = true, aimMaxAngle = 60, aimMaxPitch = 35, npcAimRange = 200, npcPart = "Head", npcAimFov = 300, nvBright = 3, npcShowFov = true, npcFovLimit = false, npcAimOnFire = false, npcLead = true, killAura = false, auraRemote = true, auraRing = false, instantKill = false, killDamage = 1000000, auraReach = 6, auraFireInt = 0.35, auraKey = Enum.KeyCode.G, auraMulti = false, auraMax = 5, dmgMult = 2, baseDamage = 20, dmgRepeat = 2, meleeRange = 12, auraRanged = true, healthLock = false, lowHPFlee = false, fleePct = 0.35, npcNoCollide = false, useLearned = true, replaySwap = true, replayScale = 1, replayFilter = true, autoReach = true,  lockMax = true, lockHP = 100, lockKeep = 20, auraDebug = false, npcEspDist = 300, npcEspMax = 200, npcKeepDead = false, autoPick = false, pickRange = 12, unlockAct = false, unlockWalk = 22, unlockJump = 55, seeInvis = false, itemEsp = false, itemEspDist = 150, noHook = true, auraRadius = 20, auraDmg = 20, auraInt = 0.2, auraNpc = true, auraPlayer = false, forceDoors = false, govEnabled = false, govMax = 12, govWindow = 0.6,
     dim = true, bgA = 0.5, blur = false,
 }
 local captureMode = false
 
+local MADE = {}                 -- 本脚本创建的所有实例（退出时统一销毁）
 local function mk(class, props, parent)
     local o = Instance.new(class)
     for k, v in pairs(props or {}) do o[k] = v end
     if parent then o.Parent = parent end
+    MADE[#MADE + 1] = o
+    if #MADE > 4000 then table.remove(MADE, 1) end
     return o
 end
 local function hover(row, base)
@@ -2064,6 +2067,39 @@ function M.itemEspTick()
         end
     end
     for _, p in ipairs(dead) do itemStore[p] = nil end
+end
+--==== 动作解锁（服务器禁跳/禁跑/锁动作 时本地抢回控制）====
+function M.unlockActionsTick()
+    local c = M.charOf(lp)
+    local h = c and c:FindFirstChildOfClass("Humanoid")
+    if not h then return end
+    S._unlocked = (S._unlocked or 0) + 1
+    pcall(function()
+        -- 1) 走路 / 跳跃被服务端按 0 或很低时，本地拉回目标值
+        local wantWalk = S.unlockWalk or 22
+        if (h.WalkSpeed or 0) < wantWalk then h.WalkSpeed = wantWalk end
+        if h.UseJumpPower then
+            if (h.JumpPower or 0) < (S.unlockJump or 55) then h.JumpPower = S.unlockJump or 55 end
+        else
+            if (h.JumpHeight or 0) < 7 then h.JumpHeight = 7.2 end
+        end
+        -- 2) 各种"动作状态"被禁用时本地重新启用
+        for _, st in ipairs({ Enum.HumanoidStateType.Jumping, Enum.HumanoidStateType.Freefall,
+                              Enum.HumanoidStateType.Running, Enum.HumanoidStateType.RunningNoPhysics,
+                              Enum.HumanoidStateType.Climbing, Enum.HumanoidStateType.Swimming,
+                              Enum.HumanoidStateType.GettingUp, Enum.HumanoidStateType.Landed }) do
+            pcall(function() h:SetStateEnabled(st, true) end)
+        end
+        -- 3) 被强制坐下 / 强制 PlatformStand 时解除
+        if h.Sit and not S._wantSit then h.Sit = false end
+        if h.PlatformStand and not S.fly then pcall(function() h.PlatformStand = false end) end
+        -- 4) 卡住时轻推一下（把 Humanoid 从 Running 卡死状态踢出来）
+        if (h.WalkSpeed or 0) > 0 and h.Health > 0 then
+            if h:GetState() == Enum.HumanoidStateType.Seated and not S._wantSit then
+                pcall(function() h:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+            end
+        end
+    end)
 end
 --==== 反作弊压制（无钩子版）：只断 AC 自己的事件连接，不碰 metatable ====
 function M.acQuiet()
@@ -5293,6 +5329,7 @@ task.spawn(function()
     while RUNNING do
         task.wait(0.45)
         if S.autoPick then pcall(M.autoPickTick) end
+        if S.unlockAct then pcall(M.unlockActionsTick) end
         if S.seeInvis then pcall(M.seeInvisTick, true) end
     end
 end)
@@ -5387,6 +5424,12 @@ M.addButton(pMain, "飞行自检（打印为什么不动）", function()
     S.flyDiag = info
 end)
 M.addToggle(pMain, "反拉回（被拉回自动降速）", true, function(v) S.antiSnap = v end)
+M.addToggle(pMain, "动作解锁（服务器禁跳/禁跑/锁动作时抢回）", false, function(v)
+    S.unlockAct = v
+    notify(v and "动作解锁已开：持续把 WalkSpeed/跳跃/状态拉回" or "动作解锁已关", "info", 3)
+end)
+M.addSlider(pMain, "解锁目标走速", 16, 120, 22, function(v) S.unlockWalk = v end)
+M.addSlider(pMain, "解锁目标跳跃力", 30, 200, 55, function(v) S.unlockJump = v end)
 M.addToggle(pMain, "只留视觉（临时禁飞/禁加速）", false, function(v)
     S.safeMode = v
     if v and S.fly then M.setFly(false) end
@@ -6234,6 +6277,12 @@ shutdownXHub = function()
     pcall(function() if aimInfo then aimInfo:Destroy() end end)
     pcall(function() if auraRingDraw and auraRingDraw.Remove then auraRingDraw:Remove() end end)
     -- 4.2) 清掉残留 Highlight / BillBoard / Line
+    pcall(function()
+        for _, o in ipairs(MADE) do
+            if typeof(o) == "Instance" then pcall(function() o:Destroy() end) end
+        end
+        for i = #MADE, 1, -1 do MADE[i] = nil end
+    end)
     pcall(function()
         for _, d in ipairs(game:GetDescendants()) do
             local nm0 = tostring(d.Name)
