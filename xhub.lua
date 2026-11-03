@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v18.3"
-local BUILD   = "2026-11-05 17:20"
+local VERSION = "v18.4"
+local BUILD   = "2026-11-05 18:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -68,6 +68,17 @@ pcall(function()
     if _G.__XHubRestoreNamecall then _G.__XHubRestoreNamecall() end
     _G.__XHubRestoreNamecall = nil
 end)
+
+-- ①b 清掉上一次注入留下的实例（跨版本残留的 ESP / 框 / 名牌）
+pcall(function()
+    local g = _G.__XHubMade
+    if type(g) == "table" then
+        for _, o in ipairs(g) do
+            if typeof(o) == "Instance" then pcall(function() o:Destroy() end) end
+        end
+        for i = #g, 1, -1 do g[i] = nil end
+    end
+end)
 local UIS, CoreGui = game:GetService("UserInputService"), game:GetService("CoreGui")
 local RStorage, SC = game:GetService("ReplicatedStorage"), game:GetService("ScriptContext")
 local Lighting, TweenService = game:GetService("Lighting"), game:GetService("TweenService")
@@ -95,6 +106,13 @@ local S = {
 local captureMode = false
 
 local MADE = {}                 -- 本脚本创建的所有实例（退出时统一销毁）
+_G.__XHubMade = _G.__XHubMade or {}   -- 跨注入共享的实例登记表（清残留用）
+local function regMade(o)
+    regMade(o)
+    local g = _G.__XHubMade
+    g[#g + 1] = o
+    if #g > 6000 then table.remove(g, 1) end
+end
 local function mk(class, props, parent)
     local o = Instance.new(class)
     for k, v in pairs(props or {}) do o[k] = v end
@@ -6018,6 +6036,25 @@ M.addToggle(pGuard, "安全模式：不挂钩子（防 267 namecall 检测）", 
     S.noHook = v
     notify(v and "安全模式开启：不装 namecall 钩子（推荐）" or "已关闭：远程改写可用但可能被检测", v and "ok" or "warn", 4)
 end)
+M.addButton(pGuard, "强制清除所有 ESP 残留（框/名牌）", function()
+    local n = 0
+    pcall(function()
+        local g = _G.__XHubMade
+        if type(g) == "table" then
+            for _, o in ipairs(g) do
+                if typeof(o) == "Instance" then pcall(function() o:Destroy() end); n = n + 1 end
+            end
+            for i = #g, 1, -1 do g[i] = nil end
+        end
+    end)
+    pcall(function()
+        for _, d in ipairs(game:GetDescendants()) do
+            local nm = tostring(d.Name)
+            if nm:sub(1, 4) == "XHub" then pcall(function() d:Destroy() end); n = n + 1 end
+        end
+    end)
+    notify(("已清除 %d 个残留对象"):format(n), "ok", 4)
+end)
 M.addButton(pGuard, "反作弊压制（无钩子·断 AC 事件）", function()
     local k, sc = M.acQuiet()
     if k == -1 then notify("执行器不支持 getconnections", "err", 3) return end
@@ -6454,6 +6491,13 @@ shutdownXHub = function()
             if typeof(o) == "Instance" then pcall(function() o:Destroy() end) end
         end
         for i = #MADE, 1, -1 do MADE[i] = nil end
+        local g0 = _G.__XHubMade
+        if type(g0) == "table" then
+            for _, o0 in ipairs(g0) do
+                if typeof(o0) == "Instance" then pcall(function() o0:Destroy() end) end
+            end
+            for i0 = #g0, 1, -1 do g0[i0] = nil end
+        end
     end)
     pcall(function()
         for _, d in ipairs(game:GetDescendants()) do
