@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.7"
-local BUILD   = "2026-11-06 05:50"
+local VERSION = "v19.8"
+local BUILD   = "2026-11-06 06:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -671,6 +671,77 @@ function M.flyStop()
     cam.CameraType = Enum.CameraType.Custom
     flyPos, lastHrpPos, flySnaps = nil, nil, 0
     task.delay(0.35, function() pcall(M.fixFloat) end)
+end
+--==== 姿态诊断：不修，只报数据（判断"到底是谁在动角色/相机"）====
+function M.poseDiag()
+    local out = {}
+    local function add(k, v) out[#out + 1] = k .. "=" .. tostring(v) end
+    pcall(function()
+        local c = M.charOf(lp)
+        add("char", c and c.Name or "nil")
+        local h = c and c:FindFirstChildOfClass("Humanoid")
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if h then
+            add("hp", math.floor(h.Health))
+            local okS, st = pcall(function() return h:GetState() end)
+            add("state", okS and tostring(st):gsub("Enum.HumanoidStateType.", "") or "?")
+            add("platformStand", h.PlatformStand)
+            add("autoRotate", h.AutoRotate)
+            add("hipHeight", string.format("%.2f", h.HipHeight or -1))
+            add("walkSpeed", string.format("%.1f", h.WalkSpeed or -1))
+            add("jumpPower", string.format("%.1f", h.JumpPower or -1))
+            local off = h.CameraOffset
+            add("camOffset", string.format("%.2f,%.2f,%.2f", off.X, off.Y, off.Z))
+        end
+        if hrp then
+            add("hrpY", string.format("%.2f", hrp.Position.Y))
+            add("anchored", hrp.Anchored)
+            local v = hrp.AssemblyLinearVelocity
+            add("vel", string.format("%.1f,%.1f,%.1f", v.X, v.Y, v.Z))
+            local up = hrp.CFrame.UpVector
+            add("upY", string.format("%.3f", up.Y))
+            local pr = RaycastParams.new()
+            pcall(function() pr.FilterType = Enum.RaycastFilterType.Exclude end)
+            pr.FilterDescendantsInstances = { c }
+            local okr, hit = pcall(function() return workspace:Raycast(hrp.Position, Vector3.new(0, -300, 0), pr) end)
+            if okr and hit then
+                add("groundY", string.format("%.2f", hit.Position.Y))
+                add("hoverGap", string.format("%.2f", hrp.Position.Y - hit.Position.Y))
+                add("ground", tostring(hit.Instance and hit.Instance.Name))
+            else
+                add("ground", "no-hit")
+            end
+        end
+        local look = cam.CFrame.LookVector
+        add("camPitch", string.format("%.1f", math.deg(math.asin(math.clamp(look.Y, -1, 1)))))
+        add("camRoll", string.format("%.2f", cam.CFrame.RightVector.Y))
+        add("camType", tostring(cam.CameraType):gsub("Enum.CameraType.", ""))
+        add("camSubject", cam.CameraSubject and cam.CameraSubject.Name or "nil")
+        add("fly", S.fly)
+        add("aim", S.aim)
+        add("npcAim", S.npcAim)
+        add("thirdPerson", S.thirdPerson)
+    end)
+    local line = "[XHub][pose] " .. table.concat(out, " ")
+    print(line)
+    if type(setclipboard) == "function" then pcall(setclipboard, line) end
+    return line
+end
+
+--==== 一键交出相机控制（A/B 测试：判断前倾是不是我们相机代码造成）====
+function M.releaseCamera()
+    for _, nm in ipairs({ "XHubAim", "XHubSilent", "XHubCam", "XHubRecoil",
+                          "XHubSky", "XHubSpin", "XHubMouse" }) do
+        pcall(function() RS:UnbindFromRenderStep(nm) end)
+    end
+    S.aim, S.npcAim, S.thirdPerson, S.noRecoil, S.spin = false, false, false, false, false
+    pcall(function()
+        cam.CameraType = Enum.CameraType.Custom
+    end)
+    pcall(function()
+        local h = M.humOf(lp)
+        if h then cam.CameraSubject = h end
+    end)
 end
 --==== 强制落地 / 解除浮空 ====
 function M.fixFloat()
@@ -5906,6 +5977,14 @@ M.addToggle(pMain, "持续扶正姿态（清 CameraOffset，默认关）", false
     S.poseFix = v
     notify(v and "持续扶正已开：每秒检查一次，只有歪了才动" or "持续扶正已关", "info", 2.6)
 end)
+M.addButton(pMain, "姿态诊断（打印数据，复制给我）", function()
+    local line = M.poseDiag()
+    notify("已打印到 F9 并复制到剪贴板", "ok", 4)
+end)
+M.addButton(pMain, "交出相机控制（A/B 测试前倾是否我们造成）", function()
+    M.releaseCamera()
+    notify("已解绑全部相机接管 + 关闭瞄准/第三人称/无后座/转圈", "warn", 5)
+end)
 M.addButton(pMain, "强制落地（浮空时点这个）", function()
     local n = M.fixFloat()
     notify(n == 1 and "已把人放回地面" or "没检测到浮空（或下方无地面）", "ok", 3)
@@ -6869,6 +6948,8 @@ task.delay(0.8, function()
         pcall(M.fixFloat)
     end)
 end)
+
+task.delay(4.0, function() pcall(M.poseDiag) end)
 
 -- 启动完成日志
 print(("[XHub] %s (build %s) loaded · 7 页 · 菜单键 %s · 档位=%s (PlaceId=%d)"):format(
