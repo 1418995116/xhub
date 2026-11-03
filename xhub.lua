@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.14"
-local BUILD   = "2026-11-06 10:00"
+local VERSION = "v19.15"
+local BUILD   = "2026-11-06 10:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -88,7 +88,7 @@ local S = {
     fly = false, flySpeed = 120,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, antiLean = false, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
+    aim = false, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, antiLean = false, lockCamPitch = false, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "align", antiSnap = true, flyResp = 200, flyRigid = true,
@@ -5220,6 +5220,23 @@ local spinYaw = 0
 local spinLocked = false
 pcall(function() RS:UnbindFromRenderStep("XHubRecoil") end)
 pcall(function() RS:UnbindFromRenderStep("XHubLean") end)
+-- 相机水平锁定：只用于判断"前倾感"是否来自视角
+if not M._camPitchHook then
+    M._camPitchHook = true
+    pcall(function()
+        RS:BindToRenderStep("XHubCamPitch", Enum.RenderPriority.Last.Value - 1, function()
+            if not S.lockCamPitch then return end
+            pcall(function()
+                local lv = cam.CFrame.LookVector
+                local flat = Vector3.new(lv.X, 0, lv.Z)
+                if flat.Magnitude > 0.01 then
+                    cam.CFrame = CFrame.lookAt(cam.CFrame.Position, cam.CFrame.Position + flat.Unit)
+                end
+            end)
+        end)
+    end)
+end
+
 RS:BindToRenderStep("XHubLean", Enum.RenderPriority.Last.Value, function()
     if RUNNING then pcall(M.antiLeanTick) end
 end)
@@ -6088,6 +6105,10 @@ M.addSlider(pMain, "解锁目标跳跃力", 30, 200, 55, function(v) S.unlockJum
 M.addToggle(pMain, "持续扶正姿态（清 CameraOffset，默认关）", false, function(v)
     S.poseFix = v
     notify(v and "持续扶正已开：每秒检查一次，只有歪了才动" or "持续扶正已关", "info", 2.6)
+end)
+M.addToggle(pMain, "相机水平锁定（测试前倾感是否来自视角）", false, function(v)
+    S.lockCamPitch = v
+    notify(v and "相机已锁水平：看还歪不歪" or "相机已恢复", "info", 3)
 end)
 M.addToggle(pMain, "防走路前倾（锁定直立，opt-in）", false, function(v)
     S.antiLean = v
