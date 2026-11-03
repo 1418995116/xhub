@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.8-lazy"
-local BUILD   = "2026-11-06 15:00"
+local VERSION = "v19.9-lazy"
+local BUILD   = "2026-11-06 15:50"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -367,6 +367,7 @@ mk("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.Layout
 local notifOrder = 0
 
 local function notify(text, kind, life)
+    if M and M._building then return end
     notifOrder = notifOrder + 1
     local col = CONFIG.Accent
     if kind == "err" then col = Color3.fromRGB(255, 96, 96)
@@ -576,7 +577,8 @@ function M.addToggle(page, text, default, cb)
     end
     local function set(v) on = v; paint(); if cb then cb(v) end end
     row.MouseButton1Click:Connect(function() set(not on) end)
-    hover(row, base); paint(); if cb then cb(on) end
+    hover(row, base); paint()
+    if cb and not M._building then cb(on) end
     return set
 end
 function M.addSlider(page, text, mn, mx, default, cb)
@@ -610,7 +612,7 @@ function M.addSlider(page, text, mn, mx, default, cb)
         fill.Size = UDim2.new(a, 0, 1, 0)
         knob.Position = UDim2.new(a, 0, 0.5, 0)
         valueLbl.Text = tostring(math.floor(v * 10 + 0.5) / 10)
-        if cb then cb(v) end
+        if cb and not M._building then cb(v) end
     end
     local function fromX(x)
         set(mn + (mx - mn) * math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1))
