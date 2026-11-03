@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.17"
-local BUILD   = "2026-11-06 12:00"
+local VERSION = "v19.5"
+local BUILD   = "2026-11-06 04:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -88,7 +88,7 @@ local S = {
     fly = false, flySpeed = 120,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, antiLean = false, lockCamPitch = false, freezeMove = false, leanStrength = 60, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
+    aim = false, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "align", antiSnap = true, flyResp = 200, flyRigid = true,
@@ -655,331 +655,18 @@ function M.flyStop()
     pcall(function()
         local c0 = M.charOf(lp)
         local hrp0 = c0 and c0:FindFirstChild("HumanoidRootPart")
-        if hrp0 then
-            if hrp0.Anchored then hrp0.Anchored = false end
-            hrp0.AssemblyLinearVelocity = Vector3.zero
-        end
-        local h0 = c0 and c0:FindFirstChildOfClass("Humanoid")
-        if h0 then
-            h0.PlatformStand = false
-            pcall(function() h0:SetStateEnabled(Enum.HumanoidStateType.Falling, true) end)
-            if h0:GetState() == Enum.HumanoidStateType.Physics then
-                h0:ChangeState(Enum.HumanoidStateType.Falling)
-            end
-        end
+        if hrp0 and hrp0.Anchored then hrp0.Anchored = false end
     end)
+    pcall(function()
+        local h0 = M.humOf(lp)
+        if h0 then h0:ChangeState(Enum.HumanoidStateType.GettingUp) end
+    end)
+    local h = M.humOf(lp)
+    if h then pcall(function() h.PlatformStand = false end) end
     cam.CameraType = Enum.CameraType.Custom
     flyPos, lastHrpPos, flySnaps = nil, nil, 0
-    task.delay(0.35, function() pcall(M.fixFloat) end)
-end
---==== 防走路前倾：只纠旋转，不动位置（opt-in）====
-M._lean = { minUpY = 1, maxWaist = 0, maxNeck = 0, samples = 0 }
-function M.antiLeanTick()
-    local c = M.charOf(lp)
-    local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    local cf = hrp.CFrame
-    local up = cf.UpVector
-    local L = M._lean
-    if up.Y < L.minUpY then L.minUpY = up.Y end
-    L.samples = L.samples + 1
-    -- 记录 Waist/Neck 动画倾斜（用于诊断）
-    pcall(function()
-        for _, nm in ipairs({ "Waist", "Neck" }) do
-            local j = c:FindFirstChild(nm, true)
-            if j and j:IsA("Motor6D") then
-                local rx = math.deg(j.Transform:ToEulerAnglesXYZ())
-                if nm == "Waist" and math.abs(rx) > L.maxWaist then L.maxWaist = math.abs(rx) end
-                if nm == "Neck" and math.abs(rx) > L.maxNeck then L.maxNeck = math.abs(rx) end
-            end
-        end
-    end)
-    if not S.antiLean then M._lean.lastUpY = up.Y; return end
-    M._lean.lastUpY = up.Y
-    -- 1) 先拔掉源头：停用游戏用来让人倾斜的约束（BodyGyro/AlignOrientation）
-    pcall(function()
-        for _, d in ipairs(c:GetDescendants()) do
-            if d:IsA("BodyGyro") or d:IsA("AlignOrientation") or d:IsA("BodyAngularVelocity") then
-                local nm = tostring(d.Name)
-                if nm:sub(1, 4) ~= "XHub" and d.Enabled then d.Enabled = false end
-            end
-        end
-    end)
-    -- 骨骼层：把所有 Motor6D 的俯仰锁回 0（保留偏航/翻滚）
-    pcall(function()
-        for _, d in ipairs(c:GetDescendants()) do
-            if d:IsA("Motor6D") then
-                local tr = d.Transform
-                local rx, ry, rz = tr:ToEulerAnglesXYZ()
-                if math.abs(math.deg(rx)) > 4 then
-                    local k = math.clamp((S.leanStrength or 60) / 100, 0, 1) * 0.55
-                    d.Transform = tr:Lerp(CFrame.Angles(0, ry, rz), k)
-                end
-            end
-        end
-    end)
-    -- 1) 角色整体倾斜：只重设旋转，位置与速度都不碰
-    if up.Y < 0.995 then
-        local lv = cf.LookVector
-        local flat = Vector3.new(lv.X, 0, lv.Z)
-        if flat.Magnitude > 0.01 then
-            local fixed = CFrame.lookAt(cf.Position, cf.Position + flat.Unit)
-            pcall(function() hrp.CFrame = fixed end)
-        end
-    end
-    -- 2) 动画弯腰：把 Waist 的俯仰拉回 0（保留偏航/翻滚）
-    pcall(function()
-        local w = c:FindFirstChild("Waist", true)
-        if w and w:IsA("Motor6D") then
-            local rx, ry, rz = w.Transform:ToEulerAnglesXYZ()
-            if math.abs(math.deg(rx)) > 6 then
-                w.Transform = CFrame.Angles(0, ry, rz)
-            end
-        end
-    end)
-end
---==== 仅执行修正（PreRender 调用）：平滑减小倾斜，避免硬清零造成震颤 ====
-function M.applyLeanFix()
-    local c = M.charOf(lp)
-    if not c then return end
-    local k = math.clamp((S.leanStrength or 60) / 100, 0, 1) * 0.55
-    pcall(function()
-        for _, d in ipairs(c:GetDescendants()) do
-            if d:IsA("Motor6D") and tostring(d.Name):sub(1, 4) ~= "XHub" then
-                local tr = d.Transform
-                local rx, ry, rz = tr:ToEulerAnglesXYZ()
-                if math.abs(math.deg(rx)) > 4 then
-                    d.Transform = tr:Lerp(CFrame.Angles(0, ry, rz), k)
-                end
-            end
-        end
-    end)
-    -- 根部件只做轻微扶正，避免与游戏每帧写 CFrame 打架
-    local hrp = c:FindFirstChild("HumanoidRootPart")
-    if hrp and not S.fly then
-        local cf = hrp.CFrame
-        if cf.UpVector.Y < 0.995 then
-            local lv = cf.LookVector
-            local flat = Vector3.new(lv.X, 0, lv.Z)
-            if flat.Magnitude > 0.01 then
-                local target = CFrame.lookAt(cf.Position, cf.Position + flat.Unit)
-                pcall(function() hrp.CFrame = cf:Lerp(target, k) end)
-            end
-        end
-    end
-end
---==== 冻结自动移动（opt-in）：没按键却 moveDir>0 时，清零水平速度 ====
-function M.freezeMoveTick()
-    local c = M.charOf(lp)
-    local h = c and c:FindFirstChildOfClass("Humanoid")
-    local hrp = c and c:FindFirstChild("HumanoidRootPart")
-    if not (h and hrp) then return end
-    local pressing = UIS:IsKeyDown(Enum.KeyCode.W) or UIS:IsKeyDown(Enum.KeyCode.A)
-        or UIS:IsKeyDown(Enum.KeyCode.S) or UIS:IsKeyDown(Enum.KeyCode.D)
-    if pressing then return end
-    local md = h.MoveDirection
-    if md and md.Magnitude > 0.1 then
-        local v = hrp.AssemblyLinearVelocity
-        hrp.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
-    end
-end
---==== 姿态诊断：不修，只报数据（判断"到底是谁在动角色/相机"）====
-function M.poseDiag()
-    local out = {}
-    local function add(k, v) out[#out + 1] = k .. "=" .. tostring(v) end
-    pcall(function()
-        local c = M.charOf(lp)
-        add("char", c and c.Name or "nil")
-        local h = c and c:FindFirstChildOfClass("Humanoid")
-        local hrp = c and c:FindFirstChild("HumanoidRootPart")
-        if h then
-            add("hp", math.floor(h.Health))
-            local okS, st = pcall(function() return h:GetState() end)
-            add("state", okS and tostring(st):gsub("Enum.HumanoidStateType.", "") or "?")
-            add("platformStand", h.PlatformStand)
-            add("autoRotate", h.AutoRotate)
-            add("hipHeight", string.format("%.2f", h.HipHeight or -1))
-            add("walkSpeed", string.format("%.1f", h.WalkSpeed or -1))
-            add("jumpPower", string.format("%.1f", h.JumpPower or -1))
-            local off = h.CameraOffset
-            add("camOffset", string.format("%.2f,%.2f,%.2f", off.X, off.Y, off.Z))
-        end
-        if hrp then
-            add("hrpY", string.format("%.2f", hrp.Position.Y))
-            add("anchored", hrp.Anchored)
-            local v = hrp.AssemblyLinearVelocity
-            add("vel", string.format("%.1f,%.1f,%.1f", v.X, v.Y, v.Z))
-            local up = hrp.CFrame.UpVector
-            add("upY", string.format("%.3f", up.Y))
-            local pr = RaycastParams.new()
-            pcall(function() pr.FilterType = Enum.RaycastFilterType.Exclude end)
-            pr.FilterDescendantsInstances = { c }
-            local okr, hit = pcall(function() return workspace:Raycast(hrp.Position, Vector3.new(0, -300, 0), pr) end)
-            if okr and hit then
-                hitY = hit.Position.Y
-                add("groundY", string.format("%.2f", hit.Position.Y))
-                add("hoverGap", string.format("%.2f", hrp.Position.Y - hit.Position.Y))
-                add("ground", tostring(hit.Instance and hit.Instance.Name))
-            else
-                add("ground", "no-hit")
-            end
-        end
-        if c then
-            local okb, cf, sz = pcall(function() return c:GetBoundingBox() end)
-            if okb and cf and sz then
-                local feetY = cf.Position.Y - sz.Y / 2
-                add("bboxBottom", string.format("%.2f", feetY))
-                add("feetGap", string.format("%.2f", feetY - (hitY or 0)))
-                add("modelSize", string.format("%.1fx%.1fx%.1f", sz.X, sz.Y, sz.Z))
-            end
-            if h then
-                add("floorMat", tostring(h.FloorMaterial):gsub("Enum.Material.", ""))
-                add("gravity", string.format("%.0f", workspace.Gravity))
-        add("moveDir", string.format("%.2f", (h.MoveDirection or Vector3.zero).Magnitude))
-        pcall(function()
-            local names = {}
-            for _, d in ipairs(c:GetDescendants()) do
-                if d:IsA("BodyGyro") or d:IsA("AlignOrientation") or d:IsA("BodyAngularVelocity") then
-                    names[#names + 1] = d.ClassName .. ":" .. d.Name .. "(" .. tostring(d.Enabled) .. ")"
-                end
-            end
-            add("constraints", #names > 0 and table.concat(names, "|") or "none")
-        end)
-        add("wKey", UIS:IsKeyDown(Enum.KeyCode.W))
-                pcall(function()
-                    for _, nm in ipairs({ "Waist", "Neck" }) do
-                        local j = c:FindFirstChild(nm, true)
-                        if j and j:IsA("Motor6D") then
-                            local tr = j.Transform
-                            local rx = math.deg(tr:ToEulerAnglesXYZ())
-                            add(nm, string.format("%.1f", rx))
-                        end
-                    end
-                end)
-                pcall(function()
-                    local nAnim = 0
-                    for _ in ipairs(h:GetPlayingAnimationTracks()) do nAnim = nAnim + 1 end
-                    add("animTracks", nAnim)
-                end)
-            end
-        end
-        local look = cam.CFrame.LookVector
-        local L = M._lean
-        add("leanMinUpY", string.format("%.3f", L.minUpY))
-        add("leanMaxWaist", string.format("%.1f", L.maxWaist))
-        add("leanMaxNeck", string.format("%.1f", L.maxNeck))
-        pcall(function()
-            local js = {}
-            for _, d in ipairs(c:GetDescendants()) do
-                if d:IsA("Motor6D") then
-                    local rx = math.deg(d.Transform:ToEulerAnglesXYZ())
-                    if math.abs(rx) > 4 then js[#js + 1] = d.Name .. ":" .. string.format("%.0f", rx) end
-                end
-            end
-            add("leanJoints", #js > 0 and table.concat(js, "|") or "none")
-        end)
-        add("leanSamples", L.samples)
-        add("leanLastUpY", string.format("%.3f", L.lastUpY or 1))
-        add("camPitch", string.format("%.1f", math.deg(math.asin(math.clamp(look.Y, -1, 1)))))
-        add("camRoll", string.format("%.2f", cam.CFrame.RightVector.Y))
-        add("camType", tostring(cam.CameraType):gsub("Enum.CameraType.", ""))
-        add("camSubject", cam.CameraSubject and cam.CameraSubject.Name or "nil")
-        add("fly", S.fly)
-        add("aim", S.aim)
-        add("npcAim", S.npcAim)
-        add("thirdPerson", S.thirdPerson)
-    end)
-    local line = "[XHub][pose] " .. table.concat(out, " ")
-    print(line)
-    if type(setclipboard) == "function" then pcall(setclipboard, line) end
-    return line
 end
 
---==== 一键交出相机控制（A/B 测试：判断前倾是不是我们相机代码造成）====
-function M.releaseCamera()
-    for _, nm in ipairs({ "XHubAim", "XHubSilent", "XHubCam", "XHubRecoil",
-                          "XHubSky", "XHubSpin", "XHubMouse" }) do
-        pcall(function() RS:UnbindFromRenderStep(nm) end)
-    end
-    S.aim, S.npcAim, S.thirdPerson, S.noRecoil, S.spin = false, false, false, false, false
-    pcall(function()
-        cam.CameraType = Enum.CameraType.Custom
-    end)
-    pcall(function()
-        local h = M.humOf(lp)
-        if h then cam.CameraSubject = h end
-    end)
-end
---==== 强制落地 / 解除浮空 ====
-function M.fixFloat()
-    local moved = 0
-    pcall(function()
-        local c = M.charOf(lp)
-        local h = c and c:FindFirstChildOfClass("Humanoid")
-        local hrp = c and c:FindFirstChild("HumanoidRootPart")
-        if not hrp then return end
-        if h then
-            h.PlatformStand = false
-            pcall(function() h:SetStateEnabled(Enum.HumanoidStateType.Falling, true) end)
-            pcall(function() h:SetStateEnabled(Enum.HumanoidStateType.Running, true) end)
-            if h:GetState() == Enum.HumanoidStateType.Physics then
-                pcall(function() h:ChangeState(Enum.HumanoidStateType.Falling) end)
-            end
-        end
-        hrp.Anchored = false
-        -- 向下射线找地面，浮空就把人放下去
-        local params = RaycastParams.new()
-        pcall(function() params.FilterType = Enum.RaycastFilterType.Exclude end)
-        params.FilterDescendantsInstances = { c }
-        local okr, hit = pcall(function()
-            return workspace:Raycast(hrp.Position, Vector3.new(0, -200, 0), params)
-        end)
-        local targetY
-        if okr and hit then
-            targetY = hit.Position.Y + (h and h.HipHeight or 2) + 0.4
-        end
-        if targetY and (hrp.Position.Y - targetY) > 1.0 then
-            hrp.CFrame = CFrame.new(Vector3.new(hrp.Position.X, targetY, hrp.Position.Z)) * (hrp.CFrame - hrp.CFrame.Position)
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            moved = 1
-        end
-        hrp.AssemblyLinearVelocity = Vector3.zero
-    end)
-    return moved
-end
-
---==== 重置角色动画（前倾多半是 Animate 姿态）====
-function M.resetAnimate()
-    local ok = false
-    pcall(function()
-        local c = M.charOf(lp)
-        local h = c and c:FindFirstChildOfClass("Humanoid")
-        if not h then return end
-        local old = c:FindFirstChild("Animate")
-        if old then old:Destroy() end
-        local src = game:GetService("StarterPlayer"):FindFirstChild("StarterCharacterScripts")
-        local proto = src and src:FindFirstChild("Animate")
-        if proto then
-            local clone = proto:Clone()
-            clone.Parent = c
-            ok = true
-        else
-            -- 没有模板：至少把姿态强制回直立
-            h.AutoRotate = true
-            local hrp = c:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                local lv = hrp.CFrame.LookVector
-                local flat = Vector3.new(lv.X, 0, lv.Z)
-                if flat.Magnitude > 0.01 then
-                    hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flat.Unit)
-                end
-            end
-            ok = true
-        end
-        pcall(function() h:ChangeState(Enum.HumanoidStateType.GettingUp) end)
-    end)
-    return ok
-end
 --==== 飞行 align 模式：AlignPosition + AlignOrientation（服务端友好、抗拉回）====
 M._flyAlign = M._flyAlign or {}
 function M.flyAlignStart(hrp, hum)
@@ -5287,36 +4974,6 @@ end)
 local spinYaw = 0
 local spinLocked = false
 pcall(function() RS:UnbindFromRenderStep("XHubRecoil") end)
-pcall(function() RS:UnbindFromRenderStep("XHubLean") end)
--- 相机水平锁定：只用于判断"前倾感"是否来自视角
-if not M._camPitchHook then
-    M._camPitchHook = true
-    pcall(function()
-        RS:BindToRenderStep("XHubCamPitch", Enum.RenderPriority.Last.Value - 1, function()
-            if not S.lockCamPitch then return end
-            pcall(function()
-                local lv = cam.CFrame.LookVector
-                local flat = Vector3.new(lv.X, 0, lv.Z)
-                if flat.Magnitude > 0.01 then
-                    cam.CFrame = CFrame.lookAt(cam.CFrame.Position, cam.CFrame.Position + flat.Unit)
-                end
-            end)
-        end)
-    end)
-end
-
-RS:BindToRenderStep("XHubLean", Enum.RenderPriority.Last.Value, function()
-    if RUNNING then pcall(M.antiLeanTick) end
-end)
-
--- PreRender 比 RenderStepped 更晚，能压住"在 PreRender 里写姿态"的游戏
-pcall(function()
-    if M._leanPre then M._leanPre:Disconnect(); M._leanPre = nil end
-    M._leanPre = RS.PreRender:Connect(function()
-        if RUNNING and S.antiLean then pcall(M.applyLeanFix) end
-    end)
-end)
-
 RS:BindToRenderStep("XHubRecoil", Enum.RenderPriority.Last.Value - 2, function()
     if S.noRecoil then pcall(M.noRecoilTick) end
 end)
@@ -6173,35 +5830,6 @@ M.addSlider(pMain, "解锁目标跳跃力", 30, 200, 55, function(v) S.unlockJum
 M.addToggle(pMain, "持续扶正姿态（清 CameraOffset，默认关）", false, function(v)
     S.poseFix = v
     notify(v and "持续扶正已开：每秒检查一次，只有歪了才动" or "持续扶正已关", "info", 2.6)
-end)
-M.addToggle(pMain, "冻结自动移动（没按键却自己走时用）", false, function(v)
-    S.freezeMove = v
-    notify(v and "已开启：未按键时清零水平速度" or "已关闭冻结移动", "info", 3)
-end)
-M.addToggle(pMain, "相机水平锁定（测试前倾感是否来自视角）", false, function(v)
-    S.lockCamPitch = v
-    notify(v and "相机已锁水平：看还歪不歪" or "相机已恢复", "info", 3)
-end)
-M.addSlider(pMain, "防前倾强度 %（高了会抖，60 平衡）", 20, 100, 60, function(v) S.leanStrength = v end)
-M.addToggle(pMain, "防走路前倾（锁定直立，opt-in）", false, function(v)
-    S.antiLean = v
-    notify(v and "已开启：走路时强制躯干/腰保持直立" or "已关闭防前倾", "info", 3)
-end)
-M.addButton(pMain, "姿态诊断（打印数据，复制给我）", function()
-    local line = M.poseDiag()
-    notify("已打印到 F9 并复制到剪贴板", "ok", 4)
-end)
-M.addButton(pMain, "交出相机控制（A/B 测试前倾是否我们造成）", function()
-    M.releaseCamera()
-    notify("已解绑全部相机接管 + 关闭瞄准/第三人称/无后座/转圈", "warn", 5)
-end)
-M.addButton(pMain, "强制落地（浮空时点这个）", function()
-    local n = M.fixFloat()
-    notify(n == 1 and "已把人放回地面" or "没检测到浮空（或下方无地面）", "ok", 3)
-end)
-M.addButton(pMain, "重置角色动画（前倾多半是 Animate）", function()
-    local ok = M.resetAnimate()
-    notify(ok and "已重置角色动画，若仍前倾说明是游戏服务端姿态" or "重置失败：没有角色", "info", 4)
 end)
 M.addButton(pMain, "立即复位视角/姿态（前倾→扶正）", function()
     local n = M.resetPose()
@@ -7131,36 +6759,23 @@ if S.noclip then
     task.delay(0.6, function() pcall(function() M.setNoclip(true) end) end)
 end
 
--- 进服/重注入：仅在"检测到我们自己的飞行残留"时才清理，否则完全不碰角色
+-- 进服/重注入立刻清掉残留的"飞行状态"（服务器会据此踢人）
 task.delay(0.8, function()
     pcall(function()
         local c0 = M.charOf(lp)
-        local hrp0 = c0 and c0:FindFirstChild("HumanoidRootPart")
         local h0 = c0 and c0:FindFirstChildOfClass("Humanoid")
-        if not hrp0 then return end
-        local residue = false
-        for _, nmx in ipairs({ "XHubFlyA", "XHubFlyB", "XHubAlignPos", "XHubAlignOr", "XHubFly" }) do
-            if hrp0:FindFirstChild(nmx) then residue = true end
+        local hrp0 = c0 and c0:FindFirstChild("HumanoidRootPart")
+        if hrp0 then
+            if hrp0.Anchored then hrp0.Anchored = false end
+            for _, nmx in ipairs({ "XHubFlyA", "XHubFlyB", "XHubAlignPos", "XHubAlignOr", "XHubFly" }) do
+                local o0 = hrp0:FindFirstChild(nmx)
+                if o0 then pcall(function() o0:Destroy() end) end
+            end
         end
-        local stuck = false
-        if h0 then
-            local okS, st = pcall(function() return h0:GetState() end)
-            if okS and st == Enum.HumanoidStateType.Physics then stuck = true end
-        end
-        if not residue and not hrp0.Anchored and not stuck then return end
-        for _, nmx in ipairs({ "XHubFlyA", "XHubFlyB", "XHubAlignPos", "XHubAlignOr", "XHubFly" }) do
-            local o0 = hrp0:FindFirstChild(nmx)
-            if o0 then pcall(function() o0:Destroy() end) end
-        end
-        if hrp0.Anchored then hrp0.Anchored = false end
-        if h0 and h0.PlatformStand then h0.PlatformStand = false end
-        print("[XHub][fly] 已清理上一版飞行残留（锚定/约束/PlatformStand/Physics）")
-        pcall(M.fixFloat)
+        print("[XHub][fly] 已清理残留飞行状态")
     end)
 end)
 
-task.delay(4.0, function() pcall(M.poseDiag) end)
-
--- 启动完成日志
+-- 注入后不自动干预角色状态（避免浮空/前倾）；需要手动点「立即复位视角/姿态」
 print(("[XHub] %s (build %s) loaded · 7 页 · 菜单键 %s · 档位=%s (PlaceId=%d)"):format(
     VERSION, BUILD, CONFIG.MenuKeys[1].Name, currentProfileKey, game.PlaceId))
