@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.7-lazy"
-local BUILD   = "2026-11-06 14:10"
+local VERSION = "v19.8-lazy"
+local BUILD   = "2026-11-06 15:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -545,12 +545,16 @@ end
 
 local rowOrder = 0
 function M.addSection(page, text)
+
+    if M._building then task.wait() end
     rowOrder = rowOrder + 1
     return mk("TextLabel", { Text = text, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 18),
         TextXAlignment = Enum.TextXAlignment.Left, Font = Enum.Font.GothamBold, TextSize = 10,
         TextColor3 = CONFIG.Accent, LayoutOrder = rowOrder }, page)
 end
 function M.addToggle(page, text, default, cb)
+
+    if M._building then task.wait() end
     rowOrder = rowOrder + 1
     local base = Color3.fromRGB(24, 27, 34)
     local row = mk("TextButton", { Text = "", AutoButtonColor = false, BackgroundColor3 = base,
@@ -576,6 +580,8 @@ function M.addToggle(page, text, default, cb)
     return set
 end
 function M.addSlider(page, text, mn, mx, default, cb)
+
+    if M._building then task.wait() end
     rowOrder = rowOrder + 1
     local row = mk("Frame", { BackgroundColor3 = Color3.fromRGB(24, 27, 34), BorderSizePixel = 0,
         Size = UDim2.new(1, 0, 0, 46), LayoutOrder = rowOrder }, page)
@@ -622,6 +628,8 @@ function M.addSlider(page, text, mn, mx, default, cb)
     return set
 end
 function M.addButton(page, text, cb)
+
+    if M._building then task.wait() end
     rowOrder = rowOrder + 1
     local base = Color3.fromRGB(30, 34, 44)
     local btn = mk("TextButton", { Text = text, AutoButtonColor = false, BackgroundColor3 = base,
@@ -633,6 +641,8 @@ function M.addButton(page, text, cb)
     return function(t) btn.Text = t end
 end
 function M.addBox(page, placeholder, default)
+
+    if M._building then task.wait() end
     rowOrder = rowOrder + 1
     local box = mk("TextBox", { Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = Color3.fromRGB(24, 27, 34),
         BorderSizePixel = 0, ClearTextOnFocus = false, PlaceholderText = placeholder, Text = default or "",
@@ -6599,7 +6609,9 @@ M._uiBuilt = false
 function M.buildUI()
     if M._uiBuilt then return end
     M._uiBuilt = true
+    M._building = true
     pcall(BUILD_UI)
+    M._building = false
 end
 
 --==================== 热键 ====================
