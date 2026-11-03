@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.6"
-local BUILD   = "2026-11-06 05:00"
+local VERSION = "v19.7"
+local BUILD   = "2026-11-06 05:50"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -655,18 +655,93 @@ function M.flyStop()
     pcall(function()
         local c0 = M.charOf(lp)
         local hrp0 = c0 and c0:FindFirstChild("HumanoidRootPart")
-        if hrp0 and hrp0.Anchored then hrp0.Anchored = false end
+        if hrp0 then
+            if hrp0.Anchored then hrp0.Anchored = false end
+            hrp0.AssemblyLinearVelocity = Vector3.zero
+        end
+        local h0 = c0 and c0:FindFirstChildOfClass("Humanoid")
+        if h0 then
+            h0.PlatformStand = false
+            pcall(function() h0:SetStateEnabled(Enum.HumanoidStateType.Falling, true) end)
+            if h0:GetState() == Enum.HumanoidStateType.Physics then
+                h0:ChangeState(Enum.HumanoidStateType.Falling)
+            end
+        end
     end)
-    pcall(function()
-        local h0 = M.humOf(lp)
-        if h0 then h0:ChangeState(Enum.HumanoidStateType.GettingUp) end
-    end)
-    local h = M.humOf(lp)
-    if h then pcall(function() h.PlatformStand = false end) end
     cam.CameraType = Enum.CameraType.Custom
     flyPos, lastHrpPos, flySnaps = nil, nil, 0
+    task.delay(0.35, function() pcall(M.fixFloat) end)
+end
+--==== 强制落地 / 解除浮空 ====
+function M.fixFloat()
+    local moved = 0
+    pcall(function()
+        local c = M.charOf(lp)
+        local h = c and c:FindFirstChildOfClass("Humanoid")
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        if h then
+            h.PlatformStand = false
+            pcall(function() h:SetStateEnabled(Enum.HumanoidStateType.Falling, true) end)
+            pcall(function() h:SetStateEnabled(Enum.HumanoidStateType.Running, true) end)
+            if h:GetState() == Enum.HumanoidStateType.Physics then
+                pcall(function() h:ChangeState(Enum.HumanoidStateType.Falling) end)
+            end
+        end
+        hrp.Anchored = false
+        -- 向下射线找地面，浮空就把人放下去
+        local params = RaycastParams.new()
+        pcall(function() params.FilterType = Enum.RaycastFilterType.Exclude end)
+        params.FilterDescendantsInstances = { c }
+        local okr, hit = pcall(function()
+            return workspace:Raycast(hrp.Position, Vector3.new(0, -200, 0), params)
+        end)
+        local targetY
+        if okr and hit then
+            targetY = hit.Position.Y + (h and h.HipHeight or 2) + 0.4
+        end
+        if targetY and (hrp.Position.Y - targetY) > 1.0 then
+            hrp.CFrame = CFrame.new(Vector3.new(hrp.Position.X, targetY, hrp.Position.Z)) * (hrp.CFrame - hrp.CFrame.Position)
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            moved = 1
+        end
+        hrp.AssemblyLinearVelocity = Vector3.zero
+    end)
+    return moved
 end
 
+--==== 重置角色动画（前倾多半是 Animate 姿态）====
+function M.resetAnimate()
+    local ok = false
+    pcall(function()
+        local c = M.charOf(lp)
+        local h = c and c:FindFirstChildOfClass("Humanoid")
+        if not h then return end
+        local old = c:FindFirstChild("Animate")
+        if old then old:Destroy() end
+        local src = game:GetService("StarterPlayer"):FindFirstChild("StarterCharacterScripts")
+        local proto = src and src:FindFirstChild("Animate")
+        if proto then
+            local clone = proto:Clone()
+            clone.Parent = c
+            ok = true
+        else
+            -- 没有模板：至少把姿态强制回直立
+            h.AutoRotate = true
+            local hrp = c:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local lv = hrp.CFrame.LookVector
+                local flat = Vector3.new(lv.X, 0, lv.Z)
+                if flat.Magnitude > 0.01 then
+                    hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flat.Unit)
+                end
+            end
+            ok = true
+        end
+        pcall(function() h:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+    end)
+    return ok
+end
 --==== 飞行 align 模式：AlignPosition + AlignOrientation（服务端友好、抗拉回）====
 M._flyAlign = M._flyAlign or {}
 function M.flyAlignStart(hrp, hum)
@@ -5831,6 +5906,14 @@ M.addToggle(pMain, "持续扶正姿态（清 CameraOffset，默认关）", false
     S.poseFix = v
     notify(v and "持续扶正已开：每秒检查一次，只有歪了才动" or "持续扶正已关", "info", 2.6)
 end)
+M.addButton(pMain, "强制落地（浮空时点这个）", function()
+    local n = M.fixFloat()
+    notify(n == 1 and "已把人放回地面" or "没检测到浮空（或下方无地面）", "ok", 3)
+end)
+M.addButton(pMain, "重置角色动画（前倾多半是 Animate）", function()
+    local ok = M.resetAnimate()
+    notify(ok and "已重置角色动画，若仍前倾说明是游戏服务端姿态" or "重置失败：没有角色", "info", 4)
+end)
 M.addButton(pMain, "立即复位视角/姿态（前倾→扶正）", function()
     local n = M.resetPose()
     notify(("已复位（动作 %d）"):format(n or 0), "ok", 3)
@@ -6770,14 +6853,20 @@ task.delay(0.8, function()
         for _, nmx in ipairs({ "XHubFlyA", "XHubFlyB", "XHubAlignPos", "XHubAlignOr", "XHubFly" }) do
             if hrp0:FindFirstChild(nmx) then residue = true end
         end
-        if not residue and not hrp0.Anchored then return end
+        local stuck = false
+        if h0 then
+            local okS, st = pcall(function() return h0:GetState() end)
+            if okS and st == Enum.HumanoidStateType.Physics then stuck = true end
+        end
+        if not residue and not hrp0.Anchored and not stuck then return end
         for _, nmx in ipairs({ "XHubFlyA", "XHubFlyB", "XHubAlignPos", "XHubAlignOr", "XHubFly" }) do
             local o0 = hrp0:FindFirstChild(nmx)
             if o0 then pcall(function() o0:Destroy() end) end
         end
         if hrp0.Anchored then hrp0.Anchored = false end
         if h0 and h0.PlatformStand then h0.PlatformStand = false end
-        print("[XHub][fly] 已清理上一版飞行残留（锚定/约束/PlatformStand）")
+        print("[XHub][fly] 已清理上一版飞行残留（锚定/约束/PlatformStand/Physics）")
+        pcall(M.fixFloat)
     end)
 end)
 
