@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.1"
-local BUILD   = "2026-11-06 01:00"
+local VERSION = "v19.2"
+local BUILD   = "2026-11-06 02:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -4807,6 +4807,8 @@ local function auraFindTargets(maxN)
         if m ~= c then
             local hum = m:FindFirstChildOfClass("Humanoid")
             local root = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+            -- 地图摆件（有 Humanoid 但其实是装饰）不进光环目标
+            if M.isMapProp(m, hum) and not M.nameHas(m.Name, NPC_KW) then return end
             local npcLike = (hum ~= nil and hum.Health > 0) or npcStore[m] ~= nil
             if not npcLike and not Players:GetPlayerFromCharacter(m) then
                 local nm = m.Name:lower()
@@ -4842,6 +4844,8 @@ local function auraFindTarget()
         if m ~= c then
             local hum = m:FindFirstChildOfClass("Humanoid")
             local root = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart
+            -- 地图摆件（有 Humanoid 但其实是装饰）不进光环目标
+            if M.isMapProp(m, hum) and not M.nameHas(m.Name, NPC_KW) then return end
             local npcLike = (hum ~= nil and hum.Health > 0) or npcStore[m] ~= nil
             if not npcLike and not Players:GetPlayerFromCharacter(m) then
                 local nm = m.Name:lower()
@@ -5566,6 +5570,42 @@ end)
 --==== NPC / 怪物 ESP（独立模块：方框 + 名字 + 血量 + 距离） ====
 npcStore = {}
 
+--==== 地图装饰物过滤（避免把地板/房间/演示模型当成 NPC 画框）====
+local MAP_KW = {
+    "floor", "room", "wall", "door", "window", "part", "baseplate", "terrain", "spawn",
+    "model", "house", "tree", "chair", "table", "lamp", "sign", "light", "effect",
+    "debris", "water", "rock", "grass", "fence", "ramp", "stairs", "platform", "trigger",
+    "演示", "地图", "建筑", "装饰",
+}
+local NPC_KW = {
+    "npc", "guard", "resident", "officer", "enemy", "monster", "zombie", "bot",
+    "criminal", "bandit", "soldier", "fighter", "player", "dummy", "crew", "heist",
+    "zetaclaw", "fixer", "body",
+}
+
+function M.nameHas(name, list)
+    local s = tostring(name):lower()
+    for _, k in ipairs(list) do
+        if s:find(k, 1, true) then return true end
+    end
+    return false
+end
+
+-- 是否是"地图装饰物"（有 Humanoid 但其实是摆件）
+function M.isMapProp(m, hum)
+    if not m then return true end
+    if M.nameHas(m.Name, NPC_KW) then return false end          -- 名字像 NPC → 保留
+    if M.nameHas(m.Name, MAP_KW) then return true end            -- 名字像地图 → 过滤
+    local hrp = m:FindFirstChild("HumanoidRootPart")
+    if not hrp then return true end                              -- 没有根部件 → 摆件
+    local okA, anchors = pcall(function() return hrp.Anchored end)
+    if okA and anchors then return true end                      -- 锚定不动 → 摆件
+    if hum then
+        local okW, ws = pcall(function() return hum.WalkSpeed end)
+        if okW and (ws or 0) <= 0 then return true end            -- 走速 0 且非 NPC 名 → 摆件
+    end
+    return false
+end
 function M.ensureNpcEsp(m)
     local dNow = M.distTo(m)
     local maxD = S.npcEspDist or 300
@@ -5663,7 +5703,10 @@ task.spawn(function()
                     elseif (not o) and known >= (S.npcEspMax or 40) then
                         -- 超过上限，不再新增
                     else
-                        pcall(M.ensureNpcEsp, m)
+                        local hh9 = m:FindFirstChildOfClass("Humanoid")
+                        if not M.isMapProp(m, hh9) then
+                            pcall(M.ensureNpcEsp, m)
+                        end
                     end
                 end
             end
