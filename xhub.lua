@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · F 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v18.5"
-local BUILD   = "2026-11-05 20:40"
+local VERSION = "v18.6"
+local BUILD   = "2026-11-05 21:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -4644,22 +4644,32 @@ task.spawn(function()
     end
 end)
 -- 多目标查找：范围内按距离排序（一刀多砍用）
---==== 姿态保护：清掉任何残留的俯仰/翻滚，保证 AutoRotate 打开 ====
+--==== 姿态/飞行残留守护：绝不写 HRP，只修服务端会判"飞行"的状态 ====
 task.spawn(function()
     while RUNNING do
-        task.wait(0.5)
-        if not S.spin then
+        task.wait(1.0)
+        if not S.fly then
             pcall(function()
                 local c = M.charOf(lp)
                 local h = c and c:FindFirstChildOfClass("Humanoid")
                 local hrp = c and c:FindFirstChild("HumanoidRootPart")
                 if h and not h.AutoRotate then h.AutoRotate = true end
-                if hrp and hrp.CFrame.UpVector.Y < 0.9 then
-                    local lv = hrp.CFrame.LookVector
-                    local flat = Vector3.new(lv.X, 0, lv.Z)
-                    if flat.Magnitude > 0.01 then
-                        hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flat.Unit)
+                -- 关键：不留任何"像在飞"的状态（服务器据此踢人）
+                if h then
+                    if h.PlatformStand then h.PlatformStand = false end
+                    if h:GetState() == Enum.HumanoidStateType.Physics then
+                        h:ChangeState(Enum.HumanoidStateType.GettingUp)
                     end
+                end
+                if hrp then
+                    if hrp.Anchored then hrp.Anchored = false end
+                    local v = hrp.AssemblyLinearVelocity
+                    if v and math.abs(v.Y) > 4000 then hrp.AssemblyLinearVelocity = Vector3.zero end
+                end
+                -- 清掉残留飞行附件/约束
+                for _, nmx in ipairs({ "XHubFlyA", "XHubFlyB", "XHubAlignPos", "XHubAlignOr", "XHubFly" }) do
+                    local o0 = hrp and hrp:FindFirstChild(nmx)
+                    if o0 then pcall(function() o0:Destroy() end) end
                 end
             end)
         end
@@ -6560,5 +6570,28 @@ end)
 if S.noclip then
     task.delay(0.6, function() pcall(function() M.setNoclip(true) end) end)
 end
+
+-- 进服/重注入立刻清掉残留的"飞行状态"（服务器会据此踢人）
+task.delay(0.8, function()
+    pcall(function()
+        local c0 = M.charOf(lp)
+        local h0 = c0 and c0:FindFirstChildOfClass("Humanoid")
+        local hrp0 = c0 and c0:FindFirstChild("HumanoidRootPart")
+        if h0 then
+            h0.PlatformStand = false
+            if h0:GetState() == Enum.HumanoidStateType.Physics then
+                h0:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end
+        end
+        if hrp0 then
+            if hrp0.Anchored then hrp0.Anchored = false end
+            for _, nmx in ipairs({ "XHubFlyA", "XHubFlyB", "XHubAlignPos", "XHubAlignOr", "XHubFly" }) do
+                local o0 = hrp0:FindFirstChild(nmx)
+                if o0 then pcall(function() o0:Destroy() end) end
+            end
+        end
+        print("[XHub][fly] 已清理残留飞行状态")
+    end)
+end)
 print(("[XHub] %s (build %s) loaded · 7 页 · 菜单键 %s · 档位=%s (PlaceId=%d)"):format(
     VERSION, BUILD, CONFIG.MenuKeys[1].Name, currentProfileKey, game.PlaceId))
