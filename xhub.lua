@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.11"
-local BUILD   = "2026-11-06 08:10"
+local VERSION = "v19.12"
+local BUILD   = "2026-11-06 09:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -695,6 +695,15 @@ function M.antiLeanTick()
         end
     end)
     if not S.antiLean then return end
+    -- 1) 先拔掉源头：停用游戏用来让人倾斜的约束（BodyGyro/AlignOrientation）
+    pcall(function()
+        for _, d in ipairs(c:GetDescendants()) do
+            if d:IsA("BodyGyro") or d:IsA("AlignOrientation") or d:IsA("BodyAngularVelocity") then
+                local nm = tostring(d.Name)
+                if nm:sub(1, 4) ~= "XHub" and d.Enabled then d.Enabled = false end
+            end
+        end
+    end)
     -- 1) 角色整体倾斜：只重设旋转，位置与速度都不碰
     if up.Y < 0.995 then
         local lv = cf.LookVector
@@ -767,6 +776,17 @@ function M.poseDiag()
             if h then
                 add("floorMat", tostring(h.FloorMaterial):gsub("Enum.Material.", ""))
                 add("gravity", string.format("%.0f", workspace.Gravity))
+        add("moveDir", string.format("%.2f", (h.MoveDirection or Vector3.zero).Magnitude))
+        pcall(function()
+            local names = {}
+            for _, d in ipairs(c:GetDescendants()) do
+                if d:IsA("BodyGyro") or d:IsA("AlignOrientation") or d:IsA("BodyAngularVelocity") then
+                    names[#names + 1] = d.ClassName .. ":" .. d.Name .. "(" .. tostring(d.Enabled) .. ")"
+                end
+            end
+            add("constraints", #names > 0 and table.concat(names, "|") or "none")
+        end)
+        add("wKey", UIS:IsKeyDown(Enum.KeyCode.W))
                 pcall(function()
                     for _, nm in ipairs({ "Waist", "Neck" }) do
                         local j = c:FindFirstChild(nm, true)
@@ -5198,7 +5218,7 @@ local spinYaw = 0
 local spinLocked = false
 pcall(function() RS:UnbindFromRenderStep("XHubRecoil") end)
 pcall(function() RS:UnbindFromRenderStep("XHubLean") end)
-RS:BindToRenderStep("XHubLean", Enum.RenderPriority.Camera.Value + 3, function()
+RS:BindToRenderStep("XHubLean", Enum.RenderPriority.Last.Value, function()
     if RUNNING then pcall(M.antiLeanTick) end
 end)
 
