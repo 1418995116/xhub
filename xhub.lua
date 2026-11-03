@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.6-lazy"
-local BUILD   = "2026-11-06 13:30"
+local VERSION = "v19.7-lazy"
+local BUILD   = "2026-11-06 14:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6665,7 +6665,12 @@ UIS.InputBegan:Connect(function(i, gp) if not RUNNING then return end
 end)
 
 setVisible(false, true)
-task.delay(0.2, function() setVisible(true, true) end)
+-- 自动打开菜单：先把界面显示出来，再把"建页面"放到独立线程逐帧构建（避免卡物理）
+task.delay(1.2, function()
+    if not RUNNING then return end
+    setVisible(true, true)
+    if not M._uiBuilt then task.spawn(function() pcall(M.buildUI) end) end
+end)
 notify("XHub " .. VERSION .. " 已加载", "ok", 3)
 task.delay(0.4, function()
     notify(("档位: %s"):format(PROFILES[currentProfileKey].label), "ok", 4)
