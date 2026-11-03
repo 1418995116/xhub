@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.20"
-local BUILD   = "2026-11-07 01:30"
+local VERSION = "v19.21"
+local BUILD   = "2026-11-07 02:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -587,32 +587,35 @@ function M.addStepper(page, text, default, step, mn, mx, cb)
     if M._building then task.wait() end
     rowOrder = rowOrder + 1
     local row = mk("Frame", { BackgroundColor3 = Color3.fromRGB(24, 27, 34), BorderSizePixel = 0,
-        Size = UDim2.new(1, 0, 0, 34), LayoutOrder = rowOrder }, page)
+        Size = UDim2.new(1, 0, 0, 32), LayoutOrder = rowOrder }, page)
     mk("UICorner", { CornerRadius = UDim.new(0, 7) }, row)
-    local lbl = mk("TextLabel", { Text = text, BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
-        Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -190, 1, 0),
-        Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = Color3.fromRGB(218, 224, 235) }, row)
+    mk("TextLabel", { Text = text, BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
+        Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -210, 1, 0),
+        Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = Color3.fromRGB(218, 224, 235) }, row)
     local val = mk("TextLabel", { Text = tostring(default), BackgroundTransparency = 1,
-        Position = UDim2.new(1, -186, 0, 0), Size = UDim2.fromOffset(56, 34),
-        Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = CONFIG.Accent }, row)
+        TextXAlignment = Enum.TextXAlignment.Right,
+        Position = UDim2.new(1, -206, 0, 0), Size = UDim2.fromOffset(44, 32),
+        Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = CONFIG.Accent }, row)
     local cur = default
     local function set(v)
-        cur = math.clamp(v, mn, mx)
+        cur = math.clamp(math.floor(v), mn, mx)
         val.Text = tostring(cur)
         if cb and not M._building then pcall(cb, cur) end
     end
-    local xs = { -128, -64, 64, 128 }
-    local labels = { "-" .. tostring(step * 10), "-" .. tostring(step), "+" .. tostring(step), "+" .. tostring(step * 10) }
+    -- 右侧四个按钮：-10x  -1x  +1x  +10x
+    local defs = {
+        { d = -10, txt = "-" .. tostring(step * 10) },
+        { d = -1,  txt = "-" .. tostring(step) },
+        { d = 1,   txt = "+" .. tostring(step) },
+        { d = 10,  txt = "+" .. tostring(step * 10) },
+    }
     for i = 1, 4 do
-        local b = mk("TextButton", { Text = labels[i], Size = UDim2.fromOffset(58, 22),
-            Position = UDim2.new(1, xs[i] - 58, 0.5, -11), BackgroundColor3 = Color3.fromRGB(38, 43, 54),
-            BorderSizePixel = 0, Font = Enum.Font.Code, TextSize = 11, TextColor3 = Color3.fromRGB(210, 222, 236) }, row)
+        local b = mk("TextButton", { Text = defs[i].txt, Size = UDim2.fromOffset(44, 20),
+            Position = UDim2.new(1, -200 + (i - 1) * 48, 0.5, -10),
+            BackgroundColor3 = Color3.fromRGB(38, 43, 54), BorderSizePixel = 0,
+            Font = Enum.Font.Code, TextSize = 10, TextColor3 = Color3.fromRGB(210, 222, 236) }, row)
         mk("UICorner", { CornerRadius = UDim.new(0, 5) }, b)
-        local delta = (i <= 2) and -step or step
-        if i == 1 or i == 3 then delta = delta end
-        local mult = (i == 1 or i == 4) and 10 or 1
-        local sign = (i <= 2) and -1 or 1
-        b.MouseButton1Click:Connect(function() set(cur + sign * step * mult) end)
+        b.MouseButton1Click:Connect(function() set(cur + defs[i].d * step) end)
     end
     if cb and not M._building then pcall(cb, cur) end
     return set
