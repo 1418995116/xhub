@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.2"
-local BUILD   = "2026-11-06 02:00"
+local VERSION = "v19.3"
+local BUILD   = "2026-11-06 02:50"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -88,7 +88,7 @@ local S = {
     fly = false, flySpeed = 120,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
+    aim = false, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = true, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "align", antiSnap = true, flyResp = 200, flyRigid = true,
@@ -4721,6 +4721,36 @@ task.spawn(function()
     end
 end)
 -- 多目标查找：范围内按距离排序（一刀多砍用）
+--==== 持续姿态纠正：只处理"确实歪了"的情况，频率低、写入少 ====
+function M.poseGuardTick()
+    local fixed = 0
+    pcall(function()
+        local c = M.charOf(lp)
+        local h = c and c:FindFirstChildOfClass("Humanoid")
+        local hrp = c and c:FindFirstChild("HumanoidRootPart")
+        if h then
+            -- CameraOffset 是"前倾感"的头号元凶：游戏常给它设非零值
+            local off = h.CameraOffset
+            if off and off.Magnitude > 0.02 then
+                h.CameraOffset = Vector3.zero
+                fixed = fixed + 1
+            end
+            if not h.AutoRotate and not S.spin then h.AutoRotate = true end
+        end
+        if hrp and not S.fly then
+            local up = hrp.CFrame.UpVector
+            if up.Y < 0.97 then
+                local lv = hrp.CFrame.LookVector
+                local flat = Vector3.new(lv.X, 0, lv.Z)
+                if flat.Magnitude > 0.01 then
+                    hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flat.Unit)
+                    fixed = fixed + 1
+                end
+            end
+        end
+    end)
+    return fixed
+end
 --==== 视角/姿态复位（注入后自动跑一次，也可手动触发）====
 function M.resetPose()
     local okc = 0
@@ -5730,6 +5760,7 @@ task.spawn(function()
         task.wait(0.45)
         if S.autoPick then pcall(M.autoPickTick) end
         if S.unlockAct then pcall(M.unlockActionsTick) end
+        if S.poseFix then pcall(M.poseGuardTick) end
         if S.seeInvis then pcall(M.seeInvisTick, true) end
     end
 end)
@@ -5830,6 +5861,10 @@ M.addToggle(pMain, "动作解锁（服务器禁跳/禁跑/锁动作时抢回）"
 end)
 M.addSlider(pMain, "解锁目标走速", 16, 120, 22, function(v) S.unlockWalk = v end)
 M.addSlider(pMain, "解锁目标跳跃力", 30, 200, 55, function(v) S.unlockJump = v end)
+M.addToggle(pMain, "持续扶正姿态（清 CameraOffset / 纠歪）", true, function(v)
+    S.poseFix = v
+    notify(v and "持续扶正已开：每秒检查一次，只有歪了才动" or "持续扶正已关", "info", 2.6)
+end)
 M.addButton(pMain, "立即复位视角/姿态（前倾→扶正）", function()
     local n = M.resetPose()
     notify(("已复位（动作 %d）"):format(n or 0), "ok", 3)
