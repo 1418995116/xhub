@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.19"
-local BUILD   = "2026-11-07 00:40"
+local VERSION = "v19.20"
+local BUILD   = "2026-11-07 01:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -582,6 +582,41 @@ function M.addToggle(page, text, default, cb)
     return set
 end
 M._lastInputVal = M._lastInputVal or {}
+-- 数值步进行（不用键盘：-大 -小 +小 +大），返回 set
+function M.addStepper(page, text, default, step, mn, mx, cb)
+    if M._building then task.wait() end
+    rowOrder = rowOrder + 1
+    local row = mk("Frame", { BackgroundColor3 = Color3.fromRGB(24, 27, 34), BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 34), LayoutOrder = rowOrder }, page)
+    mk("UICorner", { CornerRadius = UDim.new(0, 7) }, row)
+    local lbl = mk("TextLabel", { Text = text, BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
+        Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -190, 1, 0),
+        Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = Color3.fromRGB(218, 224, 235) }, row)
+    local val = mk("TextLabel", { Text = tostring(default), BackgroundTransparency = 1,
+        Position = UDim2.new(1, -186, 0, 0), Size = UDim2.fromOffset(56, 34),
+        Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = CONFIG.Accent }, row)
+    local cur = default
+    local function set(v)
+        cur = math.clamp(v, mn, mx)
+        val.Text = tostring(cur)
+        if cb and not M._building then pcall(cb, cur) end
+    end
+    local xs = { -128, -64, 64, 128 }
+    local labels = { "-" .. tostring(step * 10), "-" .. tostring(step), "+" .. tostring(step), "+" .. tostring(step * 10) }
+    for i = 1, 4 do
+        local b = mk("TextButton", { Text = labels[i], Size = UDim2.fromOffset(58, 22),
+            Position = UDim2.new(1, xs[i] - 58, 0.5, -11), BackgroundColor3 = Color3.fromRGB(38, 43, 54),
+            BorderSizePixel = 0, Font = Enum.Font.Code, TextSize = 11, TextColor3 = Color3.fromRGB(210, 222, 236) }, row)
+        mk("UICorner", { CornerRadius = UDim.new(0, 5) }, b)
+        local delta = (i <= 2) and -step or step
+        if i == 1 or i == 3 then delta = delta end
+        local mult = (i == 1 or i == 4) and 10 or 1
+        local sign = (i <= 2) and -1 or 1
+        b.MouseButton1Click:Connect(function() set(cur + sign * step * mult) end)
+    end
+    if cb and not M._building then pcall(cb, cur) end
+    return set
+end
 -- 数字输入行（回车生效；停止输入 0.9s 也生效），返回 set 函数
 function M.addInput(page, text, default, cb)
     if M._building then task.wait() end
@@ -5958,15 +5993,13 @@ M.addToggle(pVisual, "真实后视（实时画面·非镜像）", false, functio
     pcall(function() M.rearSet(v) end)
     notify(v and "真实后视已开：小窗显示背后实时画面" or "真实后视已关", "info", 3)
 end)
-M.addInput(pVisual, "真实后视半径（输入数字，回车生效）", 150, function(v)
-    M.rear.radius = math.clamp(v, 20, 5000)
+M.addStepper(pVisual, "真实后视半径", 150, 50, 20, 5000, function(v)
+    M.rear.radius = v
     M.rear.lastBuild = 0
-    notify("后视半径 = " .. tostring(M.rear.radius), "info", 2)
 end)
-M.addInput(pVisual, "后视细节部件数（越大越完整越吃性能）", 900, function(v)
-    M.rear.maxParts = math.clamp(math.floor(v), 100, 4000)
+M.addStepper(pVisual, "后视部件数", 900, 100, 100, 4000, function(v)
+    M.rear.maxParts = v
     M.rear.lastBuild = 0
-    notify("后视部件上限 = " .. tostring(M.rear.maxParts), "info", 2)
 end)
 M.addToggle(pVisual, "后视里显示玩家/NPC模型", false, function(v)
     M.rear.includeChars = v
@@ -5976,6 +6009,13 @@ end)
 M.addToggle(pVisual, "后视自动避让（卡进桌椅时后退）", true, function(v) M.rear.autoAvoid = v end)
 M.addSlider(pVisual, "后视相机偏移(负=更靠后)", -100, 10, -16, function(v) M.rear.offset = v / 10 end)
 M.addSlider(pVisual, "后视相机高度偏移", -20, 60, 12, function(v) M.rear.yOff = v / 10 end)
+M.addButton(pVisual, "重置后视视角/朝向", function()
+    M.rear.yaw, M.rear.pitch, M.rear.fov = 0, 0, 90
+    notify("后视视角已重置", "ok", 2)
+end)
+M.addSlider(pVisual, "后视视角左右偏移", -90, 90, 0, function(v) M.rear.yaw = math.rad(v) end)
+M.addSlider(pVisual, "后视视角上下偏移", -60, 60, 0, function(v) M.rear.pitch = math.rad(v) end)
+M.addSlider(pVisual, "后视视场角 FOV", 50, 120, 90, function(v) M.rear.fov = v end)
 M.addSlider(pVisual, "真实后视高度", 120, 400, 200, function(v)
     M.rear.h = v
     pcall(function()
@@ -6783,8 +6823,13 @@ function M.rearTick()
         end
     end
     pcall(function()
-        R.camObj.CFrame = CFrame.lookAt(pos, pos + back)
-        R.camObj.FieldOfView = cam.FieldOfView
+        local dirB = back
+        local yaw, pitch = R.yaw or 0, R.pitch or 0
+        if yaw ~= 0 or pitch ~= 0 then
+            dirB = (CFrame.fromEulerAnglesYXZ(pitch, yaw, 0) * CFrame.new(dirB)).Position
+        end
+        R.camObj.CFrame = CFrame.lookAt(pos, pos + dirB)
+        R.camObj.FieldOfView = R.fov or cam.FieldOfView
     end)
     -- 玩家克隆跟随
     pcall(function()
