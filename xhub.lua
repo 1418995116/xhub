@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.13"
-local BUILD   = "2026-11-06 09:40"
+local VERSION = "v19.14"
+local BUILD   = "2026-11-06 10:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -694,7 +694,8 @@ function M.antiLeanTick()
             end
         end
     end)
-    if not S.antiLean then return end
+    if not S.antiLean then M._lean.lastUpY = up.Y; return end
+    M._lean.lastUpY = up.Y
     -- 1) 先拔掉源头：停用游戏用来让人倾斜的约束（BodyGyro/AlignOrientation）
     pcall(function()
         for _, d in ipairs(c:GetDescendants()) do
@@ -810,6 +811,7 @@ function M.poseDiag()
         add("leanMaxWaist", string.format("%.1f", L.maxWaist))
         add("leanMaxNeck", string.format("%.1f", L.maxNeck))
         add("leanSamples", L.samples)
+        add("leanLastUpY", string.format("%.3f", L.lastUpY or 1))
         add("camPitch", string.format("%.1f", math.deg(math.asin(math.clamp(look.Y, -1, 1)))))
         add("camRoll", string.format("%.2f", cam.CFrame.RightVector.Y))
         add("camType", tostring(cam.CameraType):gsub("Enum.CameraType.", ""))
@@ -5220,6 +5222,14 @@ pcall(function() RS:UnbindFromRenderStep("XHubRecoil") end)
 pcall(function() RS:UnbindFromRenderStep("XHubLean") end)
 RS:BindToRenderStep("XHubLean", Enum.RenderPriority.Last.Value, function()
     if RUNNING then pcall(M.antiLeanTick) end
+end)
+
+-- PreRender 比 RenderStepped 更晚，能压住"在 PreRender 里写姿态"的游戏
+pcall(function()
+    if M._leanPre then M._leanPre:Disconnect(); M._leanPre = nil end
+    M._leanPre = RS.PreRender:Connect(function()
+        if RUNNING and S.antiLean then pcall(M.antiLeanTick) end
+    end)
 end)
 
 RS:BindToRenderStep("XHubRecoil", Enum.RenderPriority.Last.Value - 2, function()
