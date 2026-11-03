@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.18"
-local BUILD   = "2026-11-06 23:50"
+local VERSION = "v19.19"
+local BUILD   = "2026-11-07 00:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -581,7 +581,8 @@ function M.addToggle(page, text, default, cb)
     if cb and not M._building then cb(on) end
     return set
 end
--- 数字输入行（回车生效），返回 set 函数
+M._lastInputVal = M._lastInputVal or {}
+-- 数字输入行（回车生效；停止输入 0.9s 也生效），返回 set 函数
 function M.addInput(page, text, default, cb)
     if M._building then task.wait() end
     rowOrder = rowOrder + 1
@@ -603,8 +604,25 @@ function M.addInput(page, text, default, cb)
             if cb and not M._building then cb(n) end
         end
     end
-    box.FocusLost:Connect(function(enter) if enter then apply() end end)
-    return apply
+    local lastTyped = os.clock()
+    box:GetPropertyChangedSignal("Text"):Connect(function() lastTyped = os.clock() end)
+    box.FocusLost:Connect(function()
+        apply()
+        local n2 = tonumber((box.Text or ""):gsub("[^%d%.%-]", ""))
+        if n2 and cb then pcall(cb, n2) end
+    end)
+    task.spawn(function()
+        while RUNNING and box.Parent do
+            task.wait(0.3)
+            if os.clock() - lastTyped > 0.9 and (box.Text or "") ~= "" then
+                local n3 = tonumber((box.Text or ""):gsub("[^%d%.%-]", ""))
+                if n3 and M._lastInputVal[text] ~= n3 then
+                    M._lastInputVal[text] = n3
+                    if cb then pcall(cb, n3) end
+                end
+            end
+        end
+    end)
 end
 function M.addSlider(page, text, mn, mx, default, cb)
 
@@ -5956,8 +5974,8 @@ M.addToggle(pVisual, "后视里显示玩家/NPC模型", false, function(v)
     notify(v and "后视将包含角色模型" or "后视只显示场景（默认）", "info", 2.4)
 end)
 M.addToggle(pVisual, "后视自动避让（卡进桌椅时后退）", true, function(v) M.rear.autoAvoid = v end)
-M.addSlider(pVisual, "后视相机偏移(负=更靠后)", -60, 10, -8, function(v) M.rear.offset = v / 10 end)
-M.addSlider(pVisual, "后视相机高度偏移", -20, 40, 2, function(v) M.rear.yOff = v / 10 end)
+M.addSlider(pVisual, "后视相机偏移(负=更靠后)", -100, 10, -16, function(v) M.rear.offset = v / 10 end)
+M.addSlider(pVisual, "后视相机高度偏移", -20, 60, 12, function(v) M.rear.yOff = v / 10 end)
 M.addSlider(pVisual, "真实后视高度", 120, 400, 200, function(v)
     M.rear.h = v
     pcall(function()
@@ -6692,7 +6710,7 @@ function M.rearRebuildWorld()
                 end
                 if not skip and d.Transparency < 0.95 then
                     local dist = (d.Position - camPos).Magnitude
-                    if dist <= R.radius then
+                    if dist <= R.radius and dist > 1.5 then
                         cands[#cands + 1] = { d = d, dist = dist }
                     end
                 end
@@ -6746,8 +6764,8 @@ function M.rearTick()
     local ccf = cam.CFrame
     local look = ccf.LookVector
     local back = Vector3.new(-look.X, look.Y, -look.Z)      -- 水平反转、垂直保持
-    local off = R.offset or -0.8
-    local yoff = R.yOff or 0.25
+    local off = R.offset or -1.6
+    local yoff = R.yOff or 1.2
     local pos = ccf.Position + Vector3.new(look.X, 0, look.Z) * off + Vector3.new(0, yoff, 0)
     -- 自动避让：相机点卡在模型里时继续往后退（第一人称坐姿最容易贴在桌椅里）
     if R.autoAvoid ~= false then
@@ -6758,7 +6776,7 @@ function M.rearTick()
         local o, tries = off, 0
         while o > -16 and tries < 18 do
             local p = ccf.Position + flat * o + Vector3.new(0, yoff, 0)
-            local okq, parts = pcall(function() return workspace:GetPartBoundsInRadius(p, 0.9, pr) end)
+            local okq, parts = pcall(function() return workspace:GetPartBoundsInRadius(p, 1.6, pr) end)
             if (not okq) or (not parts) or #parts == 0 then pos = p; break end
             o = o - 0.8
             tries = tries + 1
