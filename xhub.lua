@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.33"
-local BUILD   = "2026-11-08 01:30"
+local VERSION = "v19.34"
+local BUILD   = "2026-11-08 01:50"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6281,6 +6281,12 @@ M.addToggle(pCombat, "静默瞄准（视角不动，只改开火方向）", fals
     notify(v and "静默瞄准已开：开火瞬间改写相机方向，随后立刻恢复" or "静默瞄准已关闭", "info", 2.6)
 end)
 M.addSlider(pCombat, "静默改写时长 ×0.01s（9 = 90ms）", 3, 20, 9, function(v) S.silentTime = v / 100 end)
+M.addButton(pCombat, "静默方式（点我切换）: 相机改写", function()
+    S.silentMode = (S.silentMode == "mouse") and "camera" or "mouse"
+    notify("静默方式 = " .. (S.silentMode == "mouse" and "鼠标 mousemoverel（更隐蔽）" or "相机改写"), "info", 3)
+end)
+M.addSlider(pCombat, "鼠标灵敏度补偿 ×0.1", 1, 50, 10, function(v) S.mouseSens = v / 10 end)
+M.addSlider(pCombat, "鼠标静默速度 ×0.1", 1, 30, 10, function(v) S.mouseAimSpeed = v / 10 end)
 M.addSlider(pCombat, "远程改写最大偏转角 度（防判）", 5, 90, 25, function(v) S.silentMaxAngle = v end)
 M.addToggle(pCombat, "左键开火时自瞄", true, function(v) S.aimOnFire = v end)
 M.addToggle(pCombat, "瞄准队友", false, function(v) S.aimTeam = v end)
