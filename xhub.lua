@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.40"
-local BUILD   = "2026-11-08 06:30"
+local VERSION = "v19.41"
+local BUILD   = "2026-11-08 07:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6812,31 +6812,59 @@ function M.probeDump()
 end
 
 function M.runExternal(name, urls)
-    local src
+    local src, used, lastErr
     for _, u in ipairs(urls) do
         local ok, r = pcall(function() return game:HttpGet(u, true) end)
-        if ok and type(r) == "string" and #r > 500 then src = r break end
+        if ok and type(r) == "string" and #r > 200 then src, used = r, u break end
+        lastErr = tostring(r)
     end
-    if not src then return false, "下载失败" end
-    pcall(function() writefile("xhub_" .. name .. ".lua", src) end)
-    pcall(M.probeStart)
+    if not src then
+        print("[XHub][ext] 下载失败，最后错误: " .. tostring(lastErr))
+        return false, "下载失败: " .. tostring(lastErr)
+    end
+    print(("[XHub][ext] 下载成功 %s  %d 字节"):format(tostring(used), #src))
+    local wok = pcall(function() writefile("xhub_" .. name .. ".lua", src) end)
+    print("[XHub][ext] 写缓存: " .. tostring(wok))
     pcall(M.cnStart)
-    local ok, err = pcall(function()
-        local fn = loadstring(src)
-        if not fn then error("loadstring 失败") end
-        fn()
+    local fn, lerr = loadstring(src)
+    if not fn then
+        print("[XHub][ext] loadstring 失败: " .. tostring(lerr))
+        print("[XHub][ext] 头部预览: " .. tostring(src:sub(1, 120)))
+        return false, "loadstring 失败: " .. tostring(lerr)
+    end
+    print("[XHub][ext] loadstring OK，开始执行")
+    local ok, err = xpcall(fn, function(e)
+        return tostring(e) .. "\n" .. debug.traceback("", 2)
     end)
     if ok then
-        task.delay(6, function() pcall(M.probeDump) end)
-        return true, "已启动（探针工作中，6 秒后打印请求列表）"
+        print("[XHub][ext] 执行完成（无报错）")
+        return true, "已启动（汉化已开）"
     end
+    print("[XHub][ext] 执行报错:\n" .. tostring(err))
     return false, tostring(err)
 end
 
-M.UNKNOWN_URLS = {
-    "https://pastebin.com/raw/aEtUUyxx",
-    "https://pastebin.com/dl/aEtUUyxx",
+M.NEWSCRIPT_URLS = {
+    "https://pastebin.com/raw/EbDEcDWp",
+    "https://pastebin.com/dl/EbDEcDWp",
 }
+
+-- 直接模式：完全不经我的封装（排查用）
+function M.runDirect(urls)
+    local src
+    for _, u in ipairs(urls) do
+        local ok, r = pcall(function() return game:HttpGet(u, true) end)
+        if ok and type(r) == "string" and #r > 200 then src = r break end
+    end
+    if not src then return false, "下载失败" end
+    print("[XHub][direct] 拿到 " .. #src .. " 字节，直接 loadstring")
+    local fn, err = loadstring(src)
+    if not fn then return false, "loadstring: " .. tostring(err) end
+    local ok, e2 = pcall(fn)
+    if not ok then return false, tostring(e2) end
+    return true, "直接模式已执行"
+end
+
 --==== 鼠标静默自瞄（mousemoverel，来自 pf_lite 思路）====
 M.mouseAim = { last = 0 }
 function M.mouseAimTick()
@@ -7867,6 +7895,13 @@ M.addButton(pTool, "清除 Dex 缓存", function()
         end
     end
     notify("已清空 Dex 缓存（" .. okc .. " 个文件）", "info", 3)
+end)
+M.addButton(pTool, "启动 新脚本（直接模式·不经封装）", function()
+    notify("直接模式启动中…", "info", 2)
+    task.spawn(function()
+        local ok, info = M.runDirect(M.NEWSCRIPT_URLS)
+        notify(ok and tostring(info) or ("直接模式失败: " .. tostring(info)), ok and "ok" or "err", 6)
+    end)
 end)
 M.addButton(pTool, "启动 新脚本 EbDEcDWp（汉化）", function()
     notify("正在启动（已开汉化）…", "info", 2)
