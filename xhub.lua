@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.57"
-local BUILD   = "2026-11-08 21:30"
+local VERSION = "v19.58"
+local BUILD   = "2026-11-08 22:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7062,6 +7062,67 @@ function M.photoAutoStop()
     M.photoAuto.on = false
 end
 
+--==== 直接发查询请求（不按键，直接 FireServer），可调节奏 ====
+M.req = { on = false, n = 0, max = 8, base = 2, jit = 2, preset = 1 }
+
+M.reqPresets = {
+    { "BeginPhoto" },
+    { "BeginPhoto", "Phone1" },
+    { "Photo" },
+    { "BeginPhoto", true },
+    { "RequestAnswer" },
+}
+
+function M.reqRemote()
+    local RS2 = game:GetService("ReplicatedStorage")
+    local r = RS2:FindFirstChild("PhoneDisplay")
+    if r and r:IsA("RemoteEvent") then return r end
+    for _, d in ipairs(RS2:GetDescendants()) do
+        if tostring(d.Name) == "PhoneDisplay" and d:IsA("RemoteEvent") then return d end
+    end
+    return nil
+end
+
+function M.reqStart(maxN, baseSec, jitSec, presetIdx)
+    local r = M.reqRemote()
+    if not r then return false, "没找到 PhoneDisplay" end
+    if M.req.on then return false, "已在运行" end
+    if maxN then M.req.max = maxN end
+    if baseSec then M.req.base = baseSec end
+    if jitSec then M.req.jit = jitSec end
+    if presetIdx then M.req.preset = presetIdx end
+    local args = M.reqPresets[M.req.preset] or M.reqPresets[1]
+    M.req.on = true
+    M.req.n = 0
+    local t0all = os.clock()
+    task.spawn(function()
+        while M.req.on and M.req.n < M.req.max and RUNNING do
+            M.req.n = M.req.n + 1
+            local ok, err = pcall(function() r:FireServer(unpack(args)) end)
+            print(("[XHub][req] #%d 发送 %s(%s)  %s"):format(
+                M.req.n, "PhoneDisplay",
+                table.concat((function()
+                    local t = {}
+                    for i = 1, #args do t[i] = tostring(args[i]) end
+                    return t
+                end)(), ","),
+                ok and "ok" or tostring(err)))
+            local waitSec = M.req.base + math.random() * M.req.jit
+            print(("[XHub][req] 下次间隔 %.2f 秒（已跑 %.1f 秒）"):format(waitSec, os.clock() - t0all))
+            local ws = os.clock()
+            while os.clock() - ws < waitSec and M.req.on do task.wait(0.05) end
+        end
+        M.req.on = false
+        local n = 0
+        for _ in pairs(M.exam.answers) do n = n + 1 end
+        print(("[XHub][req] 结束：发了 %d 次，答案记录 %d 条"):format(M.req.n, n))
+    end)
+    return true, ("开始直发查询：%d 次，间隔 %.1f~%.1f 秒"):format(M.req.max, M.req.base, M.req.base + M.req.jit)
+end
+
+function M.reqStop()
+    M.req.on = false
+end
 --==== 安全拍照：只有在"老师视野看不到你"时才按 Q/E ====
 function M.teacherWatchingMe()
     local me = M.charOf(lp)
@@ -9001,6 +9062,25 @@ end)
 M.addButton(pTool, "关闭 答题 Hub 窗口", function()
     M.exam.open = false
     notify("答题 Hub 已关闭（雷达仍可单独用）", "info", 3)
+end)
+M.addSlider(pTool, "直发间隔（秒）", 1, 15, 2, function(v) M.req.base = v end)
+M.addSlider(pTool, "直发抖动（秒）", 0, 8, 2, function(v) M.req.jit = v end)
+M.addSlider(pTool, "直发次数", 1, 40, 8, function(v) M.req.max = v end)
+M.addButton(pTool, "直接发查询（不按键，间隔 2±2 秒，8 次）", function()
+    M.spyStart()
+    local ok, msg = M.reqStart(M.req.max, M.req.base, M.req.jit)
+    notify(tostring(msg) .. " ← 这条有 267 风险，就是你要测的", ok and "warn" or "err", 7)
+end)
+M.addButton(pTool, "停止直发查询", function()
+    M.reqStop()
+    notify(("已停止（共发 %d 次）"):format(M.req.n), "info", 4)
+end)
+M.addButton(pTool, "切换请求参数（BeginPhoto / +Phone1 / Photo …）", function()
+    M.req.preset = (M.req.preset % #M.reqPresets) + 1
+    local a = M.reqPresets[M.req.preset]
+    local t = {}
+    for i = 1, #a do t[i] = tostring(a[i]) end
+    notify("请求参数 = " .. table.concat(t, ", "), "info", 5)
 end)
 M.addButton(pTool, "节奏测试（2 秒 ± 2 秒，先试 8 轮）", function()
     M.spyStart()
