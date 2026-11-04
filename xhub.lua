@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.48"
-local BUILD   = "2026-11-08 14:00"
+local VERSION = "v19.49"
+local BUILD   = "2026-11-08 14:50"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6989,6 +6989,63 @@ function M.examBuild()
     end
 end
 
+--==== 一次性拿全部答案：直接问服务器 ====
+function M.examFetchRemote()
+    local RS2 = game:GetService("ReplicatedStorage")
+    local rf = RS2:FindFirstChild("PlayerAnswerTable")
+    if not (rf and rf:IsA("RemoteFunction")) then
+        return false, "没找到 PlayerAnswerTable"
+    end
+    local tries = { {}, "all" }
+    for _, arg in ipairs(tries) do
+        local ok, res = pcall(function() return rf:InvokeServer(arg) end)
+        if ok and res ~= nil then
+            print("[XHub][ans] InvokeServer(" .. tostring(arg) .. ") 返回 " .. typeof(res))
+            local function mergeFrom(t)
+                local n = 0
+                for k, v in pairs(t) do
+                    local kn = tonumber(k)
+                    if kn and (type(v) == "string" or type(v) == "number") then
+                        local l = tostring(v):upper():sub(1, 1)
+                        if l:match("[ABCD]") then
+                            M.exam.answers[kn] = l
+                            n = n + 1
+                        end
+                    end
+                end
+                return n
+            end
+            if type(res) == "table" then
+                local buf = {}
+                local cnt = 0
+                for k, v in pairs(res) do
+                    if cnt < 25 then buf[#buf + 1] = tostring(k) .. "=" .. tostring(v) end
+                    cnt = cnt + 1
+                end
+                print("[XHub][ans]   " .. table.concat(buf, ", ") .. (cnt > 25 and " ..." or ""))
+                local merged = mergeFrom(res)
+                if merged > 0 then
+                    M.exam.lastTick = 0
+                    return true, ("服务器返回 %d 条，已填入答案表"):format(merged)
+                end
+                -- 可能是 {answers={...}} 结构
+                for _, v in pairs(res) do
+                    if type(v) == "table" then
+                        local m2 = mergeFrom(v)
+                        if m2 > 0 then
+                            M.exam.lastTick = 0
+                            return true, ("服务器返回嵌套表，已填入 %d 条"):format(m2)
+                        end
+                    end
+                end
+                return true, "服务器返回了表，但字段名不是 题号→答案（已打印结构，发我）"
+            end
+            print("[XHub][ans]   " .. tostring(res))
+            return true, "服务器返回字符串/数字（已打印），需要我按它的格式解析"
+        end
+    end
+    return false, "调用失败或被服务器拒绝"
+end
 --==== 答案表来源：PlayerAnswerTable(RemoteFunction) / OwnerRoundAnswers / AnswerPaperCompleted ====
 M.ansNet = { on = false, last = nil, shape = "" }
 function M.ansNetStart()
@@ -8506,6 +8563,11 @@ end)
 M.addButton(pTool, "关闭 答题 Hub 窗口", function()
     M.exam.open = false
     notify("答题 Hub 已关闭（雷达仍可单独用）", "info", 3)
+end)
+M.addButton(pTool, "向服务器要全部答案（一次拿全，试试）", function()
+    local ok, msg = M.examFetchRemote()
+    notify(tostring(msg), ok and "ok" or "warn", 7)
+    if ok then task.spawn(function() pcall(M.examRefresh) end) end
 end)
 M.addButton(pTool, "清空已记录答案", function()
     M.exam.answers = {}
