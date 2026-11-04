@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.74"
-local BUILD   = "2026-11-09 14:00"
+local VERSION = "v19.75"
+local BUILD   = "2026-11-09 15:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7519,6 +7519,22 @@ M.cnMap = {
     ["Zoom In Option for Answer Paper"]="答题纸放大选项",
     ["ISS Room"]="留校察看室", ["ISS Supervisor"]="留校察看监督员",
     ["Roleplay"]="角色扮演",
+    -- Prison Life（监狱人生）常见功能词
+    ["Prison"]="监狱", ["Police"]="警察", ["Criminal"]="罪犯", ["Inmate"]="囚犯",
+    ["Arrest"]="逮捕", ["Arrest All"]="全部逮捕", ["Unarrest"]="解铐",
+    ["Escape"]="越狱", ["Escaped"]="已越狱", ["Kill All"]="全部击杀",
+    ["Give Tools"]="给予工具", ["Give All"]="全部给予", ["Weapons"]="武器",
+    ["Gun"]="枪", ["Ammo"]="弹药", ["Taser"]="电击枪", ["Taze"]="电击",
+    ["Handcuffs"]="手铐", ["Keycard"]="门卡", ["Armory"]="军械库",
+    ["Cell"]="牢房", ["Yard"]="放风区", ["Guard"]="守卫", ["Warden"]="监狱长",
+    ["Teleport"]="传送", ["Teleport To"]="传送到", ["Bring"]="拉过来",
+    ["Kick"]="踢", ["Ban"]="封禁", ["Freeze"]="冻结", ["Slap"]="扇飞",
+    ["Spawn Car"]="生成车辆", ["Vehicle"]="载具", ["Fly Car"]="飞车",
+    ["Godmode"]="无敌", ["Invisible"]="隐身", ["Noclip"]="穿墙",
+    ["Speed Hack"]="加速", ["Jump Power"]="跳跃力", ["WalkSpeed"]="移动速度",
+    ["Criminals"]="罪犯名单", ["Police Team"]="警察阵营", ["Team Change"]="换队",
+    ["Aimbot"]="自瞄", ["Silent Aim"]="静默自瞄", ["ESP"]="透视",
+    ["Visions"]="视野", ["Player List"]="玩家列表", ["Refresh"]="刷新",
     -- pf_lite（Phantom Forces）
     ["Silent Aim"]="静默自瞄", ["Aim Assist"]="辅助自瞄", ["Aim"]="瞄准",
     ["Hitpart"]="命中部位", ["Prediction"]="预判", ["Prediction Value"]="预判强度",
@@ -8514,6 +8530,44 @@ function M.ansStop()
     M.ans.on = false
     M.ans.stop = true
 end
+--==== Prison Life hub（第三方）启动器 =====
+M.prisonLaunch = function()
+    local urls = {
+        "https://raw.githubusercontent.com/TooPoorToAffordVolt/untilted-hacker-hub-prison-life/refs/heads/main/main.lua",
+    }
+    local src, used
+    for _, u in ipairs(urls) do
+        local ok, r = pcall(function() return game:HttpGet(u, true) end)
+        if ok and type(r) == "string" and #r > 2000 then src, used = r, u break end
+    end
+    if not src then return false, "下载失败" end
+    print(("[XHub][prison] loader %d 字节  %s"):format(#src, tostring(used)))
+    pcall(function() writefile("xhub_prison.lua", src) end)
+    pcall(M.cnStart)
+    task.spawn(function()
+        for i = 1, 10 do
+            task.wait(0.8)
+            if not M.cnOn then break end
+            pcall(function()
+                local roots = { CoreGui, lp:FindFirstChildOfClass("PlayerGui") }
+                for _, root in ipairs(roots) do
+                    if root then
+                        for _, d in ipairs(root:GetDescendants()) do
+                            if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
+                                M.cnApply(d)
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+    end)
+    local fn, err = loadstring(src)
+    if not fn then return false, "loadstring 失败: " .. tostring(err) end
+    local ok, e2 = pcall(fn)
+    if ok then return true, "已启动（运行时汉化已开）" end
+    return false, tostring(e2)
+end
 --==== Chronix（Chronix-gate keyless hub）快捷启动 =====
 M.CHRONIX_URLS = {
     "https://pastebin.com/raw/sMmZ6bvG",
@@ -8649,6 +8703,13 @@ M.addButton(pTool, "查看已记录的答案条数", function()
     local m = 0
     for _ in pairs(M.ans.mine) do m = m + 1 end
     notify(("已记录答案 %d 条，服务器已答 %d 题"):format(c, m), "info", 6)
+end)
+M.addButton(pTool, "启动 Prison Life hub（监狱人生 Prison Life · 已汉化）", function()
+    notify("正在启动 Prison Life hub…", "info", 2)
+    task.spawn(function()
+        local ok, info = M.prisonLaunch()
+        notify(ok and ("已启动：" .. tostring(info)) or ("失败: " .. tostring(info)), ok and "ok" or "err", 6)
+    end)
 end)
 M.addButton(pTool, "启动 答题脚本（Cheating During Testing · 已汉化）", function()
     notify("正在启动答题脚本…", "info", 2)
