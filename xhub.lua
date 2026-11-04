@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.70"
-local BUILD   = "2026-11-09 10:00"
+local VERSION = "v19.71"
+local BUILD   = "2026-11-09 11:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -8080,6 +8080,33 @@ function M.ansReadMine()
     return false, 0
 end
 
+-- 提交签名探测：把各种可能的调用方式都试一遍（只对 Q1）
+function M.ansProbeSignatures()
+    local rf = M.ansTable()
+    if not rf then return "找不到 PlayerAnswerTable" end
+    local q = 1
+    local letter = nil
+    for k, v in pairs(M.ans.key) do q = k letter = v break end
+    if not letter then return "还没记录到答案，先拍照" end
+    local out = {}
+    local function try(label, fn)
+        local ok, a, b = pcall(fn)
+        out[#out + 1] = ("%-34s -> ok=%s  a=%s  b=%s"):format(label, tostring(ok), tostring(a), tostring(b))
+        print("[XHub][sig] " .. out[#out])
+    end
+    try(("InvokeServer(%d,%q)"):format(q, letter), function() return rf:InvokeServer(q, letter) end)
+    try(("InvokeServer(%q,%q)"):format(tostring(q), letter), function() return rf:InvokeServer(tostring(q), letter) end)
+    try(("InvokeServer(%d,%q,true)"):format(q, letter), function() return rf:InvokeServer(q, letter, true) end)
+    try(("InvokeServer(%q,%d)"):format(letter, q), function() return rf:InvokeServer(letter, q) end)
+    try(("InvokeServer({q=%d,answer=%q})"):format(q, letter), function() return rf:InvokeServer({ question = q, answer = letter }) end)
+    try(("InvokeServer(%d,%q,{})"):format(q, letter), function() return rf:InvokeServer(q, letter, {}) end)
+    try("InvokeServer()", function() return rf:InvokeServer() end)
+    local txt = table.concat(out, "\n")
+    print("=== 提交签名探测 ===")
+    print(txt)
+    if type(setclipboard) == "function" then pcall(setclipboard, txt) end
+    return txt
+end
 -- 诊断：把每道门槛的真实值打出来
 function M.ansDiag()
     local out = {}
@@ -8298,6 +8325,12 @@ end)
 M.addButton(pTool, "自动答题 开（只提交，不拍照）", function()
     local ok, msg = M.ansStart()
     notify(tostring(msg), ok and "ok" or "warn", 6)
+end)
+M.addButton(pTool, "提交签名探测（试 7 种调用方式）", function()
+    task.spawn(function()
+        local txt = M.ansProbeSignatures()
+        if type(txt) == "string" then notify(txt:sub(1, 120), "info", 8) end
+    end)
 end)
 M.addButton(pTool, "自动答题 诊断（打印门槛真实值）", function()
     local txt = M.ansDiag()
