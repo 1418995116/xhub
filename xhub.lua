@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.72"
-local BUILD   = "2026-11-09 12:00"
+local VERSION = "v19.73"
+local BUILD   = "2026-11-09 13:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6036,6 +6036,25 @@ M.addButton(pMain, "隐藏菜单", function() setVisible(false) end)
 print("[XHub][ui] build pVisual")
 task.wait()
 M.addSection(pVisual, "准星 / 画面")
+M.addSection(pVisual, "Deepsight ESP（高级·需要源码）")
+M.addButton(pVisual, "① 从剪贴板导入 Deepsight 源码", function()
+    local ok, msg = M.deepSaveClipboard()
+    notify(tostring(msg), ok and "ok" or "warn", 6)
+end)
+M.addToggle(pVisual, "② Deepsight ESP 开关（方框/骨骼/雷达/观察者）", false, function(v)
+    if v then
+        local ok, msg = M.deepStart()
+        notify(tostring(msg), ok and "ok" or "err", 6)
+        if not ok then notify("先点 ① 导入源码", "info", 5) end
+    else
+        M.deepStop()
+        notify("Deepsight 已关闭", "info", 3)
+    end
+end)
+M.addButton(pVisual, "Deepsight 关闭并清理", function()
+    M.deepStop()
+    notify("已清理", "info", 3)
+end)
 M.addToggle(pVisual, "自定义准星（十字）", false, function(v)
     S.crossOn = v
     notify(v and "准星已开" or "准星已关", "info", 2)
@@ -6843,6 +6862,69 @@ pcall(function()
         if RUNNING then pcall(M.mouseAimTick) end
     end)
 end)
+--==== Deepsight ESP 集成（外部源码：剪贴板导入 / deepsight.lua / URL）====
+M.deep = { on = false, mod = nil, url = "" }
+
+function M.deepSource()
+    -- 1) 本地文件
+    if type(isfile) == "function" and type(readfile) == "function" then
+        local ok, has = pcall(isfile, "deepsight.lua")
+        if ok and has then
+            local ok2, txt = pcall(readfile, "deepsight.lua")
+            if ok2 and type(txt) == "string" and #txt > 1000 then return txt, "file" end
+        end
+    end
+    -- 2) URL（可在下面手动填）
+    if M.deep.url ~= "" then
+        local ok3, txt = pcall(function() return game:HttpGet(M.deep.url, true) end)
+        if ok3 and type(txt) == "string" and #txt > 1000 then return txt, "url" end
+    end
+    return nil, nil
+end
+
+function M.deepSaveClipboard()
+    local txt
+    if type(getclipboard) == "function" then
+        local ok, v = pcall(getclipboard)
+        if ok then txt = v end
+    end
+    if type(txt) ~= "string" or #txt < 500 then
+        return false, "剪贴板里没有源码（先把 Deepsight 代码复制一下）"
+    end
+    if not txt:find("Deepsight", 1, true) and not txt:find("Drawing.new", 1, true) then
+        return false, "剪贴板内容不像 Deepsight 源码"
+    end
+    if type(writefile) ~= "function" then return false, "执行器不支持 writefile" end
+    local ok2 = pcall(writefile, "deepsight.lua", txt)
+    if not ok2 then return false, "写入 deepsight.lua 失败" end
+    return true, ("已保存 deepsight.lua（%d 字节）"):format(#txt)
+end
+
+function M.deepStart()
+    if M.deep.on then return true, "已在运行" end
+    local src, from = M.deepSource()
+    if not src then
+        return false, "没找到源码：先复制 Deepsight 代码 → 点「从剪贴板导入」"
+    end
+    local fn, err = loadstring(src)
+    if not fn then return false, "编译失败：" .. tostring(err) end
+    local ok, res = pcall(fn)
+    if not ok then return false, "运行报错：" .. tostring(res) end
+    M.deep.mod = res
+    M.deep.on = true
+    print(("[XHub][deep] 已启动（来源 %s）"):format(tostring(from)))
+    return true, "Deepsight 已启动"
+end
+
+function M.deepStop()
+    if M.deep.on and type(M.deep.mod) == "table" then
+        pcall(function()
+            if type(M.deep.mod.Unload) == "function" then M.deep.mod:Unload() end
+        end)
+    end
+    M.deep.on = false
+    M.deep.mod = nil
+end
 --==== 自定义准星（来自 pf_lite 思路，纯 GUI 无风险）====
 M.cross = { gui = nil, parts = {}, lastAng = 0 }
 function M.crossBuild()
