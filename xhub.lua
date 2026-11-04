@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.43"
-local BUILD   = "2026-11-08 09:10"
+local VERSION = "v19.44"
+local BUILD   = "2026-11-08 10:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6886,6 +6886,133 @@ function M.runDirect(urls)
     return true, "直接模式已执行"
 end
 
+--==== 答题 Hub 窗口（Cheating During Testing 专用面板：答案表 + 雷达）====
+M.exam = { open = false, answers = {}, auto = false, lastTick = 0, sig = "" }
+
+function M.examScan()
+    local out, seen = {}, {}
+    local gui = lp:FindFirstChildOfClass("PlayerGui")
+    if not gui then return out end
+    local texts = {}
+    for _, d in ipairs(gui:GetDescendants()) do
+        if (d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox")) and d.Visible then
+            local t = tostring(d.Text or "")
+            if #t >= 1 and #t <= 80 then texts[#texts + 1] = t end
+        end
+    end
+    local function add(n, l)
+        n = tonumber(n)
+        if not n or n < 1 or n > 200 then return end
+        l = tostring(l):upper():sub(1, 1)
+        if not l:match("[ABCD]") then return end
+        if seen[n] then return end
+        seen[n] = true
+        out[n] = l
+    end
+    for _, t in ipairs(texts) do
+        -- 形如 "6. D" / "Q6 D" / "6:D" / "6 D"
+        local n, l = t:match("^%s*[Qq]?%s*(%d+)%s*[:%.%)%-]?%s*([ABCDabcd])%s*$")
+        if n then add(n, l) end
+        local n2, l2 = t:match("[Qq]%s*(%d+)%D+([ABCDabcd])")
+        if n2 then add(n2, l2) end
+    end
+    return out
+end
+
+function M.examBuild()
+    if M.exam.gui and M.exam.gui.Parent then return end
+    local g = mk("ScreenGui", { Name = "XHubExam", ResetOnSpawn = false,
+        IgnoreGuiInset = true, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 998 }, CoreGui)
+    local root = mk("Frame", { Size = UDim2.fromOffset(340, 300), Position = UDim2.new(0, 80, 0, 100),
+        BackgroundColor3 = Color3.fromRGB(18, 14, 26), BackgroundTransparency = 0.08, BorderSizePixel = 0 }, g)
+    pcall(function()
+        local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 10); c.Parent = root
+        local s2 = Instance.new("UIStroke"); s2.Color = Color3.fromRGB(110, 80, 190)
+        s2.Thickness = 1.4; s2.Parent = root
+    end)
+    local title = mk("TextLabel", { Size = UDim2.new(1, 0, 0, 26), BackgroundTransparency = 1,
+        Text = "答题 Hub（拖动我）", TextColor3 = Color3.fromRGB(205, 195, 255), TextSize = 15,
+        Font = Enum.Font.GothamMedium }, root)
+    local status = mk("TextLabel", { Size = UDim2.new(1, -12, 0, 18), Position = UDim2.new(0, 8, 0, 26),
+        BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
+        Text = "扫描中…", TextColor3 = Color3.fromRGB(150, 140, 190), TextSize = 12,
+        Font = Enum.Font.Gotham }, root)
+    local list = mk("ScrollingFrame", { Size = UDim2.new(1, -12, 1, -92), Position = UDim2.new(0, 6, 0, 46),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4,
+        CanvasSize = UDim2.new(0, 0, 0, 0) }, root)
+    local lbl = mk("TextLabel", { Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1,
+        TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+        TextColor3 = Color3.fromRGB(225, 225, 240), TextSize = 14, Font = Enum.Font.Code, RichText = true }, list)
+    lbl.AutomaticSize = Enum.AutomaticSize.Y
+    local tip = mk("TextLabel", { Size = UDim2.new(1, -12, 0, 32), Position = UDim2.new(0, 8, 1, -36),
+        BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Left,
+        Text = "提示：视觉页「2D 雷达」可同时开老师视野锥",
+        TextColor3 = Color3.fromRGB(130, 120, 170), TextSize = 11, Font = Enum.Font.Gotham,
+        TextWrapped = true }, root)
+    M.exam.gui, M.exam.root, M.exam.lbl, M.exam.status = g, root, lbl, status
+    do
+        local dragging, dragStart, startPos = false, nil, nil
+        title.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging, dragStart, startPos = true, i.Position, root.Position
+            end
+        end)
+        UIS.InputChanged:Connect(function(i)
+            if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+                local d = i.Position - dragStart
+                root.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
+                                          startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            end
+        end)
+        UIS.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+        end)
+    end
+end
+
+function M.examRefresh()
+    local ans = M.examScan()
+    M.exam.answers = ans
+    local nums = {}
+    for n in pairs(ans) do nums[#nums + 1] = n end
+    table.sort(nums)
+    if #nums == 0 then
+        M.exam.lbl.Text = "没扫到答案。\n可能答案不在客户端，或界面文字格式不是 \"6. D\" 这种。"
+        M.exam.status.Text = "扫描完成：0 条"
+        return
+    end
+    local buf = {}
+    for i = 1, #nums do
+        local n = nums[i]
+        buf[#buf + 1] = ("Q%d:  <font color='#8ef'>%s</font>"):format(n, ans[n])
+    end
+    M.exam.lbl.Text = table.concat(buf, "\n")
+    M.exam.lbl.CanvasSize = UDim2.new(0, 0, 0, #nums * 20)
+    M.exam.status.Text = ("已解析 %d 题（共扫描到 %d 条文本）"):format(#nums, #nums)
+end
+
+function M.examTick()
+    if not M.exam.open then
+        if M.exam.gui then M.exam.gui.Enabled = false end
+        return
+    end
+    pcall(M.examBuild)
+    if not M.exam.gui then return end
+    M.exam.gui.Enabled = true
+    local now = os.clock()
+    if now - (M.exam.lastTick or 0) < 0.7 then return end
+    M.exam.lastTick = now
+    pcall(M.examRefresh)
+end
+
+pcall(function()
+    task.spawn(function()
+        while RUNNING do
+            task.wait(0.5)
+            pcall(M.examTick)
+        end
+    end)
+end)
 --==== 答案窗（把游戏里"题目/答案"文本框镜像到可拖动窗口）====
 M.ans = { on = false, pat = "phone,question,answer,test,quiz", lines = {} }
 function M.ansBuild()
@@ -8202,6 +8329,37 @@ M.addButton(pTool, "导出未翻译英文（补词典用）", function()
     print(txt)
     if type(setclipboard) == "function" then pcall(setclipboard, txt) end
     notify("已复制 " .. #list .. " 条未翻译文本，发我即可补全", "info", 5)
+end)
+M.addSection(pTool, "答题 Hub（Cheating During Testing）")
+M.addButton(pTool, "打开 答题 Hub 窗口（答案表 + 雷达）", function()
+    M.exam.open = true
+    M.radar.on = true
+    M.exam.lastTick = 0
+    task.spawn(function() pcall(M.examTick) end)
+    notify("答题 Hub 已开：左侧答案表，右侧雷达 + 老师视野锥", "ok", 5)
+end)
+M.addButton(pTool, "关闭 答题 Hub 窗口", function()
+    M.exam.open = false
+    notify("答题 Hub 已关闭（雷达仍可单独用）", "info", 3)
+end)
+M.addButton(pTool, "重新扫描答案", function()
+    M.exam.lastTick = 0
+    task.spawn(function() pcall(M.examRefresh) end)
+    notify("已重新扫描", "info", 2)
+end)
+M.addButton(pTool, "列出游戏所有 GUI 名字（排查用）", function()
+    local gui = lp:FindFirstChildOfClass("PlayerGui")
+    if not gui then return end
+    local names = {}
+    for _, c in ipairs(gui:GetChildren()) do
+        names[#names + 1] = c.Name .. " (" .. c.ClassName .. ")"
+    end
+    table.sort(names)
+    local txt = table.concat(names, "\n")
+    print("=== PlayerGui 列表 ===")
+    print(txt)
+    if type(setclipboard) == "function" then pcall(setclipboard, txt) end
+    notify("已打印并复制 " .. #names .. " 个界面名", "info", 5)
 end)
 M.addButton(pTool, "启动 pf_lite（Phantom Forces · 已汉化）", function()
     notify("正在启动 pf_lite…", "info", 2)
