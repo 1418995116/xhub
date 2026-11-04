@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.55"
-local BUILD   = "2026-11-08 19:50"
+local VERSION = "v19.56"
+local BUILD   = "2026-11-08 20:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7060,6 +7060,90 @@ function M.photoAutoStop()
     M.photoAuto.on = false
 end
 
+--==== 安全拍照：只有在"老师视野看不到你"时才按 Q/E ====
+function M.teacherWatchingMe()
+    local me = M.charOf(lp)
+    local myHrp = me and me:FindFirstChild("HumanoidRootPart")
+    if not myHrp then return false, nil end
+    local myPos = myHrp.Position
+    local half = math.rad((M.radar.coneFov or 90) / 2)
+    local rng = M.radar.coneRange or 70
+    for _, m in ipairs(workspace:GetChildren()) do
+        local hum = m:FindFirstChildOfClass("Humanoid")
+        if hum and not Players:GetPlayerFromCharacter(m) then
+            if M.radarIsTeacher(m) then
+                local head = m:FindFirstChild("Head")
+                local hrp = m:FindFirstChild("HumanoidRootPart")
+                local ref = head or hrp
+                if ref then
+                    local toMe = myPos - ref.Position
+                    local dist = toMe.Magnitude
+                    if dist <= rng then
+                        local look = ref.CFrame.LookVector
+                        local flat = Vector3.new(look.X, 0, look.Z)
+                        local dir2 = Vector3.new(toMe.X, 0, toMe.Z)
+                        if flat.Magnitude > 0.01 and dir2.Magnitude > 0.01 then
+                            local ang = math.acos(math.clamp(flat.Unit:Dot(dir2.Unit), -1, 1))
+                            if ang <= half then
+                                return true, m
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return false, nil
+end
+
+M.safe = { on = false, n = 0, max = 20 }
+
+function M.safePhotoStart(maxN)
+    if M.safe.on then return false, "已在运行" end
+    if not M.phoneEquipped() then return false, "请先拿起手机" end
+    local key = Enum.KeyCode[M.photoAuto.key] or Enum.KeyCode.Q
+    local ekey = Enum.KeyCode[M.photoAuto.ekey] or Enum.KeyCode.E
+    local vim = game:GetService("VirtualInputManager")
+    M.safe.on = true
+    M.safe.n = 0
+    M.safe.max = maxN or 20
+    task.spawn(function()
+        while M.safe.on and M.safe.n < M.safe.max and RUNNING do
+            local watched, who = M.teacherWatchingMe()
+            if watched then
+                print(("[XHub][safe] %s 正在看我，等待…"):format(tostring(who and who.Name)))
+                task.wait(1.0)
+            else
+                M.safe.n = M.safe.n + 1
+                pcall(function()
+                    vim:SendKeyEvent(true, key, false, game)
+                    task.wait(0.08)
+                    vim:SendKeyEvent(false, key, false, game)
+                end)
+                print(("[XHub][safe] 第 %d 次拍照（老师看不到）"):format(M.safe.n))
+                local g0 = os.clock()
+                while os.clock() - g0 < (M.photoAuto.gap or 1.2) and M.safe.on do task.wait(0.05) end
+                pcall(function()
+                    vim:SendKeyEvent(true, ekey, false, game)
+                    task.wait(0.08)
+                    vim:SendKeyEvent(false, ekey, false, game)
+                end)
+                local w0 = os.clock()
+                local waitSec = (M.photoAuto.base or 6) + math.random() * (M.photoAuto.jit or 2)
+                while os.clock() - w0 < waitSec and M.safe.on do task.wait(0.1) end
+            end
+        end
+        M.safe.on = false
+        local n = 0
+        for _ in pairs(M.exam.answers) do n = n + 1 end
+        print(("[XHub][safe] 结束，答案 %d 条"):format(n))
+    end)
+    return true, "开始安全拍照：老师看我时会自动暂停"
+end
+
+function M.safePhotoStop()
+    M.safe.on = false
+end
 --==== 自动填答题纸（点 GUI 按钮，等价手点）=====
 M.fill = { on = false, done = 0 }
 
@@ -8919,6 +9003,17 @@ end)
 M.addSlider(pTool, "拍照每轮间隔（秒）", 4, 20, 6, function(v) M.photoAuto.base = v end)
 M.addSlider(pTool, "Q→E 等待（秒）", 0.5, 5, 1.2, function(v) M.photoAuto.gap = v end)
 M.addSlider(pTool, "拍照轮数上限", 3, 40, 30, function(v) M.photoAuto.max = v end)
+M.addButton(pTool, "安全拍照（老师看不到你时才查答案）", function()
+    M.spyStart()
+    local ok, msg = M.safePhotoStart(M.photoAuto.max or 20)
+    notify(tostring(msg), ok and "ok" or "warn", 6)
+end)
+M.addButton(pTool, "停止安全拍照", function()
+    M.safePhotoStop()
+    local n = 0
+    for _ in pairs(M.exam.answers) do n = n + 1 end
+    notify(("已停止，答案 %d 条"):format(n), "info", 4)
+end)
 M.addButton(pTool, "拟人拍照（Q 拍照 → 等 → E 加载，循环）", function()
     M.spyStart()
     local ok, msg = M.photoAutoStart(30)
