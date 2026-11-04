@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.28"
-local BUILD   = "2026-11-07 21:10"
+local VERSION = "v19.29"
+local BUILD   = "2026-11-07 21:50"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -744,6 +744,15 @@ local flySnaps = 0
 function M.flyStop()
     S.fly = false
     if flyBV then flyBV:Destroy(); flyBV = nil end
+    pcall(function()
+        local V = M._flyVel
+        if V then
+            if V.conn then pcall(function() V.conn:Disconnect() end) end
+            if V.lv then pcall(function() V.lv:Destroy() end) end
+            if V.att then pcall(function() V.att:Destroy() end) end
+            M._flyVel = nil
+        end
+    end)
     pcall(M.flyAlignStop)
     pcall(function()
         local c0 = M.charOf(lp)
@@ -829,7 +838,7 @@ function M.setFly(on)
             flyBV = mk("BodyVelocity", { Name = "XHubFly", MaxForce = Vector3.new(1e5, 1e5, 1e5),
                 Velocity = Vector3.zero, P = 1250 }, hrp)
         end
-        local modeName = (S.flyMode == "align" and "Align 抗拉回") or (S.flyMode == "body" and "物理" or "CFrame")
+        local modeName = ({align="Align 抗拉回", velocity="LinearVelocity", teleport="Teleport 锚定", body="BodyVelocity", cframe="CFrame"})[S.flyMode] or S.flyMode
         notify(("飞行已开启 · %s · 速度 %d"):format(modeName, S.flySpeed), "ok", 1.6)
     else
         M.flyStop()
@@ -943,6 +952,39 @@ RS.RenderStepped:Connect(function(dt)
                 hrp.AssemblyLinearVelocity = Vector3.zero
             end)
         end
+        lastHrpPos = hrp.Position
+        return
+    end
+
+    if S.flyMode == "velocity" then
+        -- LinearVelocity 模式：纯物理速度驱动（最平滑、抗拉回）
+        local V = M._flyVel
+        if not (V and V.lv and V.lv.Parent) then
+            V = {}
+            pcall(function()
+                local att = Instance.new("Attachment")
+                att.Name = "XHubFlyAtt"
+                att.Parent = hrp
+                local lv = Instance.new("LinearVelocity")
+                lv.Name = "XHubFly"
+                lv.Attachment0 = att
+                lv.MaxForce = 1e6
+                lv.RelativeTo = Enum.ActuatorRelativeTo.World
+                pcall(function() lv.ApplyAtCenterOfMass = false end)
+                lv.VectorVelocity = Vector3.zero
+                lv.Parent = hrp
+                V.att, V.lv = att, lv
+            end)
+            M._flyVel = V
+        end
+        local h6 = M.humOf(lp)
+        if h6 then pcall(function() h6:ChangeState(Enum.HumanoidStateType.Freefall) end) end
+        local speed = S.flySpeed or 60
+        local vv = (dir.Magnitude > 0) and (dir.Unit * speed) or Vector3.zero
+        pcall(function()
+            V.lv.VectorVelocity = vv
+            V.lv.MaxForce = 1e6
+        end)
         lastHrpPos = hrp.Position
         return
     end
@@ -5910,9 +5952,10 @@ print("[XHub][ui] build pMain")
 task.wait()
 M.addSection(pMain, "MOVEMENT")
 M.addToggle(pMain, "飞行 (V)", false, function(v) M.setFly(v) end)
+M.addToggle(pMain, "飞行跟随视线俯仰（vel 模式）", false, function(v) S.flyLook = v end)
 M.addButton(pMain, "飞行模式: Align 抗拉回（点我切换）", function()
-    local order = { "align", "teleport", "body", "cframe" }
-    local label = { align = "Align 抗拉回", teleport = "Teleport 锚定", body = "物理速度", cframe = "CFrame 直写" }
+    local order = { "align", "velocity", "teleport", "body", "cframe" }
+    local label = { align = "Align 抗拉回", velocity = "LinearVelocity 速度", teleport = "Teleport 锚定", body = "BodyVelocity", cframe = "CFrame 直写" }
     local cur = S.flyMode or "align"
     local idx = 1
     for i, v in ipairs(order) do if v == cur then idx = i end end
