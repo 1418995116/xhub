@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.60"
-local BUILD   = "2026-11-09 00:10"
+local VERSION = "v19.61"
+local BUILD   = "2026-11-09 01:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7293,6 +7293,36 @@ end
 function M.safePhotoStop()
     M.safe.on = false
 end
+--==== 诊断：答题纸按钮到底有几个可触发连接 ====
+function M.diagPaperButtons()
+    local frames = M.findPaperFrames()
+    local out = {}
+    local function add(s) out[#out + 1] = s end
+    add("=== 答题纸按钮连接诊断 ===")
+    local nums = {}
+    for n in pairs(frames) do nums[#nums + 1] = n end
+    table.sort(nums)
+    for i = 1, math.min(#nums, 3) do
+        local n = nums[i]
+        local set = frames[n]
+        for _, L in ipairs({ "A", "B", "C", "D" }) do
+            local b = set[L]
+            if b then
+                local counts = {}
+                for _, ev in ipairs({ "MouseButton1Click", "Activated", "MouseButton1Down", "MouseEnter" }) do
+                    local ok, cs = pcall(function() return getconnections(b[ev]) end)
+                    counts[#counts + 1] = ev .. "=" .. tostring(ok and #cs or "err")
+                end
+                add(("Q%d %s (%s in %s): %s"):format(n, L, b.ClassName, tostring(b.Parent and b.Parent.Name),
+                    table.concat(counts, " ")))
+            end
+        end
+    end
+    local txt = table.concat(out, "\n")
+    print(txt)
+    if type(setclipboard) == "function" then pcall(setclipboard, txt) end
+    return txt
+end
 --==== 直接触发按钮回调（getconnections，不伪造鼠标坐标，不会被 267）=====
 function M.clickButtonSmart(btn)
     local fired = 0
@@ -7330,10 +7360,20 @@ function M.findPaperFrames()
                         for _, c in ipairs(d:GetChildren()) do
                             if c:IsA("ImageButton") or c:IsA("TextButton") then
                                 local letter = tostring(c.Name):upper():sub(1, 1)
-                                if letter:match("[ABCD]") then buttons[letter] = c end
+                                if letter:match("[ABCD]") then
+                                    buttons[letter] = buttons[letter] or {}
+                                    table.insert(buttons[letter], c)
+                                end
                             end
                         end
-                        if next(buttons) then out[qn] = buttons end
+                        if next(buttons) then
+                            out[qn] = out[qn] or {}
+                            for L, list in pairs(buttons) do
+                                for _, b in ipairs(list) do
+                                    table.insert(out[qn], { letter = L, btn = b })
+                                end
+                            end
+                        end
                     end
                 end
             end
@@ -7341,7 +7381,7 @@ function M.findPaperFrames()
     end
     scan(lp:FindFirstChildOfClass("PlayerGui"))
     for _, d in ipairs(workspace:GetDescendants()) do
-        if tostring(d.Name) == "AnswerPaperSurfaceGui" then scan(d) end
+        if tostring(d.Name) == "AnswerPaperSurfaceGui" then scan(d) break end
     end
     return out
 end
@@ -7382,12 +7422,17 @@ function M.fillAnswers()
             local f = frames[n]
             local letter = M.exam.answers[n]
             if f and f[letter] then
-                local okc, cnt = M.clickGuiButton(f[letter])
-                if okc then
+                local best, bestN = nil, 0
+                for _, cand in ipairs(f[letter]) do
+                    local c = M.clickButtonSmart(cand)
+                    if c > bestN then best, bestN = cand, c end
+                    if c > 0 then break end
+                end
+                if bestN > 0 then
                     M.fill.done = M.fill.done + 1
-                    print(("[XHub][fill] Q%d -> %s 触发回调 %s 个"):format(n, letter, tostring(cnt)))
+                    print(("[XHub][fill] Q%d -> %s 触发回调 %d 个"):format(n, letter, bestN))
                 else
-                    print(("[XHub][fill] Q%d -> %s 找不到可触发事件"):format(n, letter))
+                    print(("[XHub][fill] Q%d -> %s 所有副本都没有回调（共 %d 个候选）"):format(n, letter, #f[letter]))
                 end
                 task.wait(0.22)
             end
@@ -9240,6 +9285,10 @@ M.addButton(pTool, "停止拟人拍照", function()
     for _ in pairs(M.exam.answers) do n = n + 1 end
     notify(("已停止，答案 %d 条"):format(n), "info", 4)
 end)
+M.addButton(pTool, "诊断答题纸按钮（看有几个可触发连接）", function()
+    local txt = M.diagPaperButtons()
+    notify("已打印并复制，发我", "info", 5)
+end)
 M.addButton(pTool, "测试单题（只填 Q1）", function()
     local frames = M.findPaperFrames()
     local f = frames[1]
@@ -9248,8 +9297,13 @@ M.addButton(pTool, "测试单题（只填 Q1）", function()
         return
     end
     local letter = M.exam.answers[1]
-    local okc, cnt = M.clickGuiButton(f[letter])
-    notify(("Q1 -> %s ：%s（回调 %s 个）"):format(letter, okc and "已触发" or "失败", tostring(cnt)), okc and "ok" or "warn", 6)
+    local bestN = 0
+    for _, cand in ipairs(f[letter] or {}) do
+        local c = M.clickButtonSmart(cand)
+        if c > bestN then bestN = c end
+        if c > 0 then break end
+    end
+    notify(("Q1 -> %s ：触发回调 %d 个（候选 %d 个）"):format(letter, bestN, #(f[letter] or {})), bestN > 0 and "ok" or "warn", 6)
 end)
 M.addButton(pTool, "自动填答题纸（按已记录答案点选）", function()
     local ok, msg = M.fillAnswers()
