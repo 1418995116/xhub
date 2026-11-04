@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.32"
-local BUILD   = "2026-11-08 00:40"
+local VERSION = "v19.33"
+local BUILD   = "2026-11-08 01:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -88,7 +88,7 @@ local S = {
     fly = false, flySpeed = 120,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, trigger = false, crossOn = false, crossSize = 8, crossGap = 4, crossSpin = 0, hitMark = true, lightOn = false, clockOn = false, clockValue = 14, fovOn = false, fovValue = 70, triggerFov = 12, triggerDelay = 0.08, triggerWall = true, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
+    aim = false, trigger = false, crossOn = false, crossSize = 8, crossGap = 4, crossSpin = 0, hitMark = true, lightOn = false, clockOn = false, clockValue = 14, fovOn = false, fovValue = 70, triggerFov = 12, triggerDelay = 0.08, triggerWall = true, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, aimFov = 140, bulletTrack = false, silentAim = false, silentMode = "camera", mouseSens = 1.0, mouseAimSpeed = 1.0, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "align", antiSnap = true, flyResp = 200, flyRigid = true,
@@ -6760,6 +6760,32 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
 
 -- 菜单打开/关闭时只设置一次鼠标状态；不再每帧抢（坐着+第一人称游戏会抖动）
 
+--==== 鼠标静默自瞄（mousemoverel，来自 pf_lite 思路）====
+M.mouseAim = { last = 0 }
+function M.mouseAimTick()
+    if not (S.aim and S.silentMode == "mouse") then return end
+    local tgt = M._aimTarget
+    if not tgt then return end
+    local part = tgt.Character and M.pickAimPart(tgt.Character, S.aimPart or "Head")
+    if not part then return end
+    local sp, on = cam:WorldToViewportPoint(part.Position)
+    if not on then return end
+    local vp = cam.ViewportSize
+    local dx = sp.X - vp.X / 2
+    local dy = sp.Y - vp.Y / 2
+    -- 敏感度补偿：游戏里鼠标灵敏度未知，用可调系数
+    local sens = math.clamp(S.mouseSens or 1.0, 0.1, 10)
+    local k = math.clamp((S.mouseAimSpeed or 1.0) / sens, 0.02, 2)
+    if math.abs(dx) < 1 and math.abs(dy) < 1 then return end
+    if type(mousemoverel) ~= "function" then return end
+    pcall(function() mousemoverel(dx * k, dy * k) end)
+end
+
+pcall(function()
+    RS.RenderStepped:Connect(function()
+        if RUNNING then pcall(M.mouseAimTick) end
+    end)
+end)
 --==== 自定义准星（来自 pf_lite 思路，纯 GUI 无风险）====
 M.cross = { gui = nil, parts = {}, lastAng = 0 }
 function M.crossBuild()
