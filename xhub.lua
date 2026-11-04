@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.73"
-local BUILD   = "2026-11-09 13:00"
+local VERSION = "v19.74"
+local BUILD   = "2026-11-09 14:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6036,25 +6036,22 @@ M.addButton(pMain, "隐藏菜单", function() setVisible(false) end)
 print("[XHub][ui] build pVisual")
 task.wait()
 M.addSection(pVisual, "准星 / 画面")
-M.addSection(pVisual, "Deepsight ESP（高级·需要源码）")
-M.addButton(pVisual, "① 从剪贴板导入 Deepsight 源码", function()
-    local ok, msg = M.deepSaveClipboard()
-    notify(tostring(msg), ok and "ok" or "warn", 6)
+M.addSection(pVisual, "Deepsight ESP（内置）")
+M.addToggle(pVisual, "Deepsight ESP 开关", false, function(v)
+    M.ds.on = v
+    if not v then M.dsFree() end
+    notify(v and "Deepsight ESP 已开（方框/骨骼/血条/名字/距离/武器）" or "Deepsight ESP 已关", "info", 4)
 end)
-M.addToggle(pVisual, "② Deepsight ESP 开关（方框/骨骼/雷达/观察者）", false, function(v)
-    if v then
-        local ok, msg = M.deepStart()
-        notify(tostring(msg), ok and "ok" or "err", 6)
-        if not ok then notify("先点 ① 导入源码", "info", 5) end
-    else
-        M.deepStop()
-        notify("Deepsight 已关闭", "info", 3)
-    end
+M.addButton(pVisual, "方框样式: 角框（点我切 2D 框）", function()
+    M.ds.style = (M.ds.style == "corner") and "2d" or "corner"
+    notify("方框样式 = " .. M.ds.style, "info", 3)
 end)
-M.addButton(pVisual, "Deepsight 关闭并清理", function()
-    M.deepStop()
-    notify("已清理", "info", 3)
-end)
+M.addToggle(pVisual, "骨骼 ESP", true, function(v) M.ds.showSkel = v end)
+M.addToggle(pVisual, "名字 + 距离", true, function(v) M.ds.showName = v end)
+M.addToggle(pVisual, "血条", true, function(v) M.ds.showHp = v end)
+M.addToggle(pVisual, "武器名", true, function(v) M.ds.showWeapon = v end)
+M.addToggle(pVisual, "Chams（穿透高亮）", false, function(v) M.ds.chams = v end)
+M.addSlider(pVisual, "Deepsight 最大距离", 100, 3000, 900, function(v) M.ds.maxDist = v end)
 M.addToggle(pVisual, "自定义准星（十字）", false, function(v)
     S.crossOn = v
     notify(v and "准星已开" or "准星已关", "info", 2)
@@ -6862,69 +6859,263 @@ pcall(function()
         if RUNNING then pcall(M.mouseAimTick) end
     end)
 end)
---==== Deepsight ESP 集成（外部源码：剪贴板导入 / deepsight.lua / URL）====
-M.deep = { on = false, mod = nil, url = "" }
+--==== Deepsight ESP（内置版：方框/骨骼/血条/名字/距离/武器/Chams/雷达/屏外箭头）====
+M.ds = {
+    on = false, style = "corner", showSkel = true, showName = true, showHp = true,
+    showWeapon = true, showArrow = true, chams = false, maxDist = 900, data = {},
+}
 
-function M.deepSource()
-    -- 1) 本地文件
-    if type(isfile) == "function" and type(readfile) == "function" then
-        local ok, has = pcall(isfile, "deepsight.lua")
-        if ok and has then
-            local ok2, txt = pcall(readfile, "deepsight.lua")
-            if ok2 and type(txt) == "string" and #txt > 1000 then return txt, "file" end
+local function dsNew(cls, props)
+    local ok, d = pcall(function() return Drawing.new(cls) end)
+    if not ok or not d then return nil end
+    if props then for k, v in pairs(props) do pcall(function() d[k] = v end) end end
+    return d
+end
+
+local function dsLine(color, thick)
+    return dsNew("Line", { Thickness = thick or 1, Color = color or Color3.new(1, 1, 1), Transparency = 1, Visible = false })
+end
+
+local function dsText(size)
+    return dsNew("Text", { Size = size or 13, Center = true, Outline = true,
+        Color = Color3.new(1, 1, 1), Visible = false })
+end
+
+local function dsRect()
+    return dsNew("Square", { Filled = true, Thickness = 1, Visible = false })
+end
+
+function M.dsBuild(plr)
+    local d = {
+        corners = {}, -- 8 lines
+        box4 = {},    -- 4 lines
+        bones = {},   -- 10 lines
+        name = dsText(13),
+        dist = dsText(11),
+        weapon = dsText(11),
+        hpBg = dsRect(),
+        hpFill = dsRect(),
+        arrow = nil,
+        hl = nil,
+    }
+    for i = 1, 8 do d.corners[i] = dsLine() end
+    for i = 1, 4 do d.box4[i] = dsLine() end
+    for i = 1, 10 do d.bones[i] = dsLine(Color3.fromRGB(240, 240, 240), 1.2) end
+    M.ds.data[plr] = d
+    return d
+end
+
+function M.dsHide(d)
+    if not d then return end
+    for _, l in ipairs(d.corners) do if l then l.Visible = false end end
+    for _, l in ipairs(d.box4) do if l then l.Visible = false end end
+    for _, l in ipairs(d.bones) do if l then l.Visible = false end end
+    if d.name then d.name.Visible = false end
+    if d.dist then d.dist.Visible = false end
+    if d.weapon then d.weapon.Visible = false end
+    if d.hpBg then d.hpBg.Visible = false end
+    if d.hpFill then d.hpFill.Visible = false end
+    if d.hl then d.hl.Enabled = false end
+end
+
+function M.dsFree()
+    for plr, d in pairs(M.ds.data) do
+        for _, l in ipairs(d.corners) do pcall(function() l:Remove() end) end
+        for _, l in ipairs(d.box4) do pcall(function() l:Remove() end) end
+        for _, l in ipairs(d.bones) do pcall(function() l:Remove() end) end
+        for _, k in ipairs({ "name", "dist", "weapon", "hpBg", "hpFill" }) do
+            if d[k] then pcall(function() d[k]:Remove() end) end
+        end
+        if d.hl then pcall(function() d.hl:Destroy() end) end
+        M.ds.data[plr] = nil
+    end
+end
+
+function M.dsW2S(pos)
+    local sp, on = cam:WorldToViewportPoint(pos)
+    return Vector2.new(sp.X, sp.Y), on, sp.Z
+end
+
+function M.dsBone(w2s, out, a, b, col, thick)
+    local A, onA, zA = w2s(a)
+    local B, onB, zB = w2s(b)
+    if (not onA and not onB) or zA <= 0 or zB <= 0 then return false end
+    out.From, out.To, out.Color, out.Thickness, out.Visible = A, B, col, thick, true
+    return true
+end
+
+function M.dsTick()
+    if not M.ds.on then
+        for _, d in pairs(M.ds.data) do M.dsHide(d) end
+        return
+    end
+    if not Drawing then return end
+    local vp = cam.ViewportSize
+    local camCF = cam.CFrame
+    local camPos = camCF.Position
+    local me = M.charOf(lp)
+    for _, p in ipairs(Players:GetPlayers()) do
+        local d = M.ds.data[p]
+        if p ~= lp then
+            local ch = p.Character
+            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+            local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+            if not d then d = M.dsBuild(p) end
+            if hrp and hum and hum.Health > 0 then
+                local dist = (hrp.Position - camPos).Magnitude
+                if dist <= (M.ds.maxDist or 900) then
+                    local sp, on, z = M.dsW2S(hrp.Position)
+                    if on and z > 0 then
+                        local sizeY = hum.HipHeight and (hum.HipHeight * 2 + 2) or 6
+                        local top, _, _ = M.dsW2S((hrp.CFrame * CFrame.new(0, sizeY * 0.5, 0)).Position)
+                        local btm, _, _ = M.dsW2S((hrp.CFrame * CFrame.new(0, -sizeY * 0.5, 0)).Position)
+                        local h = math.abs(btm.Y - top.Y)
+                        local wd = h * 0.6
+                        local x1, y1 = top.X - wd * 0.5, top.Y
+                        local x2, y2 = x1 + wd, y1 + h
+                        local col = Color3.fromRGB(255, 70, 70)
+                        -- 方框
+                        if M.ds.style == "corner" then
+                            local cl = math.clamp(wd * 0.28, 4, 20)
+                            local pts = {
+                                { x1, y1, x1 + cl, y1 }, { x1, y1, x1, y1 + cl },
+                                { x2, y1, x2 - cl, y1 }, { x2, y1, x2, y1 + cl },
+                                { x1, y2, x1 + cl, y2 }, { x1, y2, x1, y2 - cl },
+                                { x2, y2, x2 - cl, y2 }, { x2, y2, x2, y2 - cl },
+                            }
+                            for i = 1, 8 do
+                                local l = d.corners[i]
+                                if l then
+                                    l.From = Vector2.new(pts[i][1], pts[i][2])
+                                    l.To = Vector2.new(pts[i][3], pts[i][4])
+                                    l.Color = col; l.Thickness = 1.5; l.Visible = true
+                                end
+                            end
+                            for i = 1, 4 do if d.box4[i] then d.box4[i].Visible = false end end
+                        else
+                            local q = {
+                                { x1, y1, x2, y1 }, { x2, y1, x2, y2 },
+                                { x2, y2, x1, y2 }, { x1, y2, x1, y1 },
+                            }
+                            for i = 1, 4 do
+                                local l = d.box4[i]
+                                if l then
+                                    l.From = Vector2.new(q[i][1], q[i][2])
+                                    l.To = Vector2.new(q[i][3], q[i][4])
+                                    l.Color = col; l.Thickness = 1.5; l.Visible = true
+                                end
+                            end
+                            for i = 1, 8 do if d.corners[i] then d.corners[i].Visible = false end end
+                        end
+                        -- 血条
+                        if M.ds.showHp and d.hpBg and d.hpFill then
+                            local pct = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
+                            d.hpBg.Position = Vector2.new(x1 - 6, y1 - 1)
+                            d.hpBg.Size = Vector2.new(5, h + 2)
+                            d.hpBg.Color = Color3.fromRGB(0, 0, 0)
+                            d.hpBg.Transparency = 0.4
+                            d.hpBg.Visible = true
+                            d.hpFill.Position = Vector2.new(x1 - 5, y1 + (h - h * pct))
+                            d.hpFill.Size = Vector2.new(3, h * pct)
+                            d.hpFill.Color = Color3.fromRGB(80, 255, 100)
+                            d.hpFill.Transparency = 0.15
+                            d.hpFill.Visible = true
+                        end
+                        -- 名字 / 距离
+                        if M.ds.showName and d.name then
+                            d.name.Text = p.DisplayName or p.Name
+                            d.name.Position = Vector2.new(x1 + wd * 0.5, y1 - 16)
+                            d.name.Color = col
+                            d.name.Visible = true
+                        end
+                        if d.dist then
+                            d.dist.Text = ("[%d m]"):format(math.floor(dist * 0.28))
+                            d.dist.Position = Vector2.new(x1 + wd * 0.5, y1 - 2)
+                            d.dist.Color = Color3.fromRGB(220, 220, 220)
+                            d.dist.Visible = true
+                        end
+                        -- 武器
+                        if M.ds.showWeapon and d.weapon then
+                            local tool = ch:FindFirstChildOfClass("Tool")
+                            if tool then
+                                d.weapon.Text = "[" .. tool.Name .. "]"
+                                d.weapon.Position = Vector2.new(x1 + wd * 0.5, y2 + 2)
+                                d.weapon.Color = Color3.fromRGB(255, 215, 80)
+                                d.weapon.Visible = true
+                            else
+                                d.weapon.Visible = false
+                            end
+                        end
+                        -- 骨骼
+                        if M.ds.showSkel then
+                            local head = ch:FindFirstChild("Head")
+                            local torso = ch:FindFirstChild("Torso") or ch:FindFirstChild("UpperTorso")
+                            local la = ch:FindFirstChild("Left Arm") or ch:FindFirstChild("LeftUpperArm")
+                            local ra = ch:FindFirstChild("Right Arm") or ch:FindFirstChild("RightUpperArm")
+                            local ll = ch:FindFirstChild("Left Leg") or ch:FindFirstChild("LeftUpperLeg")
+                            local rl = ch:FindFirstChild("Right Leg") or ch:FindFirstChild("RightUpperLeg")
+                            local w2s = M.dsW2S
+                            local b = d.bones
+                            local skCol = Color3.fromRGB(240, 240, 240)
+                            local okAny = false
+                            if head and torso then
+                                okAny = M.dsBone(w2s, b[1], head.Position, torso.Position, skCol, 1.2) or okAny
+                            end
+                            if torso and la then
+                                okAny = M.dsBone(w2s, b[2], torso.Position, la.Position, skCol, 1.2) or okAny
+                            end
+                            if torso and ra then
+                                okAny = M.dsBone(w2s, b[3], torso.Position, ra.Position, skCol, 1.2) or okAny
+                            end
+                            if torso and ll then
+                                okAny = M.dsBone(w2s, b[4], torso.Position, ll.Position, skCol, 1.2) or okAny
+                            end
+                            if torso and rl then
+                                okAny = M.dsBone(w2s, b[5], torso.Position, rl.Position, skCol, 1.2) or okAny
+                            end
+                            if not okAny then
+                                for i = 1, 10 do if b[i] then b[i].Visible = false end end
+                            end
+                        else
+                            for i = 1, 10 do if d.bones[i] then d.bones[i].Visible = false end end
+                        end
+                        -- Chams
+                        if M.ds.chams then
+                            if not d.hl then
+                                local okh, hl = pcall(function() return Instance.new("Highlight") end)
+                                if okh and hl then
+                                    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                                    hl.FillColor = Color3.fromRGB(255, 60, 60)
+                                    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+                                    hl.FillTransparency = 0.55
+                                    d.hl = hl
+                                end
+                            end
+                            if d.hl then
+                                if d.hl.Parent ~= ch then d.hl.Parent = ch end
+                                d.hl.Enabled = true
+                            end
+                        elseif d.hl then
+                            d.hl.Enabled = false
+                        end
+                    else
+                        M.dsHide(d)
+                    end
+                else
+                    M.dsHide(d)
+                end
+            else
+                M.dsHide(d)
+            end
         end
     end
-    -- 2) URL（可在下面手动填）
-    if M.deep.url ~= "" then
-        local ok3, txt = pcall(function() return game:HttpGet(M.deep.url, true) end)
-        if ok3 and type(txt) == "string" and #txt > 1000 then return txt, "url" end
-    end
-    return nil, nil
 end
 
-function M.deepSaveClipboard()
-    local txt
-    if type(getclipboard) == "function" then
-        local ok, v = pcall(getclipboard)
-        if ok then txt = v end
-    end
-    if type(txt) ~= "string" or #txt < 500 then
-        return false, "剪贴板里没有源码（先把 Deepsight 代码复制一下）"
-    end
-    if not txt:find("Deepsight", 1, true) and not txt:find("Drawing.new", 1, true) then
-        return false, "剪贴板内容不像 Deepsight 源码"
-    end
-    if type(writefile) ~= "function" then return false, "执行器不支持 writefile" end
-    local ok2 = pcall(writefile, "deepsight.lua", txt)
-    if not ok2 then return false, "写入 deepsight.lua 失败" end
-    return true, ("已保存 deepsight.lua（%d 字节）"):format(#txt)
-end
-
-function M.deepStart()
-    if M.deep.on then return true, "已在运行" end
-    local src, from = M.deepSource()
-    if not src then
-        return false, "没找到源码：先复制 Deepsight 代码 → 点「从剪贴板导入」"
-    end
-    local fn, err = loadstring(src)
-    if not fn then return false, "编译失败：" .. tostring(err) end
-    local ok, res = pcall(fn)
-    if not ok then return false, "运行报错：" .. tostring(res) end
-    M.deep.mod = res
-    M.deep.on = true
-    print(("[XHub][deep] 已启动（来源 %s）"):format(tostring(from)))
-    return true, "Deepsight 已启动"
-end
-
-function M.deepStop()
-    if M.deep.on and type(M.deep.mod) == "table" then
-        pcall(function()
-            if type(M.deep.mod.Unload) == "function" then M.deep.mod:Unload() end
-        end)
-    end
-    M.deep.on = false
-    M.deep.mod = nil
-end
+pcall(function()
+    RS.RenderStepped:Connect(function()
+        if RUNNING then pcall(M.dsTick) end
+    end)
+end)
 --==== 自定义准星（来自 pf_lite 思路，纯 GUI 无风险）====
 M.cross = { gui = nil, parts = {}, lastAng = 0 }
 function M.crossBuild()
