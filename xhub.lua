@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.53"
-local BUILD   = "2026-11-08 18:10"
+local VERSION = "v19.54"
+local BUILD   = "2026-11-08 19:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6989,6 +6989,138 @@ function M.examBuild()
     end
 end
 
+--==== 拟人拍照：模拟按 Q 键（走游戏自己的输入通道，不直接发 remote）=====
+M.photoAuto = { on = false, n = 0, max = 30, base = 3.5, jit = 1.2, key = "Q" }
+
+function M.phoneEquipped()
+    local ch = lp.Character
+    if not ch then return nil end
+    for _, t in ipairs(ch:GetChildren()) do
+        if t:IsA("Tool") then
+            local nm = tostring(t.Name):lower()
+            if nm:find("phone", 1, true) or nm:find("cell", 1, true) or nm:find("手机", 1, true) then
+                return t
+            end
+        end
+    end
+    return nil
+end
+
+function M.photoAutoStart(maxN, baseSec)
+    if M.photoAuto.on then return false, "已在运行" end
+    if not M.phoneEquipped() then
+        return false, "请先拿起手机（手上没有 phone/cell 工具）"
+    end
+    local key = Enum.KeyCode[M.photoAuto.key] or Enum.KeyCode.Q
+    local vim = game:GetService("VirtualInputManager")
+    M.photoAuto.on = true
+    M.photoAuto.n = 0
+    M.photoAuto.max = maxN or 30
+    if baseSec then M.photoAuto.base = baseSec end
+    task.spawn(function()
+        while M.photoAuto.on and M.photoAuto.n < M.photoAuto.max and RUNNING do
+            if not M.phoneEquipped() then
+                print("[XHub][photo] 手机不在了，停止")
+                break
+            end
+            M.photoAuto.n = M.photoAuto.n + 1
+            pcall(function()
+                vim:SendKeyEvent(true, key, false, game)
+                task.wait(0.08)
+                vim:SendKeyEvent(false, key, false, game)
+            end)
+            print(("[XHub][photo] 第 %d 次按 %s 拍照（拟人节奏）"):format(M.photoAuto.n, M.photoAuto.key))
+            local waitSec = M.photoAuto.base + math.random() * M.photoAuto.jit
+            local t0 = os.clock()
+            while os.clock() - t0 < waitSec and M.photoAuto.on do task.wait(0.1) end
+        end
+        M.photoAuto.on = false
+        local n = 0
+        for _ in pairs(M.exam.answers) do n = n + 1 end
+        print(("[XHub][photo] 结束，答案已记录 %d 条"):format(n))
+    end)
+    return true, "开始拟人拍照（按 Q，间隔 3.5~4.7 秒）"
+end
+
+function M.photoAutoStop()
+    M.photoAuto.on = false
+end
+
+--==== 自动填答题纸（点 GUI 按钮，等价手点）=====
+M.fill = { on = false, done = 0 }
+
+function M.findPaperFrames()
+    local out = {}
+    local function scan(root)
+        if not root then return end
+        pcall(function()
+            for _, d in ipairs(root:GetDescendants()) do
+                if d:IsA("Frame") and tonumber(d.Name) then
+                    local qn = tonumber(d.Name)
+                    if qn and qn >= 1 and qn <= 200 then
+                        local buttons = {}
+                        for _, c in ipairs(d:GetChildren()) do
+                            if c:IsA("ImageButton") or c:IsA("TextButton") then
+                                local letter = tostring(c.Name):upper():sub(1, 1)
+                                if letter:match("[ABCD]") then buttons[letter] = c end
+                            end
+                        end
+                        if next(buttons) then out[qn] = buttons end
+                    end
+                end
+            end
+        end)
+    end
+    scan(lp:FindFirstChildOfClass("PlayerGui"))
+    for _, d in ipairs(workspace:GetDescendants()) do
+        if tostring(d.Name) == "AnswerPaperSurfaceGui" then scan(d) end
+    end
+    return out
+end
+
+function M.clickGuiButton(btn)
+    local vim = game:GetService("VirtualInputManager")
+    local ap, as = btn.AbsolutePosition, btn.AbsoluteSize
+    if as.X <= 0 or as.Y <= 0 then return false end
+    pcall(function()
+        vim:SendMouseButtonEvent(ap.X + as.X / 2, ap.Y + as.Y / 2, 0, true, game, 1)
+        task.wait(0.05)
+        vim:SendMouseButtonEvent(ap.X + as.X / 2, ap.Y + as.Y / 2, 0, false, game, 1)
+    end)
+    return true
+end
+
+function M.fillAnswers()
+    if M.fill.on then return false, "正在填…" end
+    M.fill.on = true
+    M.fill.done = 0
+    task.spawn(function()
+        local frames = M.findPaperFrames()
+        local nums = {}
+        for n in pairs(M.exam.answers) do nums[#nums + 1] = n end
+        table.sort(nums)
+        if #nums == 0 then
+            M.fill.on = false
+            print("[XHub][fill] 还没有记录到任何答案")
+            return
+        end
+        for _, n in ipairs(nums) do
+            if not M.fill.on or not RUNNING then break end
+            local f = frames[n]
+            local letter = M.exam.answers[n]
+            if f and f[letter] then
+                if M.clickGuiButton(f[letter]) then
+                    M.fill.done = M.fill.done + 1
+                    print(("[XHub][fill] Q%d -> %s 已点"):format(n, letter))
+                end
+                task.wait(0.18)
+            end
+        end
+        M.fill.on = false
+        print(("[XHub][fill] 完成，共点 %d 题（找到 %d 个题框）"):format(M.fill.done, #nums))
+    end)
+    return true, "开始自动填答题纸"
+end
 --==== 从任意字符串里抽 "1. D / 2. C" 形式的答案 ====
 function M.ansParseString(str)
     if type(str) ~= "string" then return 0 end
@@ -8769,6 +8901,21 @@ end)
 M.addButton(pTool, "关闭 答题 Hub 窗口", function()
     M.exam.open = false
     notify("答题 Hub 已关闭（雷达仍可单独用）", "info", 3)
+end)
+M.addButton(pTool, "拟人拍照（模拟按 Q，3.5~4.7 秒一次，最多 30 次）", function()
+    M.spyStart()
+    local ok, msg = M.photoAutoStart(30)
+    notify(tostring(msg), ok and "ok" or "warn", 6)
+end)
+M.addButton(pTool, "停止拟人拍照", function()
+    M.photoAutoStop()
+    local n = 0
+    for _ in pairs(M.exam.answers) do n = n + 1 end
+    notify(("已停止，答案 %d 条"):format(n), "info", 4)
+end)
+M.addButton(pTool, "自动填答题纸（按已记录答案点选）", function()
+    local ok, msg = M.fillAnswers()
+    notify(tostring(msg), ok and "ok" or "warn", 5)
 end)
 M.addButton(pTool, "开始监听答案（QueryAnswer/Phone 等 Remote）", function()
     local ok = M.spyStart()
