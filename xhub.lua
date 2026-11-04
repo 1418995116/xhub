@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.35"
-local BUILD   = "2026-11-08 02:40"
+local VERSION = "v19.36"
+local BUILD   = "2026-11-08 03:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6766,6 +6766,79 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
 
 -- 菜单打开/关闭时只设置一次鼠标状态；不再每帧抢（坐着+第一人称游戏会抖动）
 
+--==== 卡密绕过（Access Portal / key system）====
+M.key = { on = false, fakeMode = "auto", log = {} }
+M.KEY_PATTERNS = {
+    "link-hub", "linkvertise", "keyguardian", "key-guardian", "platobo", "luarmor",
+    "whitelist", "keyauth", "key_system", "keysystem", "access%20portal", "accessportal",
+    "/key", "/verify", "/validate", "/check", "/auth", "/license", "/activate", "/hwid",
+}
+
+function M.keyIsKeyURL(u)
+    local s = tostring(u or ""):lower()
+    for _, k in ipairs(M.KEY_PATTERNS) do
+        if s:find(k, 1, true) then return true end
+    end
+    return false
+end
+
+function M.keyFakeBody()
+    local exp = math.floor(os.time()) + 86400 * 365
+    if M.key.fakeMode == "true" then return "true" end
+    if M.key.fakeMode == "valid" then return "valid" end
+    -- auto：返回一个"什么都有"的 JSON，覆盖常见字段名
+    return string.format(
+        '{"success":true,"valid":true,"ok":true,"status":"ok","code":200,"message":"ok",' ..
+        '"key":"XHUB-BYPASS","token":"XHUB-BYPASS","access":true,"authorized":true,' ..
+        '"expires":%d,"expiry":%d,"expiresAt":%d,"expire":%d,"days":365}', exp, exp, exp, exp)
+end
+
+function M.keyBypassStart()
+    if M.key.on then return true end
+    M.key.on = true
+    local okAny = false
+    pcall(function()
+        if not hookfunction then return end
+        local og = game.HttpGet
+        if og then
+            hookfunction(og, newcclosure(function(self, url, ...)
+                if M.key.on and M.keyIsKeyURL(url) then
+                    M.key.log[#M.key.log + 1] = "GET(fake) " .. tostring(url)
+                    print("[XHub][key] 拦截并伪造: " .. tostring(url))
+                    return M.keyFakeBody()
+                end
+                return og(self, url, ...)
+            end))
+            okAny = true
+        end
+        local oga = game.HttpGetAsync
+        if oga then
+            hookfunction(oga, newcclosure(function(self, url, ...)
+                if M.key.on and M.keyIsKeyURL(url) then
+                    M.key.log[#M.key.log + 1] = "GETA(fake) " .. tostring(url)
+                    return M.keyFakeBody()
+                end
+                return oga(self, url, ...)
+            end))
+        end
+        local op = game.HttpPost
+        if op then
+            hookfunction(op, newcclosure(function(self, url, body, ...)
+                if M.key.on and M.keyIsKeyURL(url) then
+                    M.key.log[#M.key.log + 1] = "POST(fake) " .. tostring(url)
+                    print("[XHub][key] 拦截并伪造 POST: " .. tostring(url))
+                    return M.keyFakeBody()
+                end
+                return op(self, url, body, ...)
+            end))
+        end
+    end)
+    return okAny
+end
+
+function M.keyBypassStop()
+    M.key.on = false
+end
 --==== 通用脚本启动器（探针 + 汉化）====
 M.cnUnknown = {}
 M._probeLog = {}
@@ -7868,9 +7941,28 @@ M.addButton(pTool, "清除 Dex 缓存", function()
     end
     notify("已清空 Dex 缓存（" .. okc .. " 个文件）", "info", 3)
 end)
+M.addButton(pTool, "开启卡密绕过（拦截 key/verify 请求，伪造通过）", function()
+    local ok = M.keyBypassStart()
+    if ok then
+        notify("卡密绕过已开：key/verify/whitelist 类请求都会返回“通过”", "ok", 5)
+    else
+        notify("开启失败：执行器缺少 hookfunction", "err", 5)
+    end
+end)
+M.addButton(pTool, "关闭卡密绕过", function()
+    M.keyBypassStop()
+    notify("卡密绕过已关闭", "info", 3)
+end)
+M.addButton(pTool, "切换伪造返回值（auto / true / valid）", function()
+    if M.key.fakeMode == "auto" then M.key.fakeMode = "true"
+    elseif M.key.fakeMode == "true" then M.key.fakeMode = "valid"
+    else M.key.fakeMode = "auto" end
+    notify("伪造返回值 = " .. M.key.fakeMode, "info", 3)
+end)
 M.addButton(pTool, "启动 未知脚本 aEtUUyxx（探针+汉化）", function()
     notify("正在启动（探针已挂）…", "info", 2)
     task.spawn(function()
+        pcall(M.keyBypassStart)
         local ok, info = M.runExternal("unknown", M.UNKNOWN_URLS)
         notify(ok and tostring(info) or ("失败: " .. tostring(info)), ok and "ok" or "err", 5)
     end)
