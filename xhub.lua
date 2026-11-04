@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.38"
-local BUILD   = "2026-11-08 05:00"
+local VERSION = "v19.39"
+local BUILD   = "2026-11-08 05:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6835,70 +6835,45 @@ function M.keyGuessStop()
 end
 
 --==== 字符串探针：看它把 key 做了什么变换 ====
-M.strProbe = { on = false, token = "XHUBTESTKEY123", log = 0 }
+M.strProbe = { on = false, token = "XHUBTESTKEY123", log = 0, busy = false, saved = {} }
 function M.strProbeStart(token)
-    M.strProbe.on = true
     M.strProbe.token = tostring(token or "XHUBTESTKEY123")
     M.strProbe.log = 0
-    if not hookfunction then
-        notify("执行器缺少 hookfunction，字符串探针不可用", "err", 4)
-        return
-    end
-    local names = { "lower", "upper", "sub", "byte", "len", "reverse", "gsub" }
+    if M.strProbe.on then return end
+    M.strProbe.on = true
+    local names = { "lower", "upper", "reverse" }
     for i = 1, #names do
         local nm = names[i]
-        local fn = string[nm]
-        if type(fn) == "function" then
-            pcall(function()
-                hookfunction(fn, newcclosure(function(...)
-                    local r = { fn(...) }
-                    if M.strProbe.on and M.strProbe.log < 40 then
-                        local a = { ... }
-                        local hit = false
-                        for k = 1, math.min(#a, 3) do
-                            if type(a[k]) == "string" and a[k]:find(M.strProbe.token, 1, true) then hit = true end
-                        end
-                        if hit then
-                            M.strProbe.log = M.strProbe.log + 1
-                            print(("[XHub][strprobe] string.%s -> %s"):format(nm, tostring(r[1])))
-                        end
-                    end
-                    return unpack(r)
-                end))
-            end)
-        end
-    end
-    print("[XHub][strprobe] 已挂载，请在卡密框输入: " .. M.strProbe.token)
-end
--- 监视"卡密错误"提示，判断是本地校验还是在线校验
-M.keyUiWatch = function()
-    if M._keyUiWatching then return end
-    M._keyUiWatching = true
-    local bad = { "incorrect", "invalid", "wrong", "expired", "not found", "错误", "无效" }
-    task.spawn(function()
-        while RUNNING do
-            task.wait(0.6)
-            if M.key.on then
-            pcall(function()
-                local root = lp:FindFirstChildOfClass("PlayerGui")
-                if not root then return end
-                for _, d in ipairs(root:GetDescendants()) do
-                    if d:IsA("TextLabel") or d:IsA("TextButton") then
-                        local t = tostring(d.Text or ""):lower()
-                        for _, k in ipairs(bad) do
-                            if t:find(k, 1, true) and not M._keyBadSeen[t] then
-                                M._keyBadSeen[t] = true
-                                print("[XHub][key] UI 拒绝提示: " .. tostring(d.Text))
-                                M.key.uiRefused = true
-                            end
-                        end
-                    end
+        local orig = string[nm]
+        if type(orig) == "function" and not M.strProbe.saved[nm] then
+            M.strProbe.saved[nm] = orig
+            string[nm] = function(s, ...)
+                if M.strProbe.busy then return orig(s, ...) end
+                M.strProbe.busy = true
+                local ok, r = pcall(orig, s, ...)
+                M.strProbe.busy = false
+                if ok and type(s) == "string" and type(r) == "string"
+                   and M.strProbe.log < 20 and s == M.strProbe.token then
+                    M.strProbe.log = M.strProbe.log + 1
+                    print("[XHub][strprobe] string." .. nm .. ": " .. s .. " -> " .. r)
                 end
-            end)
+                return r
             end
         end
-    end)
+    end
+    print("[XHub][strprobe] 已挂载（安全版）。请在卡密框输入: " .. M.strProbe.token)
 end
+
+function M.strProbeStop()
+    M.strProbe.on = false
+    M.strProbe.busy = false
+    for nm, orig in pairs(M.strProbe.saved or {}) do
+        pcall(function() string[nm] = orig end)
+    end
+    M.strProbe.saved = {}
+    print("[XHub][strprobe] 已恢复 string 原始函数")
+end
+
 --==== 卡密绕过（Access Portal / key system）====
 M.key = { on = false, fakeMode = "auto", log = {}, uiRefused = false }
 M._keyBadSeen = M._keyBadSeen or {}
@@ -8147,7 +8122,11 @@ M.addButton(pTool, "停止卡密暴力", function()
     M.keyGuessStop()
     notify(("已停止，共尝试 %d 次"):format(M.keyGui.tried), "info", 4)
 end)
-M.addButton(pTool, "字符串探针（看它怎么处理你的 key）", function()
+M.addButton(pTool, "关闭字符串探针（恢复原函数）", function()
+    M.strProbeStop()
+    notify("探针已关闭，string 函数已恢复", "ok", 4)
+end)
+M.addButton(pTool, "字符串探针（安全版，看它怎么处理 key）", function()
     M.strProbeStart("XHUBTESTKEY123")
     notify("探针已开：去卡密框输入 XHUBTESTKEY123 并点 Verify，然后看 F9", "info", 6)
 end)
