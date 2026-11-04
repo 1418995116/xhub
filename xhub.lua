@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.47"
-local BUILD   = "2026-11-08 13:00"
+local VERSION = "v19.48"
+local BUILD   = "2026-11-08 14:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6044,6 +6044,7 @@ M.addSlider(pVisual, "雷达显示距离", 40, 400, 140, function(v) M.radar.dis
 M.addSlider(pVisual, "雷达直径 px", 120, 320, 200, function(v) M.radar.size = v end)
 M.addToggle(pVisual, "雷达显示玩家", true, function(v) M.radar.showP = v end)
 M.addToggle(pVisual, "雷达显示 NPC/老师", true, function(v) M.radar.showN = v end)
+M.addToggle(pVisual, "雷达左右翻转（镜像就打开）", true, function(v) M.radar.flipX = v end)
 M.addButton(pVisual, "雷达朝向: 相机（点我切角色）", function()
     M.radar.yawMode = (M.radar.yawMode == "cam") and "char" or "cam"
     notify("雷达朝向 = " .. (M.radar.yawMode == "cam" and "相机" or "角色"), "info", 3)
@@ -7103,23 +7104,26 @@ function M.examDump()
 end
 function M.examRefresh()
     local ans = M.examScan()
-    M.exam.answers = ans
+    -- 合并：收起手机后保留之前扫到的答案
+    for n, l in pairs(ans) do M.exam.answers[n] = l end
+    local found = 0
+    for _ in pairs(ans) do found = found + 1 end
     local nums = {}
-    for n in pairs(ans) do nums[#nums + 1] = n end
+    for n in pairs(M.exam.answers) do nums[#nums + 1] = n end
     table.sort(nums)
     if #nums == 0 then
-        M.exam.lbl.Text = "没扫到答案。\n可能答案不在客户端，或界面文字格式不是 \"6. D\" 这种。"
-        M.exam.status.Text = "扫描完成：0 条"
+        M.exam.lbl.Text = "没扫到答案。\n拿手机翻页时才会出现答案，扫到后会一直保留。"
+        M.exam.status.Text = "扫描完成：0 条（保留 0 条）"
         return
     end
     local buf = {}
     for i = 1, #nums do
         local n = nums[i]
-        buf[#buf + 1] = ("Q%d:  <font color='#8ef'>%s</font>"):format(n, ans[n])
+        buf[#buf + 1] = ("Q%d:  <font color='#8ef'>%s</font>"):format(n, M.exam.answers[n])
     end
     M.exam.lbl.Text = table.concat(buf, "\n")
     M.exam.lbl.CanvasSize = UDim2.new(0, 0, 0, #nums * 20)
-    M.exam.status.Text = ("已解析 %d 题（共扫描到 %d 条文本）"):format(#nums, #nums)
+    M.exam.status.Text = ("保留 %d 题（本次扫到 %d 条）"):format(#nums, found)
 end
 
 function M.examTick()
@@ -7245,7 +7249,7 @@ pcall(function()
     end)
 end)
 --==== 2D 雷达（可拖动圆形雷达：玩家/NPC + 目标视野锥）====
-M.radar = { on = false, size = 200, dist = 140, showP = true, showN = true, showDesk = true, cone = true, yawMode = "cam", yawOffset = 0,
+M.radar = { on = false, size = 200, dist = 140, showP = true, showN = true, showDesk = true, cone = true, yawMode = "cam", yawOffset = 0, flipX = true,
             coneFov = 90, coneRange = 70, teacherPat = "teacher,prof,guard,monitor,npc" }
 
 function M.radarBuild()
@@ -7352,6 +7356,7 @@ function M.radarTick()
         local ca, sa = math.cos(yaw), math.sin(yaw)
         local x = rel.X * ca - rel.Z * sa
         local z = rel.X * sa + rel.Z * ca
+        if M.radar.flipX then x = -x end
         local nx = math.clamp(x / maxD, -1, 1)
         local nz = math.clamp(-z / maxD, -1, 1)
         if (nx * nx + nz * nz) > 1 then return end
@@ -7417,6 +7422,7 @@ function M.radarTick()
                     local ca, sa = math.cos(yaw), math.sin(yaw)
                     local x = rel.X * ca - rel.Z * sa
                     local z = rel.X * sa + rel.Z * ca
+        if M.radar.flipX then x = -x end
                     local nx = math.clamp(x / maxD, -1, 1)
                     local nz = math.clamp(-z / maxD, -1, 1)
                     local ln = Instance.new("Frame")
@@ -8500,6 +8506,11 @@ end)
 M.addButton(pTool, "关闭 答题 Hub 窗口", function()
     M.exam.open = false
     notify("答题 Hub 已关闭（雷达仍可单独用）", "info", 3)
+end)
+M.addButton(pTool, "清空已记录答案", function()
+    M.exam.answers = {}
+    M.exam.lastTick = 0
+    notify("答案记录已清空", "info", 3)
 end)
 M.addButton(pTool, "重新扫描答案", function()
     M.exam.lastTick = 0
