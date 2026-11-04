@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.65"
-local BUILD   = "2026-11-09 05:00"
+local VERSION = "v19.66"
+local BUILD   = "2026-11-09 06:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7175,6 +7175,77 @@ M.cnMap = {
     ["Question"]="题目", ["Paper"]="答题纸", ["Submit"]="提交",
     ["Score"]="分数", ["Grade"]="成绩", ["Correct"]="正确", ["Wrong"]="错误",
     ["Status"]="状态", ["Progress"]="进度", ["Toggle"]="开关", ["Keybind"]="按键",
+    -- 答题脚本（KreinHub）页签 / 主要
+    ["Main"]="主要", ["Auto"]="自动", ["Shop"]="商店", ["Settings"]="设置",
+    ["Features"]="功能", ["All Features"]="全部功能", ["Info"]="信息", ["More"]="更多",
+    ["HUB"]="面板", ["Credits"]="点数", ["LEVEL"]="等级", ["Level"]="等级",
+    ["AIMBOT"]="自瞄", ["ANSWERS"]="答案", ["ANXIETY"]="焦虑值",
+    ["MOVEMENT"]="移动", ["CLASSROOM"]="教室", ["SPEED"]="速度", ["COLOR"]="颜色",
+    ["COLLECT"]="收集", ["CLICK"]="点击", ["SHOP"]="商店", ["CREDITS"]="点数",
+    -- 难度 / 模式
+    ["Safe"]="安全", ["Basic"]="基础", ["Moderate"]="中等", ["Aggressive"]="激进",
+    ["Fast"]="快速", ["Slow"]="慢速", ["Advanced"]="高级", ["Master"]="大师",
+    ["Phone Type"]="手机型号", ["Phone 2"]="手机 2", ["Phone 3"]="手机 3",
+    ["Phone 4"]="手机 4", ["Phone 5"]="手机 5",
+    ["White"]="白色", ["Red"]="红色", ["Orange"]="橙色", ["Yellow"]="黄色",
+    ["Green"]="绿色", ["Blue"]="蓝色", ["Purple"]="紫色", ["Pink"]="粉色",
+    -- 答案相关
+    ["Show Answers"]="显示答案", ["Force Answer"]="强制答题", ["Load Answers"]="加载答案",
+    ["auto answer"]="自动答题", ["Answer Paper"]="答题纸", ["Open Answer Paper"]="打开答题纸",
+    ["Answer feedback & grade streaks"]="答题反馈与连对奖励",
+    ["after 3 fails per question, skip"]="每题失败 3 次后跳过",
+    ["auto answer: after 3 fails, skip"]="自动答题：失败 3 次后跳过",
+    -- 老师 / 视野相关
+    ["Teacher Camera"]="老师视角", ["Teacher Info"]="老师信息", ["Rescan Teacher"]="重扫老师",
+    ["Vision Detection"]="视野检测", ["Vision Distance Gate"]="视野距离阈值",
+    ["Peripheral Vision"]="余光视野", ["Predictive Look"]="预判朝向",
+    ["Predict Distance Gate"]="预判距离阈值", ["Sprint Detection"]="冲刺检测",
+    ["Proximity Panic"]="靠近警报", ["Multi-Point LOS"]="多点视线检测",
+    ["found: Chemistry Teacher"]="发现：化学老师",
+    ["teacher sprint!"]="老师冲刺！", ["The teacher is grading."]="老师正在批改。",
+    ["green corner = safest direction"]="绿色角=最安全方向",
+    ["Changed Teacher Vision"]="老师视野已变",
+    -- 商店 / 物品
+    ["Buy"]="购买", ["Sell"]="出售", ["BUY PEN"]="买笔", ["BUY ERASER"]="买橡皮",
+    ["BUY PHONE"]="买手机", ["BUY SMARTWATCH"]="买手表", ["Buy Pen"]="购买笔",
+    ["Buy Eraser"]="购买橡皮", ["Buy Phone"]="购买手机", ["Buy SmartWatch"]="购买手表",
+    ["Pen"]="笔", ["Pencil"]="铅笔", ["Eraser"]="橡皮", ["Phone"]="手机",
+    ["Phones"]="手机", ["Smart Watch"]="智能手表", ["Smart Glasses"]="智能眼镜",
+    ["Backpack"]="背包", ["Locker"]="储物柜", ["EQUIPPED"]="已装备", ["Select Item"]="选择物品",
+    ["Remove From Hotbar"]="从快捷栏移除", ["SELL"]="卖出", ["EQUIPPED"]="已装备",
+    ["tool locked"]="工具已锁定",
+    -- 通用按钮
+    ["Accept"]="接受", ["Decline"]="拒绝", ["Cancel"]="取消", ["Join"]="加入",
+    ["Ready"]="准备", ["Restart Now"]="立即重启", ["Update"]="更新",
+    ["Update Required"]="需要更新", ["Report"]="举报", ["SUBMIT REPORT"]="提交举报",
+    ["Choose Your Seat"]="选择座位", ["Random Seat"]="随机座位",
+    ["Pick Your Seat Forever"]="永久选定座位", ["Keep your inventory?"]="保留背包物品？",
+    ["Save your answer paper progress?"]="保存答题进度？", ["Goodbye!"]="再见！",
+    ["Test Pen"]="测试笔", ["Test Emergency"]="测试紧急情况", ["Check Status"]="查看状态",
+    ["Class Panel"]="班级面板", ["Diagnostics"]="诊断", ["Credits"]="点数",
+    ["Donate"]="捐赠", ["Support"]="支持", ["Upcoming"]="即将推出", ["Unavailable"]="不可用",
+    ["No grades yet"]="暂无成绩", ["Player name"]="玩家名",
+    ["Top Donator"]="最高捐赠", ["OWNER GIFTS"]="服主赠礼", ["THIS SERVER"]="本服务器",
+    ["Top #50 Donators"]="前 50 名捐赠者", ["Highest Total Grade Average"]="最高总平均分",
+    ["Best Attendance"]="最佳出勤", ["Total Grade Average"]="总平均分",
+    ["Class Average"]="班级平均", ["daily streak rewards"]="每日连签奖励",
+    ["24-Hour Inventory & Credit Saving"]="24 小时背包与点数保存",
+    ["Donator Perks"]="捐赠者特权", ["Code"]="兑换码", ["Codes"]="兑换码",
+    -- 键位 / 操作
+    ["Primary / Use"]="主用/使用", ["Secondary / Peek"]="副用/探身",
+    ["Select/Swap"]="选择/切换", ["Lock Mouse"]="锁定鼠标", ["Unlock Mouse"]="解锁鼠标",
+    ["Default Controls"]="默认按键", ["Controls"]="按键说明", ["Shift"]="Shift",
+    ["Take Photo"]="拍照", ["Take a photo"]="拍一张照片", ["Pause Loading"]="暂停加载",
+    ["load"]="加载", ["running"]="运行中", ["standby"]="待命", ["panel running"]="面板运行中",
+    ["waiting"]="等待", ["resets"]="重置", ["switched"]="已切换",
+    ["Direction Arrow"]="方向箭头", ["Show Character"]="显示角色",
+    -- 性能 / 其它
+    ["Boost FPS"]="提升帧率", ["Default"]="默认", ["Character"]="角色",
+    ["Backpack"]="背包", ["Snitch"]="告密者", ["Gaggee33"]="",
+    ["Bug Reports"]="Bug 反馈", ["Report"]="举报", ["V1.0.0"]="",
+    ["Zoom In Option for Answer Paper"]="答题纸放大选项",
+    ["ISS Room"]="留校察看室", ["ISS Supervisor"]="留校察看监督员",
+    ["Roleplay"]="角色扮演",
     -- pf_lite（Phantom Forces）
     ["Silent Aim"]="静默自瞄", ["Aim Assist"]="辅助自瞄", ["Aim"]="瞄准",
     ["Hitpart"]="命中部位", ["Prediction"]="预判", ["Prediction Value"]="预判强度",
