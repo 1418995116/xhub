@@ -7245,7 +7245,8 @@ function M.examTick()
     if not M.exam.gui then return end
     M.exam.gui.Enabled = true
     local now = os.clock()
-    local iv = (M.exam.fast and 0.18) or 0.7\n    if now - (M.exam.lastTick or 0) < iv then return end
+    local iv = (M.exam.fast and 0.18) or 0.7
+    if now - (M.exam.lastTick or 0) < iv then return end
     M.exam.lastTick = now
     pcall(M.examRefresh)
 end
