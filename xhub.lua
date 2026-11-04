@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.52"
-local BUILD   = "2026-11-08 17:20"
+local VERSION = "v19.53"
+local BUILD   = "2026-11-08 18:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7007,45 +7007,6 @@ function M.ansParseString(str)
 end
 
 --==== 自动刷答案：向 PhoneDisplay 连发 BeginPhoto，抓 SetAnswer ====
-M.phone = { on = false, count = 0, max = 40, interval = 1.1 }
-
-function M.phoneRemote()
-    local RS2 = game:GetService("ReplicatedStorage")
-    local r = RS2:FindFirstChild("PhoneDisplay")
-    if r and (r:IsA("RemoteEvent") or r:IsA("UnreliableRemoteEvent")) then return r end
-    for _, d in ipairs(RS2:GetDescendants()) do
-        if tostring(d.Name) == "PhoneDisplay" and d:IsA("RemoteEvent") then return d end
-    end
-    return nil
-end
-
-function M.phoneAutoStart(maxN)
-    local r = M.phoneRemote()
-    if not r then return false, "没找到 PhoneDisplay" end
-    if M.phone.on then return true, "已在运行" end
-    M.phone.on = true
-    M.phone.count = 0
-    M.phone.max = maxN or 40
-    task.spawn(function()
-        while M.phone.on and M.phone.count < M.phone.max and RUNNING do
-            M.phone.count = M.phone.count + 1
-            pcall(function() r:FireServer("BeginPhoto") end)
-            print(("[XHub][phone] 第 %d 次请求答案（FireServer BeginPhoto）"):format(M.phone.count))
-            local t0 = os.clock()
-            while os.clock() - t0 < M.phone.interval and M.phone.on do task.wait(0.05) end
-        end
-        M.phone.on = false
-        local n = 0
-        for _ in pairs(M.exam.answers) do n = n + 1 end
-        print(("[XHub][phone] 结束，共记录 %d 条答案"):format(n))
-    end)
-    return true, "开始自动查答案"
-end
-
-function M.phoneAutoStop()
-    M.phone.on = false
-end
---==== 答案捕获器：监听所有可疑 Remote，抓到就记录；并能回放请求 ====
 M.spy = { on = false, log = {}, remotes = {} }
 
 function M.spyCandidates()
@@ -8809,27 +8770,9 @@ M.addButton(pTool, "关闭 答题 Hub 窗口", function()
     M.exam.open = false
     notify("答题 Hub 已关闭（雷达仍可单独用）", "info", 3)
 end)
-M.addButton(pTool, "自动查答案（连发 BeginPhoto，抓全部）", function()
-    M.spyStart()
-    local ok, msg = M.phoneAutoStart(40)
-    notify(ok and "开始自动查答案：每 1.1 秒一次，最多 40 次" or tostring(msg), ok and "ok" or "warn", 6)
-end)
-M.addButton(pTool, "停止自动查答案", function()
-    M.phoneAutoStop()
-    local n = 0
-    for _ in pairs(M.exam.answers) do n = n + 1 end
-    notify(("已停止，当前记录 %d 条答案"):format(n), "info", 5)
-end)
 M.addButton(pTool, "开始监听答案（QueryAnswer/Phone 等 Remote）", function()
     local ok = M.spyStart()
     notify(ok and "已监听：请你拿手机查一次答案，我会捕获服务器的回复" or "没找到可疑 Remote", ok and "ok" or "warn", 6)
-end)
-M.addButton(pTool, "回放请求：向所有可疑 Remote 试 1~60", function()
-    notify("正在回放调用…（可能被服务器限流）", "info", 3)
-    task.spawn(function()
-        local hits = M.spyReplay(60)
-        notify(("回放完成，有返回的调用 %d 次"):format(hits), hits > 0 and "ok" or "warn", 6)
-    end)
 end)
 M.addButton(pTool, "导出捕获到的答案数据", function()
     local txt = M.spyDump()
