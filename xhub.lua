@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.37"
-local BUILD   = "2026-11-08 04:10"
+local VERSION = "v19.38"
+local BUILD   = "2026-11-08 05:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6766,6 +6766,110 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
 
 -- 菜单打开/关闭时只设置一次鼠标状态；不再每帧抢（坐着+第一人称游戏会抖动）
 
+--==== 卡密 UI 自动化（无 continue / 无 goto，Luau 与 5.1 都能解析）====
+M.keyGui = { box = nil, btn = nil, guessing = false, tried = 0, ok = false }
+
+function M.keyFindPortal()
+    local fb, fbtn = nil, nil
+    local roots = { CoreGui, lp:FindFirstChildOfClass("PlayerGui") }
+    for i = 1, 2 do
+        local root = roots[i]
+        if root then
+            local descs = root:GetDescendants()
+            for j = 1, #descs do
+                local d = descs[j]
+                if d:IsA("TextBox") then fb = d end
+                if d:IsA("TextButton") then
+                    local t = tostring(d.Text or ""):lower()
+                    if t:find("verify", 1, true) or t:find("验证", 1, true) then fbtn = d end
+                end
+            end
+        end
+    end
+    M.keyGui.box, M.keyGui.btn = fb, fbtn
+    return fb, fbtn
+end
+
+function M.keyClickBtn(btn)
+    local vim = game:GetService("VirtualInputManager")
+    local ap = btn.AbsolutePosition
+    local as = btn.AbsoluteSize
+    pcall(function()
+        vim:SendMouseButtonEvent(ap.X + as.X / 2, ap.Y + as.Y / 2, 0, true, game, 1)
+        vim:SendMouseButtonEvent(ap.X + as.X / 2, ap.Y + as.Y / 2, 0, false, game, 1)
+    end)
+end
+
+function M.keyGuessStart(fromN, toN, step)
+    if M.keyGui.guessing then return end
+    M.keyGui.guessing = true
+    M.keyGui.tried, M.keyGui.ok = 0, false
+    task.spawn(function()
+        local stepv = step or 1
+        local i = fromN
+        while i <= toN do
+            if (not M.keyGui.guessing) or (not RUNNING) then break end
+            M.keyFindPortal()
+            if not (M.keyGui.box and M.keyGui.btn) then
+                notify("Portal 已消失 → 可能已通过", "ok", 4)
+                M.keyGui.ok = true
+                break
+            end
+            pcall(function() M.keyGui.box.Text = tostring(i) end)
+            task.wait(0.04)
+            pcall(M.keyClickBtn, M.keyGui.btn)
+            M.keyGui.tried = M.keyGui.tried + 1
+            if M.keyGui.tried % 25 == 0 then
+                print(("[XHub][key] 已试 %d 次（当前 %d）"):format(M.keyGui.tried, i))
+            end
+            task.wait(0.06)
+            i = i + stepv
+        end
+        M.keyGui.guessing = false
+        print(("[XHub][key] 结束：共 %d 次"):format(M.keyGui.tried))
+    end)
+end
+
+function M.keyGuessStop()
+    M.keyGui.guessing = false
+end
+
+--==== 字符串探针：看它把 key 做了什么变换 ====
+M.strProbe = { on = false, token = "XHUBTESTKEY123", log = 0 }
+function M.strProbeStart(token)
+    M.strProbe.on = true
+    M.strProbe.token = tostring(token or "XHUBTESTKEY123")
+    M.strProbe.log = 0
+    if not hookfunction then
+        notify("执行器缺少 hookfunction，字符串探针不可用", "err", 4)
+        return
+    end
+    local names = { "lower", "upper", "sub", "byte", "len", "reverse", "gsub" }
+    for i = 1, #names do
+        local nm = names[i]
+        local fn = string[nm]
+        if type(fn) == "function" then
+            pcall(function()
+                hookfunction(fn, newcclosure(function(...)
+                    local r = { fn(...) }
+                    if M.strProbe.on and M.strProbe.log < 40 then
+                        local a = { ... }
+                        local hit = false
+                        for k = 1, math.min(#a, 3) do
+                            if type(a[k]) == "string" and a[k]:find(M.strProbe.token, 1, true) then hit = true end
+                        end
+                        if hit then
+                            M.strProbe.log = M.strProbe.log + 1
+                            print(("[XHub][strprobe] string.%s -> %s"):format(nm, tostring(r[1])))
+                        end
+                    end
+                    return unpack(r)
+                end))
+            end)
+        end
+    end
+    print("[XHub][strprobe] 已挂载，请在卡密框输入: " .. M.strProbe.token)
+end
 -- 监视"卡密错误"提示，判断是本地校验还是在线校验
 M.keyUiWatch = function()
     if M._keyUiWatching then return end
@@ -8034,6 +8138,18 @@ M.addButton(pTool, "卡密诊断（看它是联网校验还是本地比对）", 
         if type(setclipboard) == "function" then pcall(setclipboard, txt) end
         notify("已记录 " .. #M.key.log .. " 条请求（已复制），发我即可精确伪造", "info", 6)
     end
+end)
+M.addButton(pTool, "卡密暴力试（数字 1~9999，自动点 Verify）", function()
+    notify("开始暴力尝试：每 0.1 秒一个", "warn", 4)
+    M.keyGuessStart(1, 9999, 1)
+end)
+M.addButton(pTool, "停止卡密暴力", function()
+    M.keyGuessStop()
+    notify(("已停止，共尝试 %d 次"):format(M.keyGui.tried), "info", 4)
+end)
+M.addButton(pTool, "字符串探针（看它怎么处理你的 key）", function()
+    M.strProbeStart("XHUBTESTKEY123")
+    notify("探针已开：去卡密框输入 XHUBTESTKEY123 并点 Verify，然后看 F9", "info", 6)
 end)
 M.addButton(pTool, "切换伪造返回值（auto / true / valid）", function()
     if M.key.fakeMode == "auto" then M.key.fakeMode = "true"
