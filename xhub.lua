@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.71"
-local BUILD   = "2026-11-09 11:00"
+local VERSION = "v19.72"
+local BUILD   = "2026-11-09 12:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7922,24 +7922,16 @@ function M.submitAll()
     for _, q in ipairs(nums) do
         if not M.loop.on then break end
         local letter = M.ans.key[q]
-        local okc, res, correct = pcall(function() return rf:InvokeServer(q, letter) end)
-        if okc and res then
+        local good, correct, sigName = M.ansTrySubmit(q, letter)
+        if good then
             M.ans.mine[q] = letter
             M.ans.submitted = M.ans.submitted + 1
             okN = okN + 1
-            print(("[XHub][ans] Q%d -> %s 已提交%s"):format(q, letter, correct and "（对）" or ""))
+            print(("[XHub][ans] Q%d -> %s 已提交%s [%s]"):format(q, letter, correct and "（对）" or "", tostring(sigName)))
         else
-            local ok2, res2 = pcall(function() return rf:InvokeServer(tostring(q), letter) end)
-            if ok2 and res2 then
-                M.ans.mine[q] = letter
-                M.ans.submitted = M.ans.submitted + 1
-                okN = okN + 1
-                print(("[XHub][ans] Q%d(str) -> %s 已提交"):format(q, letter))
-            else
-                badN = badN + 1
-                M.ans.rejected = M.ans.rejected + 1
-                print(("[XHub][ans] Q%d -> %s 被拒：%s"):format(q, letter, tostring(res)))
-            end
+            badN = badN + 1
+            M.ans.rejected = M.ans.rejected + 1
+            print(("[XHub][ans] Q%d -> %s 全部签名均被拒"):format(q, letter))
         end
         task.wait(0.12)
     end
@@ -7951,6 +7943,7 @@ function M.loopStart(maxRound)
     if not M.ansTable() then return false, "找不到 PlayerAnswerTable" end
     M.ansListen()
     M.ans.force = true
+    M.ansSigIdx = nil
     M.loop.on = true
     M.loop.round = 0
     M.loop.maxRound = maxRound or 30
@@ -8056,7 +8049,7 @@ function M.ansCanSubmit()
     if workspace:GetAttribute("GameStatus") ~= "Assessment In Progress" then return false, "不在考试中" end
     local c = lp.Character
     if not c then return false, "无角色" end
-    if c:GetAttribute("DeathSequenceActive") == true then return false, "死亡中" end
+    if (not M.ans.force) and c:GetAttribute("DeathSequenceActive") == true then return false, "死亡中" end
     local h = c:FindFirstChildOfClass("Humanoid")
     if not h or not h.Sit then return false, "没坐下" end
     return true, "ok"
@@ -8080,6 +8073,39 @@ function M.ansReadMine()
     return false, 0
 end
 
+-- 自动找出可用的提交签名，并缓存
+M.ansSigIdx = nil
+M.ansSigList = {
+    { name = "(q,letter)",        fn = function(rf, q, l) return rf:InvokeServer(q, l) end },
+    { name = "(\"q\",letter)",    fn = function(rf, q, l) return rf:InvokeServer(tostring(q), l) end },
+    { name = "(q,letter,true)",   fn = function(rf, q, l) return rf:InvokeServer(q, l, true) end },
+    { name = "(letter,q)",        fn = function(rf, q, l) return rf:InvokeServer(l, q) end },
+    { name = "({question,answer})", fn = function(rf, q, l) return rf:InvokeServer({ question = q, answer = l }) end },
+    { name = "({q,a})",           fn = function(rf, q, l) return rf:InvokeServer({ q = q, a = l }) end },
+    { name = "(q,{answer=l})",    fn = function(rf, q, l) return rf:InvokeServer(q, { answer = l }) end },
+}
+
+function M.ansTrySubmit(q, letter)
+    local rf = M.ansTable()
+    if not rf then return false, "no remote" end
+    -- 已探测成功过 → 直接用
+    if M.ansSigIdx then
+        local sig = M.ansSigList[M.ansSigIdx]
+        local ok, res, correct = pcall(sig.fn, rf, q, letter)
+        if ok and res then return true, correct, sig.name end
+        M.ansSigIdx = nil
+    end
+    -- 逐个试
+    for i, sig in ipairs(M.ansSigList) do
+        local ok, res, correct = pcall(sig.fn, rf, q, letter)
+        if ok and res then
+            M.ansSigIdx = i
+            print(("[XHub][sig] 命中签名 %s"):format(sig.name))
+            return true, correct, sig.name
+        end
+    end
+    return false, nil, nil
+end
 -- 提交签名探测：把各种可能的调用方式都试一遍（只对 Q1）
 function M.ansProbeSignatures()
     local rf = M.ansTable()
