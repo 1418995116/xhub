@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.69"
-local BUILD   = "2026-11-09 09:00"
+local VERSION = "v19.70"
+local BUILD   = "2026-11-09 10:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7891,6 +7891,115 @@ pcall(function()
         if RUNNING and M.mirror.on then pcall(M.mirrorTick) end
     end)
 end)
+--==== 全自动答题循环：拍照(Q/E) → 提交 → 再拍 → 直到答完 ====
+M.loop = { on = false, round = 0, maxRound = 30, lastCount = 0 }
+
+function M.loopPress(kc)
+    local vim = game:GetService("VirtualInputManager")
+    local key = Enum.KeyCode[kc]
+    pcall(function()
+        vim:SendKeyEvent(true, key, false, game)
+        task.wait(0.08)
+        vim:SendKeyEvent(false, key, false, game)
+    end)
+end
+
+function M.ansCount()
+    local c = 0
+    for _ in pairs(M.ans.key) do c = c + 1 end
+    return c
+end
+
+function M.submitAll()
+    local rf = M.ansTable()
+    if not rf then return 0, 0 end
+    local nums = {}
+    for q in pairs(M.ans.key) do
+        if M.ans.mine[q] == nil then nums[#nums + 1] = q end
+    end
+    table.sort(nums)
+    local okN, badN = 0, 0
+    for _, q in ipairs(nums) do
+        if not M.loop.on then break end
+        local letter = M.ans.key[q]
+        local okc, res, correct = pcall(function() return rf:InvokeServer(q, letter) end)
+        if okc and res then
+            M.ans.mine[q] = letter
+            M.ans.submitted = M.ans.submitted + 1
+            okN = okN + 1
+            print(("[XHub][ans] Q%d -> %s 已提交%s"):format(q, letter, correct and "（对）" or ""))
+        else
+            local ok2, res2 = pcall(function() return rf:InvokeServer(tostring(q), letter) end)
+            if ok2 and res2 then
+                M.ans.mine[q] = letter
+                M.ans.submitted = M.ans.submitted + 1
+                okN = okN + 1
+                print(("[XHub][ans] Q%d(str) -> %s 已提交"):format(q, letter))
+            else
+                badN = badN + 1
+                M.ans.rejected = M.ans.rejected + 1
+                print(("[XHub][ans] Q%d -> %s 被拒：%s"):format(q, letter, tostring(res)))
+            end
+        end
+        task.wait(0.12)
+    end
+    return okN, badN
+end
+
+function M.loopStart(maxRound)
+    if M.loop.on then return false, "已在运行" end
+    if not M.ansTable() then return false, "找不到 PlayerAnswerTable" end
+    M.ansListen()
+    M.ans.force = true
+    M.loop.on = true
+    M.loop.round = 0
+    M.loop.maxRound = maxRound or 30
+    M.loop.lastCount = M.ansCount()
+    task.spawn(function()
+        local rf = M.ansTable()
+        pcall(function()
+            local ok, answers = pcall(function() return rf:InvokeServer() end)
+            if ok and type(answers) == "table" then
+                for k, v in pairs(answers) do
+                    local kn = tonumber(k) or k
+                    if v ~= "UNANSWERED" then M.ans.mine[kn] = v end
+                end
+            end
+        end)
+        print(("[XHub][loop] 开始，服务器已答 %d 题"):format((function()
+            local c = 0 for _ in pairs(M.ans.mine) do c = c + 1 end return c end)()))
+        while M.loop.on and M.loop.round < M.loop.maxRound and RUNNING do
+            M.loop.round = M.loop.round + 1
+            local before = M.ansCount()
+            -- 拍照
+            M.loopPress("Q")
+            print(("[XHub][loop] 第 %d 轮：按 Q 拍照"):format(M.loop.round))
+            task.wait(1.1)
+            M.loopPress("E")
+            -- 等新答案（最多 6 秒）
+            local t0 = os.clock()
+            while os.clock() - t0 < 6 and M.loop.on do
+                task.wait(0.25)
+                if M.ansCount() > before then break end
+            end
+            local after = M.ansCount()
+            print(("[XHub][loop] 答案 %d → %d 条"):format(before, after))
+            -- 提交目前所有已知答案
+            local okN, badN = M.submitAll()
+            print(("[XHub][loop] 本轮提交成功 %d，被拒 %d"):format(okN, badN))
+            task.wait(1.2 + math.random())
+        end
+        M.loop.on = false
+        local c, m = M.ansCount(), 0
+        for _ in pairs(M.ans.mine) do m = m + 1 end
+        print(("[XHub][loop] 结束：答案 %d 条，已答 %d 题"):format(c, m))
+    end)
+    return true, "全自动答题已开（拍照→提交→循环）"
+end
+
+function M.loopStop()
+    M.loop.on = false
+end
 --==== 自动答题（自己的实现：监听手机答案 + 走游戏接口提交）=====
 M.ans = { key = {}, mine = {}, on = false, stop = false, submitted = 0, rejected = 0, force = false }
 
@@ -8178,7 +8287,15 @@ M.addButton(pTool, "列出游戏所有 GUI 名字（排查用）", function()
     if type(setclipboard) == "function" then pcall(setclipboard, txt) end
     notify("已打印并复制 " .. #names .. " 个界面名", "info", 5)
 end)
-M.addButton(pTool, "自动答题 开（拍照拿答案 → 自动提交）", function()
+M.addButton(pTool, "全自动答题（拍照→提交→循环，直到答完）", function()
+    local ok, msg = M.loopStart(30)
+    notify(tostring(msg), ok and "ok" or "warn", 6)
+end)
+M.addButton(pTool, "停止 全自动答题", function()
+    M.loopStop()
+    notify(("已停止：答案 %d 条，提交成功 %d"):format(M.ansCount(), M.ans.submitted), "info", 5)
+end)
+M.addButton(pTool, "自动答题 开（只提交，不拍照）", function()
     local ok, msg = M.ansStart()
     notify(tostring(msg), ok and "ok" or "warn", 6)
 end)
