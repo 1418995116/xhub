@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.56"
-local BUILD   = "2026-11-08 20:40"
+local VERSION = "v19.57"
+local BUILD   = "2026-11-08 21:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7006,7 +7006,7 @@ function M.phoneEquipped()
     return nil
 end
 
-function M.photoAutoStart(maxN, baseSec)
+function M.photoAutoStart(maxN, baseSec, jitSec)
     if M.photoAuto.on then return false, "已在运行" end
     if not M.phoneEquipped() then
         return false, "请先拿起手机（手上没有 phone/cell 工具）"
@@ -7018,6 +7018,7 @@ function M.photoAutoStart(maxN, baseSec)
     M.photoAuto.n = 0
     M.photoAuto.max = maxN or 30
     if baseSec then M.photoAuto.base = baseSec end
+    if jitSec then M.photoAuto.jit = jitSec end
     task.spawn(function()
         while M.photoAuto.on and M.photoAuto.n < M.photoAuto.max and RUNNING do
             if not M.phoneEquipped() then
@@ -7045,6 +7046,7 @@ function M.photoAutoStart(maxN, baseSec)
                 print(("[XHub][photo] 第 %d 轮：E 确认加载"):format(M.photoAuto.n))
             end
             local waitSec = M.photoAuto.base + math.random() * M.photoAuto.jit
+            print(("[XHub][photo] 下一轮间隔 %.2f 秒"):format(waitSec))
             local t0 = os.clock()
             while os.clock() - t0 < waitSec and M.photoAuto.on do task.wait(0.1) end
         end
@@ -9000,7 +9002,13 @@ M.addButton(pTool, "关闭 答题 Hub 窗口", function()
     M.exam.open = false
     notify("答题 Hub 已关闭（雷达仍可单独用）", "info", 3)
 end)
-M.addSlider(pTool, "拍照每轮间隔（秒）", 4, 20, 6, function(v) M.photoAuto.base = v end)
+M.addButton(pTool, "节奏测试（2 秒 ± 2 秒，先试 8 轮）", function()
+    M.spyStart()
+    M.photoAuto.base, M.photoAuto.jit = 2, 4
+    local ok, msg = M.photoAutoStart(8, 2, 4)
+    notify(tostring(msg) .. "（间隔 0~4 秒随机）", ok and "ok" or "warn", 6)
+end)
+M.addSlider(pTool, "拍照每轮间隔（秒）", 0, 20, 6, function(v) M.photoAuto.base = v end)
 M.addSlider(pTool, "Q→E 等待（秒）", 0.5, 5, 1.2, function(v) M.photoAuto.gap = v end)
 M.addSlider(pTool, "拍照轮数上限", 3, 40, 30, function(v) M.photoAuto.max = v end)
 M.addButton(pTool, "安全拍照（老师看不到你时才查答案）", function()
