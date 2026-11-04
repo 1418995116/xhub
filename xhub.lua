@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.68"
-local BUILD   = "2026-11-09 08:00"
+local VERSION = "v19.69"
+local BUILD   = "2026-11-09 09:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -8025,6 +8025,14 @@ function M.ansStart()
         while M.ans.on and not M.ans.stop and RUNNING do
             local can, why = M.ansCanSubmit()
             if not can then
+                local nowT = os.clock()
+                if nowT - (M.ans.lastWhy or 0) > 2 then
+                    M.ans.lastWhy = nowT
+                    local gs = tostring(workspace:GetAttribute("GameStatus"))
+                    local hh = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+                    print(("[XHub][ans] 等待：%s  (GameStatus=%s, Sit=%s)"):format(
+                        tostring(why), gs, tostring(hh and hh.Sit)))
+                end
                 task.wait(0.6)
             else
                 local rf = M.ansTable()
@@ -8041,13 +8049,21 @@ function M.ansStart()
                         local ok2, why2 = M.ansCanSubmit()
                         if not ok2 then break end
                         local letter = M.ans.key[q]
-                        local okc, res = pcall(function() return rf:InvokeServer(q, letter) end)
+                        local okc, res, extra = pcall(function() return rf:InvokeServer(q, letter) end)
                         if okc and res then
                             M.ans.mine[q] = letter
                             M.ans.submitted = M.ans.submitted + 1
-                            print(("[XHub][ans] Q%d -> %s 已提交"):format(q, letter))
+                            print(("[XHub][ans] Q%d -> %s 已提交%s"):format(q, letter, extra and "（正确）" or ""))
                         else
                             M.ans.rejected = M.ans.rejected + 1
+                            print(("[XHub][ans] Q%d -> %s 被拒：%s"):format(q, letter, tostring(res)))
+                            -- 再试一次字符串题号
+                            local ok2, res2 = pcall(function() return rf:InvokeServer(tostring(q), letter) end)
+                            if ok2 and res2 then
+                                M.ans.mine[q] = letter
+                                M.ans.submitted = M.ans.submitted + 1
+                                print(("[XHub][ans] Q%d(str) -> %s 已提交"):format(q, letter))
+                            end
                         end
                         task.wait(0.14)
                     end
