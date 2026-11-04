@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.29"
-local BUILD   = "2026-11-07 21:50"
+local VERSION = "v19.30"
+local BUILD   = "2026-11-07 23:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -88,7 +88,7 @@ local S = {
     fly = false, flySpeed = 120,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
+    aim = false, trigger = false, triggerFov = 12, triggerDelay = 0.08, triggerWall = true, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "align", antiSnap = true, flyResp = 200, flyRigid = true,
@@ -6338,6 +6338,13 @@ M.addToggle(pCombat, "显示自瞄 FOV 圈（青色）", true, function(v) S.sho
 M.addToggle(pCombat, "隔墙忽略", true, function(v) S.aimWall = v end)
 M.addSlider(pCombat, "FOV 像素（=锁定范围，圈多大就锁多远）", 20, 600, S.aimFov, function(v) S.aimFov = v end)
 M.addSlider(pCombat, "自瞄强度（越大越快锁死）", 5, 100, 45, function(v) S.aimStrength = v end)
+M.addToggle(pCombat, "自动开火（准星压住就点鼠标）", false, function(v)
+    S.trigger = v
+    notify(v and "自动开火已开（Triggerbot）" or "自动开火已关", "info", 2.6)
+end)
+M.addSlider(pCombat, "自动开火范围（准星像素）", 2, 100, 12, function(v) S.triggerFov = v end)
+M.addSlider(pCombat, "自动开火延迟 ms", 10, 500, 80, function(v) S.triggerDelay = v / 1000 end)
+M.addToggle(pCombat, "自动开火隔墙忽略", true, function(v) S.triggerWall = v end)
 M.addToggle(pCombat, "无后座（相机后坐补偿）", false, function(v)
     S.noRecoil = v
     notify(v and "无后座已开（补偿开火时的镜头上跳）" or "无后座已关", "info", 3)
@@ -6738,6 +6745,84 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
 
 -- 菜单打开/关闭时只设置一次鼠标状态；不再每帧抢（坐着+第一人称游戏会抖动）
 
+--==== 自动开火（Triggerbot）：准星压住就点鼠标 ====
+M.trig = { last = 0 }
+function M.triggerFind()
+    local vp = cam.ViewportSize
+    local center = Vector2.new(vp.X / 2, vp.Y / 2)
+    local best, bestD = nil, (S.triggerFov or 10)
+    local function consider(part, ent)
+        if not part then return end
+        local sp, on = cam:WorldToViewportPoint(part.Position)
+        if not on then return end
+        local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+        if d > bestD then return end
+        if (S.triggerWall ~= false) and (not M.canSee(part)) then return end
+        bestD, best = d, ent
+    end
+    pcall(function()
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= lp and p.Character then
+                if not (M.isMate(p) and not S.aimTeam) then
+                    consider(M.pickAimPart(p.Character, S.aimPart or "Head"), p)
+                end
+            end
+        end
+        if S.aimNpc then
+            for m in pairs(npcStore) do
+                if m and m.Parent then
+                    consider(M.pickAimPart(m, S.aimPart or "Head"), m)
+                end
+            end
+        end
+    end)
+    return best
+end
+
+function M.triggerTick()
+    if not S.trigger then return end
+    local now = os.clock()
+    if now - (M.trig.last or 0) < (S.triggerDelay or 0.08) then return end
+    local vim = game:GetService("VirtualInputManager")
+    local tgt = M.triggerFind()
+    if not tgt then return end
+    M.trig.last = now
+    local vp = cam.ViewportSize
+    local cx, cy = vp.X / 2, vp.Y / 2
+    pcall(function()
+        vim:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
+        vim:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
+    end)
+end
+
+pcall(function()
+    RS.RenderStepped:Connect(function()
+        if RUNNING and S.trigger then pcall(M.triggerTick) end
+    end)
+end)
+
+--==== Amethyst（FPS One Tap 小 hub）快捷启动 ====
+M.AMETHYST_URLS = {
+    "https://pastebin.com/raw/Zq7aGZH0",
+    "https://pastebin.com/dl/Zq7aGZH0",
+}
+function M.amethystLaunch()
+    local src
+    for _, u in ipairs(M.AMETHYST_URLS) do
+        local ok, r = pcall(function() return game:HttpGet(u, true) end)
+        if ok and type(r) == "string" and #r > 500 then src = r break end
+    end
+    if not src then return false, "下载失败（pastebin 被拦或已删除）" end
+    pcall(function() writefile("xhub_amethyst.lua", src) end)
+    M.cnStart()
+    local ok, err = pcall(function()
+        local fn = loadstring(src)
+        if not fn then error("loadstring 失败") end
+        fn()
+    end)
+    if ok then return true, "已启动（UI 已汉化）" end
+    return false, tostring(err)
+end
 --==== Rendex 汉化层：运行时把它的英文 UI 文本换成中文（不改它源码）====
 M.cnMap = {
     -- 页签
@@ -7483,6 +7568,13 @@ M.addButton(pTool, "清除 Dex 缓存", function()
         end
     end
     notify("已清空 Dex 缓存（" .. okc .. " 个文件）", "info", 3)
+end)
+M.addButton(pTool, "启动 Amethyst（FPS One Tap · 已汉化）", function()
+    notify("正在启动 Amethyst…", "info", 2)
+    task.spawn(function()
+        local ok, info = M.amethystLaunch()
+        notify(ok and ("Amethyst: " .. tostring(info)) or ("Amethyst 失败: " .. tostring(info)), ok and "ok" or "err", 5)
+    end)
 end)
 M.addButton(pTool, "启动 Rendex（DOORS · UI 已汉化）", function()
     notify("正在启动 Rendex…", "info", 2)
