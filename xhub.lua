@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.34"
-local BUILD   = "2026-11-08 01:50"
+local VERSION = "v19.35"
+local BUILD   = "2026-11-08 02:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6766,6 +6766,77 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
 
 -- 菜单打开/关闭时只设置一次鼠标状态；不再每帧抢（坐着+第一人称游戏会抖动）
 
+--==== 通用脚本启动器（探针 + 汉化）====
+M.cnUnknown = {}
+M._probeLog = {}
+function M.probeStart()
+    if M._probeDone then return end
+    M._probeDone = true
+    pcall(function()
+        if hookfunction and game.HttpGet then
+            local og = game.HttpGet
+            hookfunction(og, newcclosure(function(self, url, ...)
+                local u = tostring(url)
+                M._probeLog[#M._probeLog + 1] = "HttpGet " .. u
+                print("[XHub][probe] HttpGet " .. u)
+                return og(self, url, ...)
+            end))
+        end
+        if hookfunction and game.HttpPost then
+            local op = game.HttpPost
+            hookfunction(op, newcclosure(function(self, url, body, ...)
+                local u = tostring(url)
+                M._probeLog[#M._probeLog + 1] = "HttpPost " .. u
+                print("[XHub][probe] HttpPost " .. u)
+                return op(self, url, body, ...)
+            end))
+        end
+    end)
+end
+
+function M.probeDump()
+    if #M._probeLog == 0 then
+        notify("探针：没有捕获到任何 HTTP 请求（相对安全）", "ok", 5)
+        return "none"
+    end
+    local txt = table.concat(M._probeLog, "\n")
+    print("=== [XHub][probe] 汇总 ===")
+    print(txt)
+    if type(setclipboard) == "function" then pcall(setclipboard, txt) end
+    local risky = false
+    for _, l in ipairs(M._probeLog) do
+        if l:find("webhook", 1, true) or l:find("discord", 1, true) then risky = true end
+    end
+    notify(risky and "探针：发现 webhook/discord 外联（可能是盗号脚本，慎用）" or "探针：已复制请求列表到剪贴板", risky and "err" or "info", 6)
+    return txt
+end
+
+function M.runExternal(name, urls)
+    local src
+    for _, u in ipairs(urls) do
+        local ok, r = pcall(function() return game:HttpGet(u, true) end)
+        if ok and type(r) == "string" and #r > 500 then src = r break end
+    end
+    if not src then return false, "下载失败" end
+    pcall(function() writefile("xhub_" .. name .. ".lua", src) end)
+    pcall(M.probeStart)
+    pcall(M.cnStart)
+    local ok, err = pcall(function()
+        local fn = loadstring(src)
+        if not fn then error("loadstring 失败") end
+        fn()
+    end)
+    if ok then
+        task.delay(6, function() pcall(M.probeDump) end)
+        return true, "已启动（探针工作中，6 秒后打印请求列表）"
+    end
+    return false, tostring(err)
+end
+
+M.UNKNOWN_URLS = {
+    "https://pastebin.com/raw/aEtUUyxx",
+    "https://pastebin.com/dl/aEtUUyxx",
+}
 --==== 鼠标静默自瞄（mousemoverel，来自 pf_lite 思路）====
 M.mouseAim = { last = 0 }
 function M.mouseAimTick()
@@ -7143,6 +7214,10 @@ function M.cnApply(inst)
         t = inst.Text
         if type(t) ~= "string" or t == "" then return end
         if M.cnSeen[t] then return end
+        local mapped = M.cnMap[t]
+        if not mapped and #t >= 3 and #t <= 40 and t:find("%a") then
+            M.cnUnknown[t] = true
+        end
         local cn = M.cnMap[t]
         if not cn then
             -- 复合文本（"Anti Screech  [ON]"）逐词替换
@@ -7792,6 +7867,27 @@ M.addButton(pTool, "清除 Dex 缓存", function()
         end
     end
     notify("已清空 Dex 缓存（" .. okc .. " 个文件）", "info", 3)
+end)
+M.addButton(pTool, "启动 未知脚本 aEtUUyxx（探针+汉化）", function()
+    notify("正在启动（探针已挂）…", "info", 2)
+    task.spawn(function()
+        local ok, info = M.runExternal("unknown", M.UNKNOWN_URLS)
+        notify(ok and tostring(info) or ("失败: " .. tostring(info)), ok and "ok" or "err", 5)
+    end)
+end)
+M.addButton(pTool, "查看刚才脚本请求了哪些网址（探针汇总）", function()
+    local t = M.probeDump()
+    if t ~= "none" then notify("已打印并复制到剪贴板（" .. #M._probeLog .. " 条）", "info", 4) end
+end)
+M.addButton(pTool, "导出未翻译英文（补词典用）", function()
+    local list = {}
+    for k in pairs(M.cnUnknown) do list[#list + 1] = k end
+    table.sort(list)
+    local txt = table.concat(list, "\n")
+    print("=== [XHub][cn] 未翻译 " .. #list .. " 条 ===")
+    print(txt)
+    if type(setclipboard) == "function" then pcall(setclipboard, txt) end
+    notify("已复制 " .. #list .. " 条未翻译文本，发我即可补全", "info", 5)
 end)
 M.addButton(pTool, "启动 pf_lite（Phantom Forces · 已汉化）", function()
     notify("正在启动 pf_lite…", "info", 2)
