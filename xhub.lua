@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.31"
-local BUILD   = "2026-11-07 23:30"
+local VERSION = "v19.32"
+local BUILD   = "2026-11-08 00:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -88,7 +88,7 @@ local S = {
     fly = false, flySpeed = 120,
     esp = false, espBox = true, espName = true, espHp = true, espDist = true,
     espTeam = false, espOccluded = true, espRainbow = false,
-    aim = false, trigger = false, triggerFov = 12, triggerDelay = 0.08, triggerWall = true, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
+    aim = false, trigger = false, crossOn = false, crossSize = 8, crossGap = 4, crossSpin = 0, hitMark = true, lightOn = false, clockOn = false, clockValue = 14, fovOn = false, fovValue = 70, triggerFov = 12, triggerDelay = 0.08, triggerWall = true, aimSmooth = 12, aimStrength = 45, noRecoil = false, recoilComp = 100, poseFix = false, flyGuard = false, aimFov = 140, bulletTrack = false, silentAim = false, silentTime = 0.09, aimNpc = false, espNpc = false, flyGov = true, btStandalone = false, remoteAim = false, remoteAimSafe = true, remoteAimAll = false, remoteProbe = false, silentMaxAngle = 25, leadEnabled = false, leadSpeed = 600, leadScale = 1,
     aimPart = "Head", aimTeam = false, aimWall = true, showFov = true,
     aimOnFire = true, vehicleSafe = true, antiFall = false,
     flyMode = "align", antiSnap = true, flyResp = 200, flyRigid = true,
@@ -1854,6 +1854,7 @@ end)
 -- 双保险: 有些游戏在 RenderStepped 里覆写相机,同帧再补一次
 RS.RenderStepped:Connect(function()
     if not (S.aim and aimWant and aimGoal) then return end
+    pcall(function() M._aimTarget = aimWant end)
     local alpha = math.clamp((S.aimStrength or 45) / 100, 0.03, 1)
     cam.CFrame = cam.CFrame:Lerp(aimGoal, alpha)
 end)
@@ -6034,6 +6035,20 @@ M.addButton(pMain, "隐藏菜单", function() setVisible(false) end)
 
 print("[XHub][ui] build pVisual")
 task.wait()
+M.addSection(pVisual, "准星 / 画面")
+M.addToggle(pVisual, "自定义准星（十字）", false, function(v)
+    S.crossOn = v
+    notify(v and "准星已开" or "准星已关", "info", 2)
+end)
+M.addSlider(pVisual, "准星长度", 2, 24, 8, function(v) S.crossSize = v end)
+M.addSlider(pVisual, "准星空隙", 0, 20, 4, function(v) S.crossGap = v end)
+M.addSlider(pVisual, "准星旋转速度", 0, 10, 0, function(v) S.crossSpin = v / 10 end)
+M.addToggle(pVisual, "命中提示（十字闪红）", true, function(v) S.hitMark = v end)
+M.addToggle(pVisual, "全亮环境光", false, function(v) S.lightOn = v end)
+M.addToggle(pVisual, "锁定时间（改 ClockTime）", false, function(v) S.clockOn = v end)
+M.addSlider(pVisual, "时间 0-24", 0, 24, 14, function(v) S.clockValue = v end)
+M.addToggle(pVisual, "FOV 修改", false, function(v) S.fovOn = v end)
+M.addSlider(pVisual, "FOV 数值", 50, 120, 70, function(v) S.fovValue = v end)
 M.addSection(pVisual, "后视镜")
 M.addToggle(pVisual, "射线后视（软件渲染·真实几何）", false, function(v)
     pcall(function() M.rvSet(v) end)
@@ -6745,6 +6760,156 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
 
 -- 菜单打开/关闭时只设置一次鼠标状态；不再每帧抢（坐着+第一人称游戏会抖动）
 
+--==== 自定义准星（来自 pf_lite 思路，纯 GUI 无风险）====
+M.cross = { gui = nil, parts = {}, lastAng = 0 }
+function M.crossBuild()
+    if M.cross.gui and M.cross.gui.Parent then return end
+    local g = mk("ScreenGui", { Name = "XHubCross", ResetOnSpawn = false,
+        IgnoreGuiInset = true, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 996 }, CoreGui)
+    M.cross.gui = g
+    local holder = mk("Frame", { Name = "Holder", Size = UDim2.fromOffset(140, 140),
+        AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+        BackgroundTransparency = 1 }, g)
+    holder.Rotation = 0
+    M.cross.holder = holder
+    for i = 1, 4 do
+        local fr = mk("Frame", { Name = "P" .. i, BackgroundColor3 = Color3.fromRGB(160, 80, 255),
+            BorderSizePixel = 0 }, holder)
+        M.cross.parts[i] = fr
+    end
+end
+
+function M.crossTick()
+    if not S.crossOn then
+        if M.cross.gui then M.cross.gui.Enabled = false end
+        return
+    end
+    pcall(M.crossBuild)
+    if not (M.cross.gui and M.cross.holder) then return end
+    M.cross.gui.Enabled = true
+    local size = S.crossSize or 8
+    local gap = S.crossGap or 4
+    local col = S.crossColor or Color3.fromRGB(160, 80, 255)
+    local h = M.cross.holder
+    h.Rotation = (S.crossSpin or 0) * os.clock() * 60 % 360
+    local p = M.cross.parts
+    -- 上
+    p[1].Size = UDim2.fromOffset(2, size)
+    p[1].Position = UDim2.new(0.5, -1, 0.5, -(gap + size))
+    -- 下
+    p[2].Size = UDim2.fromOffset(2, size)
+    p[2].Position = UDim2.new(0.5, -1, 0.5, gap)
+    -- 左
+    p[3].Size = UDim2.fromOffset(size, 2)
+    p[3].Position = UDim2.new(0.5, -(gap + size), 0.5, -1)
+    -- 右
+    p[4].Size = UDim2.fromOffset(size, 2)
+    p[4].Position = UDim2.new(0.5, gap, 0.5, -1)
+    for i = 1, 4 do p[i].BackgroundColor3 = col end
+end
+
+--==== 光照 / FOV / 时间（纯本地）====
+M.lightOrig = nil
+function M.lightTick()
+    if not (S.lightOn or S.fovOn) then
+        if M.lightOrig then
+            pcall(function()
+                Lighting.Ambient = M.lightOrig.amb
+                Lighting.OutdoorAmbient = M.lightOrig.oamb
+                Lighting.ClockTime = M.lightOrig.clock
+                cam.FieldOfView = M.lightOrig.fov
+            end)
+            M.lightOrig = nil
+        end
+        return
+    end
+    if not M.lightOrig then
+        M.lightOrig = { amb = Lighting.Ambient, oamb = Lighting.OutdoorAmbient,
+                        clock = Lighting.ClockTime, fov = cam.FieldOfView }
+    end
+    pcall(function()
+        if S.lightOn then
+            Lighting.Ambient = S.lightColor or Color3.fromRGB(180, 180, 190)
+            Lighting.OutdoorAmbient = S.lightColor or Color3.fromRGB(180, 180, 190)
+            if S.clockOn then Lighting.ClockTime = S.clockValue or 14 end
+        end
+        if S.fovOn then cam.FieldOfView = S.fovValue or 70 end
+    end)
+end
+
+--==== 命中提示（本地血量推断，不 hook remote）====
+M.hit = { lastHp = {}, flash = 0 }
+function M.hitTick()
+    if not S.hitMark then return end
+    local tgt = M._aimTarget
+    if not tgt then return end
+    local h = (tgt.Character and tgt.Character:FindFirstChildOfClass("Humanoid"))
+    if not h then return end
+    local prev = M.hit.lastHp[tgt]
+    M.hit.lastHp[tgt] = h.Health
+    if prev and h.Health < prev - 0.5 then
+        M.hit.flash = os.clock() + 0.25
+    end
+end
+
+function M.hitDraw()
+    if not S.hitMark then if M._hitGui then M._hitGui.Enabled = false end return end
+    if not M._hitGui then
+        local g = mk("ScreenGui", { Name = "XHubHit", ResetOnSpawn = false,
+            IgnoreGuiInset = true, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 997 }, CoreGui)
+        local holder = mk("Frame", { Size = UDim2.fromOffset(40, 40), AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromScale(0.5, 0.5), BackgroundTransparency = 1 }, g)
+        M._hitGui = g
+        M._hitParts = {}
+        for i = 1, 4 do
+            local fr = mk("Frame", { Size = UDim2.fromOffset(2, 8), BackgroundColor3 = Color3.fromRGB(255, 80, 80),
+                BorderSizePixel = 0 }, holder)
+            M._hitParts[i] = fr
+        end
+    end
+    local on = (M.hit.flash or 0) > os.clock()
+    M._hitGui.Enabled = on
+    if not on then return end
+    local p = M._hitParts
+    -- 四道斜线
+    p[1].Position = UDim2.fromOffset(8, 8);  p[1].Rotation = 45
+    p[2].Position = UDim2.fromOffset(30, 8); p[2].Rotation = -45
+    p[3].Position = UDim2.fromOffset(8, 30); p[3].Rotation = -45
+    p[4].Position = UDim2.fromOffset(30, 30); p[4].Rotation = 45
+end
+
+pcall(function()
+    RS.RenderStepped:Connect(function()
+        if not RUNNING then return end
+        pcall(M.crossTick)
+        pcall(M.lightTick)
+        pcall(M.hitDraw)
+        pcall(M.hitTick)
+    end)
+end)
+
+--==== pf_lite（Phantom Forces）快捷启动 ====
+M.PFLITE_URLS = {
+    "https://raw.githubusercontent.com/dementiaenjoyer/homohack/main/pf_lite.lua",
+    "https://ghproxy.net/https://raw.githubusercontent.com/dementiaenjoyer/homohack/main/pf_lite.lua",
+}
+function M.pfliteLaunch()
+    local src
+    for _, u in ipairs(M.PFLITE_URLS) do
+        local ok, r = pcall(function() return game:HttpGet(u, true) end)
+        if ok and type(r) == "string" and #r > 5000 then src = r break end
+    end
+    if not src then return false, "下载失败（GitHub 被拦）" end
+    pcall(function() writefile("xhub_pflite.lua", src) end)
+    M.cnStart()
+    local ok, err = pcall(function()
+        local fn = loadstring(src)
+        if not fn then error("loadstring 失败（文件被截断？）") end
+        fn()
+    end)
+    if ok then return true, "已启动（UI 已汉化）" end
+    return false, tostring(err)
+end
 --==== 自动开火（Triggerbot）：准星压住就点鼠标 ====
 M.trig = { last = 0 }
 function M.triggerFind()
@@ -6920,6 +7085,19 @@ M.cnMap = {
     ["Noclip"]="穿墙", ["Infinite Jump"]="无限跳", ["Speed Changer"]="速度修改",
     ["Walk Speed"]="移动速度", ["Keybind"]="按键绑定",
     ["Copy Robloxscripts Page"]="复制脚本页链接",
+    -- pf_lite（Phantom Forces）
+    ["Silent Aim"]="静默自瞄", ["Aim Assist"]="辅助自瞄", ["Aim"]="瞄准",
+    ["Hitpart"]="命中部位", ["Prediction"]="预判", ["Prediction Value"]="预判强度",
+    ["Triggerbot"]="自动开火", ["Trigger Range"]="开火范围", ["Trigger Delay"]="开火延迟",
+    ["Crosshair"]="准星", ["Crosshair to Enemy"]="准星指敌", ["Crosshair Spin"]="准星旋转",
+    ["Viewmodel"]="手部模型", ["Viewmodel Position"]="手部位置",
+    ["Bullet Tracer"]="弹道轨迹", ["Enemy Bullet Tracer"]="敌方弹道",
+    ["Hitsounds"]="命中音效", ["Hitmarkers"]="命中标记", ["Hit Notifications"]="命中提示",
+    ["Ambient"]="环境光", ["Clock"]="时间", ["Color Correction"]="色彩校正",
+    ["Saturation"]="饱和度", ["Contrast"]="对比度", ["Force FOV"]="强制 FOV",
+    ["WalkSpeed"]="走速", ["Bhop"]="自动连跳", ["Visible Check"]="可见检查",
+    ["Aim Method"]="自瞄方式", ["Normal"]="普通", ["Circle"]="画圈",
+    ["Random"]="随机", ["Head"]="头部", ["Torso"]="躯干",
 }
 
 M.cnOn = false
@@ -7582,6 +7760,13 @@ M.addButton(pTool, "清除 Dex 缓存", function()
         end
     end
     notify("已清空 Dex 缓存（" .. okc .. " 个文件）", "info", 3)
+end)
+M.addButton(pTool, "启动 pf_lite（Phantom Forces · 已汉化）", function()
+    notify("正在启动 pf_lite…", "info", 2)
+    task.spawn(function()
+        local ok, info = M.pfliteLaunch()
+        notify(ok and ("pf_lite: " .. tostring(info)) or ("pf_lite 失败: " .. tostring(info)), ok and "ok" or "err", 5)
+    end)
 end)
 M.addButton(pTool, "启动 Amethyst（FPS One Tap · 已汉化）", function()
     notify("正在启动 Amethyst…", "info", 2)
