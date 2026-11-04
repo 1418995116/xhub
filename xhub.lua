@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.66"
-local BUILD   = "2026-11-09 06:00"
+local VERSION = "v19.67"
+local BUILD   = "2026-11-09 07:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7891,6 +7891,131 @@ pcall(function()
         if RUNNING and M.mirror.on then pcall(M.mirrorTick) end
     end)
 end)
+--==== 自动答题（自己的实现：监听手机答案 + 走游戏接口提交）=====
+M.ans = { key = {}, mine = {}, on = false, stop = false, submitted = 0, rejected = 0 }
+
+function M.ansTable()
+    local RS2 = game:GetService("ReplicatedStorage")
+    local rf = RS2:FindFirstChild("PlayerAnswerTable")
+    if rf and rf:IsA("RemoteFunction") then return rf end
+    for _, d in ipairs(RS2:GetDescendants()) do
+        if tostring(d.Name) == "PlayerAnswerTable" and d:IsA("RemoteFunction") then return d end
+    end
+    return nil
+end
+
+function M.ansParse(text)
+    local n0 = 0
+    for q, l in tostring(text):gmatch("(%d+)%s*[%.%)%-:]+%s*([ABCDabcd])") do
+        local qn = tonumber(q)
+        if qn and qn >= 1 and qn <= 200 then
+            M.ans.key[qn] = l:upper()
+            n0 = n0 + 1
+        end
+    end
+    if n0 > 0 then
+        print(("[XHub][ans] 记录 %d 条（共 %d 条）"):format(n0, (function()
+            local c = 0 for _ in pairs(M.ans.key) do c = c + 1 end return c end)()))
+    end
+    return n0
+end
+
+function M.ansListen()
+    if M.ans.listening then return true end
+    local RS2 = game:GetService("ReplicatedStorage")
+    local ev = nil
+    for _, d in ipairs(RS2:GetDescendants()) do
+        if tostring(d.Name) == "PhoneDisplay" and d:IsA("RemoteEvent") then ev = d break end
+    end
+    if not ev then return false end
+    M.ans.listening = true
+    ev.OnClientEvent:Connect(function(...)
+        local a = { ... }
+        for i = 1, #a do
+            if type(a[i]) == "string" then M.ansParse(a[i]) end
+        end
+    end)
+    print("[XHub][ans] 已监听 PhoneDisplay（拍照后自动记录答案）")
+    return true
+end
+
+function M.ansCanSubmit()
+    if workspace:GetAttribute("GameStatus") ~= "Assessment In Progress" then return false, "不在考试中" end
+    local c = lp.Character
+    if not c then return false, "无角色" end
+    if c:GetAttribute("DeathSequenceActive") == true then return false, "死亡中" end
+    local h = c:FindFirstChildOfClass("Humanoid")
+    if not h or not h.Sit then return false, "没坐下" end
+    return true, "ok"
+end
+
+function M.ansReadMine()
+    local rf = M.ansTable()
+    if not rf then return false end
+    local ok, answers = pcall(function() return rf:InvokeServer() end)
+    if ok and type(answers) == "table" then
+        M.ans.mine = {}
+        for k, v in pairs(answers) do
+            local kn = tonumber(k) or k
+            if v ~= "UNANSWERED" then M.ans.mine[kn] = v end
+        end
+        local c = 0
+        for _ in pairs(M.ans.mine) do c = c + 1 end
+        print(("[XHub][ans] 服务器已有 %d 题作答"):format(c))
+        return true, c
+    end
+    return false, 0
+end
+
+function M.ansStart()
+    if M.ans.on then return false, "已在运行" end
+    if not M.ansTable() then return false, "找不到 PlayerAnswerTable" end
+    M.ansListen()
+    M.ans.on, M.ans.stop = true, false
+    M.ans.submitted, M.ans.rejected = 0, 0
+    task.spawn(function()
+        pcall(M.ansReadMine)
+        while M.ans.on and not M.ans.stop and RUNNING do
+            local can, why = M.ansCanSubmit()
+            if not can then
+                task.wait(0.6)
+            else
+                local rf = M.ansTable()
+                local nums = {}
+                for q in pairs(M.ans.key) do
+                    if M.ans.mine[q] == nil then nums[#nums + 1] = q end
+                end
+                table.sort(nums)
+                if #nums == 0 then
+                    task.wait(0.8)
+                else
+                    for _, q in ipairs(nums) do
+                        if not M.ans.on or M.ans.stop then break end
+                        local ok2, why2 = M.ansCanSubmit()
+                        if not ok2 then break end
+                        local letter = M.ans.key[q]
+                        local okc, res = pcall(function() return rf:InvokeServer(q, letter) end)
+                        if okc and res then
+                            M.ans.mine[q] = letter
+                            M.ans.submitted = M.ans.submitted + 1
+                            print(("[XHub][ans] Q%d -> %s 已提交"):format(q, letter))
+                        else
+                            M.ans.rejected = M.ans.rejected + 1
+                        end
+                        task.wait(0.14)
+                    end
+                end
+            end
+        end
+        print(("[XHub][ans] 停止：提交 %d，被拒 %d"):format(M.ans.submitted, M.ans.rejected))
+    end)
+    return true, "自动答题已开：拍照拿到答案后会自动提交"
+end
+
+function M.ansStop()
+    M.ans.on = false
+    M.ans.stop = true
+end
 --==== Chronix（Chronix-gate keyless hub）快捷启动 =====
 M.CHRONIX_URLS = {
     "https://pastebin.com/raw/sMmZ6bvG",
@@ -7989,6 +8114,21 @@ M.addButton(pTool, "列出游戏所有 GUI 名字（排查用）", function()
     print(txt)
     if type(setclipboard) == "function" then pcall(setclipboard, txt) end
     notify("已打印并复制 " .. #names .. " 个界面名", "info", 5)
+end)
+M.addButton(pTool, "自动答题 开（拍照拿答案 → 自动提交）", function()
+    local ok, msg = M.ansStart()
+    notify(tostring(msg), ok and "ok" or "warn", 6)
+end)
+M.addButton(pTool, "自动答题 关", function()
+    M.ansStop()
+    notify(("已关闭（提交 %d，被拒 %d）"):format(M.ans.submitted, M.ans.rejected), "info", 5)
+end)
+M.addButton(pTool, "查看已记录的答案条数", function()
+    local c = 0
+    for _ in pairs(M.ans.key) do c = c + 1 end
+    local m = 0
+    for _ in pairs(M.ans.mine) do m = m + 1 end
+    notify(("已记录答案 %d 条，服务器已答 %d 题"):format(c, m), "info", 6)
 end)
 M.addButton(pTool, "启动 答题脚本（Cheating During Testing · 已汉化）", function()
     notify("正在启动答题脚本…", "info", 2)
