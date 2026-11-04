@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.61"
-local BUILD   = "2026-11-09 01:00"
+local VERSION = "v19.62"
+local BUILD   = "2026-11-09 02:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7293,6 +7293,48 @@ end
 function M.safePhotoStop()
     M.safe.on = false
 end
+--==== 彻底扫描：找出答题纸在哪里、按钮叫什么 ====
+function M.scanPaperDeep()
+    local out = {}
+    local function add(s) out[#out + 1] = s end
+    add("=== 答题纸深度扫描 ===")
+    local roots = {}
+    local pg = lp:FindFirstChildOfClass("PlayerGui")
+    if pg then roots[#roots + 1] = { name = "PlayerGui", obj = pg } end
+    roots[#roots + 1] = { name = "CoreGui", obj = CoreGui }
+    for _, d in ipairs(workspace:GetDescendants()) do
+        if d:IsA("SurfaceGui") or d:IsA("BillboardGui") then
+            roots[#roots + 1] = { name = "workspace/" .. tostring(d.Parent and d.Parent.Name), obj = d }
+        end
+    end
+    for _, r in ipairs(roots) do
+        local guis, frames, btns = 0, 0, 0
+        local samples = {}
+        pcall(function()
+            for _, d in ipairs(r.obj:GetDescendants()) do
+                if d:IsA("ImageButton") or d:IsA("TextButton") then
+                    btns = btns + 1
+                    local nm = tostring(d.Name)
+                    if nm == "A" or nm == "B" or nm == "C" or nm == "D" then
+                        local par = d.Parent
+                        if par and tostring(par.Name):match("^%d+$") then
+                            frames = frames + 1
+                            if #samples < 6 then
+                                samples[#samples + 1] = ("%s/%s"):format(tostring(par.Name), nm)
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+        add(("  [%s] 按钮总数=%d，命中 数字框下的ABCD=%d %s"):format(
+            r.name, btns, frames, (#samples > 0 and ("样本: " .. table.concat(samples, " ")) or "")))
+    end
+    local txt = table.concat(out, "\n")
+    print(txt)
+    if type(setclipboard) == "function" then pcall(setclipboard, txt) end
+    return txt
+end
 --==== 诊断：答题纸按钮到底有几个可触发连接 ====
 function M.diagPaperButtons()
     local frames = M.findPaperFrames()
@@ -9284,6 +9326,10 @@ M.addButton(pTool, "停止拟人拍照", function()
     local n = 0
     for _ in pairs(M.exam.answers) do n = n + 1 end
     notify(("已停止，答案 %d 条"):format(n), "info", 4)
+end)
+M.addButton(pTool, "深度扫描答题纸（找按钮在哪）", function()
+    local txt = M.scanPaperDeep()
+    notify("已打印并复制，发我", "info", 5)
 end)
 M.addButton(pTool, "诊断答题纸按钮（看有几个可触发连接）", function()
     local txt = M.diagPaperButtons()
