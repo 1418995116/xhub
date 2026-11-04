@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.49"
-local BUILD   = "2026-11-08 14:50"
+local VERSION = "v19.50"
+local BUILD   = "2026-11-08 15:40"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6989,6 +6989,59 @@ function M.examBuild()
     end
 end
 
+--==== 深度探测答题纸（找每题的正确答案藏在哪：属性/按钮名/子对象）====
+function M.probeAnswerAssets()
+    local RS2 = game:GetService("ReplicatedStorage")
+    local out = {}
+    local function add(s) out[#out + 1] = s end
+    local function dumpAttrs(inst)
+        local ok, attrs = pcall(function() return inst:GetAttributes() end)
+        if ok and type(attrs) == "table" then
+            local buf = {}
+            for k, v in pairs(attrs) do buf[#buf + 1] = tostring(k) .. "=" .. tostring(v) end
+            if #buf > 0 then return " attrs{" .. table.concat(buf, ",") .. "}" end
+        end
+        return ""
+    end
+    for _, nm in ipairs({ "AnswerPaperSurfaceGui", "AnswerPaperScreenGui" }) do
+        local g = RS2:FindFirstChild(nm)
+        if g then
+            add("=== " .. nm .. " ===")
+            local n = 0
+            for _, d in ipairs(g:GetDescendants()) do
+                n = n + 1
+                if n <= 120 then
+                    local extra = ""
+                    if d:IsA("TextLabel") or d:IsA("TextButton") then extra = ' text="' .. tostring(d.Text) .. '"' end
+                    add(("  %s %s%s%s"):format(d.ClassName, tostring(d.Name), extra, dumpAttrs(d)))
+                end
+            end
+            add("  （共 " .. n .. " 个对象）")
+        end
+    end
+    -- 当前游戏内的答题纸实例（玩家交互用的那份）
+    add("=== 场景内 AnswerPaper ===")
+    for _, d in ipairs(workspace:GetDescendants()) do
+        if tostring(d.Name):lower():find("answerpaper", 1, true) then
+            add("  " .. d.ClassName .. " " .. tostring(d.Name) .. dumpAttrs(d))
+            local k = 0
+            for _, c in ipairs(d:GetDescendants()) do
+                k = k + 1
+                if k <= 60 then
+                    local extra = ""
+                    if c:IsA("TextLabel") or c:IsA("TextButton") or c:IsA("TextBox") then
+                        extra = ' text="' .. tostring(c.Text) .. '"'
+                    end
+                    add("    " .. c.ClassName .. " " .. tostring(c.Name) .. extra .. dumpAttrs(c))
+                end
+            end
+        end
+    end
+    local txt = table.concat(out, "\n")
+    print(txt)
+    if type(setclipboard) == "function" then pcall(setclipboard, txt) end
+    return txt
+end
 --==== 一次性拿全部答案：直接问服务器 ====
 function M.examFetchRemote()
     local RS2 = game:GetService("ReplicatedStorage")
@@ -7192,7 +7245,7 @@ function M.examTick()
     if not M.exam.gui then return end
     M.exam.gui.Enabled = true
     local now = os.clock()
-    if now - (M.exam.lastTick or 0) < 0.7 then return end
+    local iv = (M.exam.fast and 0.18) or 0.7\n    if now - (M.exam.lastTick or 0) < iv then return end
     M.exam.lastTick = now
     pcall(M.examRefresh)
 end
@@ -8563,6 +8616,14 @@ end)
 M.addButton(pTool, "关闭 答题 Hub 窗口", function()
     M.exam.open = false
     notify("答题 Hub 已关闭（雷达仍可单独用）", "info", 3)
+end)
+M.addButton(pTool, "深度探测答题纸（找正确答案藏哪）", function()
+    local txt = M.probeAnswerAssets()
+    notify("已打印并复制 " .. #txt .. " 字，发我", "info", 6)
+end)
+M.addToggle(pTool, "高频扫描答案（0.2 秒一次，翻页用）", false, function(v)
+    M.exam.fast = v
+    notify(v and "高频扫描已开：拿手机翻页时自动累积" or "恢复普通扫描（0.7 秒）", "info", 3)
 end)
 M.addButton(pTool, "向服务器要全部答案（一次拿全，试试）", function()
     local ok, msg = M.examFetchRemote()
