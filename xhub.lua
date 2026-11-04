@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.54"
-local BUILD   = "2026-11-08 19:00"
+local VERSION = "v19.55"
+local BUILD   = "2026-11-08 19:50"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6990,7 +6990,7 @@ function M.examBuild()
 end
 
 --==== 拟人拍照：模拟按 Q 键（走游戏自己的输入通道，不直接发 remote）=====
-M.photoAuto = { on = false, n = 0, max = 30, base = 3.5, jit = 1.2, key = "Q" }
+M.photoAuto = { on = false, n = 0, max = 30, base = 6.0, jit = 2.0, key = "Q", ekey = "E", gap = 1.2 }
 
 function M.phoneEquipped()
     local ch = lp.Character
@@ -7012,6 +7012,7 @@ function M.photoAutoStart(maxN, baseSec)
         return false, "请先拿起手机（手上没有 phone/cell 工具）"
     end
     local key = Enum.KeyCode[M.photoAuto.key] or Enum.KeyCode.Q
+    local ekey = Enum.KeyCode[M.photoAuto.ekey] or Enum.KeyCode.E
     local vim = game:GetService("VirtualInputManager")
     M.photoAuto.on = true
     M.photoAuto.n = 0
@@ -7024,12 +7025,25 @@ function M.photoAutoStart(maxN, baseSec)
                 break
             end
             M.photoAuto.n = M.photoAuto.n + 1
+            -- 第一步：按 Q 拍照
             pcall(function()
                 vim:SendKeyEvent(true, key, false, game)
                 task.wait(0.08)
                 vim:SendKeyEvent(false, key, false, game)
             end)
-            print(("[XHub][photo] 第 %d 次按 %s 拍照（拟人节奏）"):format(M.photoAuto.n, M.photoAuto.key))
+            print(("[XHub][photo] 第 %d 轮：Q 拍照"):format(M.photoAuto.n))
+            -- 第二步：等加载，然后按 E 确认
+            local gap = M.photoAuto.gap + math.random() * 0.4
+            local t1 = os.clock()
+            while os.clock() - t1 < gap and M.photoAuto.on do task.wait(0.05) end
+            if M.photoAuto.on then
+                pcall(function()
+                    vim:SendKeyEvent(true, ekey, false, game)
+                    task.wait(0.08)
+                    vim:SendKeyEvent(false, ekey, false, game)
+                end)
+                print(("[XHub][photo] 第 %d 轮：E 确认加载"):format(M.photoAuto.n))
+            end
             local waitSec = M.photoAuto.base + math.random() * M.photoAuto.jit
             local t0 = os.clock()
             while os.clock() - t0 < waitSec and M.photoAuto.on do task.wait(0.1) end
@@ -8902,7 +8916,10 @@ M.addButton(pTool, "关闭 答题 Hub 窗口", function()
     M.exam.open = false
     notify("答题 Hub 已关闭（雷达仍可单独用）", "info", 3)
 end)
-M.addButton(pTool, "拟人拍照（模拟按 Q，3.5~4.7 秒一次，最多 30 次）", function()
+M.addSlider(pTool, "拍照每轮间隔（秒）", 4, 20, 6, function(v) M.photoAuto.base = v end)
+M.addSlider(pTool, "Q→E 等待（秒）", 0.5, 5, 1.2, function(v) M.photoAuto.gap = v end)
+M.addSlider(pTool, "拍照轮数上限", 3, 40, 30, function(v) M.photoAuto.max = v end)
+M.addButton(pTool, "拟人拍照（Q 拍照 → 等 → E 加载，循环）", function()
     M.spyStart()
     local ok, msg = M.photoAutoStart(30)
     notify(tostring(msg), ok and "ok" or "warn", 6)
