@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.58"
-local BUILD   = "2026-11-08 22:20"
+local VERSION = "v19.59"
+local BUILD   = "2026-11-08 23:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7062,6 +7062,92 @@ function M.photoAutoStop()
     M.photoAuto.on = false
 end
 
+--==== 全量 dump：找出客户端里是否存着题库/答案表 ====
+function M.dumpAllNames()
+    local RS2 = game:GetService("ReplicatedStorage")
+    local out = {}
+    local function add(s) out[#out + 1] = s end
+    add("=== ReplicatedStorage 全部对象（前 200）===")
+    local n = 0
+    for _, d in ipairs(RS2:GetDescendants()) do
+        n = n + 1
+        if n <= 200 then
+            local extra = ""
+            if d:IsA("ModuleScript") then extra = "  [ModuleScript]" end
+            if d:IsA("StringValue") then extra = '  value="' .. tostring(d.Value) .. '"' end
+            if d:IsA("LocalScript") then extra = "  [LocalScript]" end
+            add(("  %s %s%s"):format(d.ClassName, tostring(d.Name), extra))
+        end
+    end
+    add("  （共 " .. n .. " 个）")
+    add("=== 手机 / 答题纸 相关对象的属性 ===")
+    for _, d in ipairs(workspace:GetDescendants()) do
+        local nm = tostring(d.Name):lower()
+        if nm:find("phone", 1, true) or nm:find("answerpaper", 1, true) then
+            local ok, attrs = pcall(function() return d:GetAttributes() end)
+            if ok and next(attrs) then
+                local buf = {}
+                for k, v in pairs(attrs) do buf[#buf + 1] = tostring(k) .. "=" .. tostring(v) end
+                add(("  %s %s attrs{%s}"):format(d.ClassName, tostring(d.Name), table.concat(buf, ",")))
+            end
+            if d:IsA("StringValue") then
+                add(("  StringValue %s = %s"):format(d.Name, tostring(d.Value)))
+            end
+        end
+    end
+    local txt = table.concat(out, "\n")
+    print(txt)
+    if type(setclipboard) == "function" then pcall(setclipboard, txt) end
+    return txt
+end
+
+--==== 一键全流程：安全拍照积累 -> 自动填卷 ====
+M.auto = { on = false, target = 60, mode = "safe" }
+function M.autoFlowStart(targetN)
+    if M.auto.on then return false, "已在运行" end
+    M.auto.on = true
+    M.auto.target = targetN or 60
+    task.spawn(function()
+        M.spyStart()
+        print("[XHub][auto] 开始全流程：先安全拍照积累答案")
+        local ok = M.safePhotoStart(40)
+        if not ok then
+            M.auto.on = false
+            print("[XHub][auto] 启动失败（手上要拿手机）")
+            return
+        end
+        while M.safe.on and M.auto.on and RUNNING do
+            local cnt = 0
+            for _ in pairs(M.exam.answers) do cnt = cnt + 1 end
+            if cnt >= M.auto.target then
+                print(("[XHub][auto] 已积累 %d 条，停止拍照"):format(cnt))
+                M.safePhotoStop()
+                break
+            end
+            task.wait(1.0)
+        end
+        M.safePhotoStop()
+        local cnt = 0
+        for _ in pairs(M.exam.answers) do cnt = cnt + 1 end
+        if cnt == 0 then
+            M.auto.on = false
+            print("[XHub][auto] 没有答案，结束")
+            return
+        end
+        print(("[XHub][auto] 开始自动填卷（%d 条答案）"):format(cnt))
+        M.fillAnswers()
+        while M.fill.on and RUNNING do task.wait(0.3) end
+        M.auto.on = false
+        print("[XHub][auto] 全流程完成")
+    end)
+    return true, "开始全流程（拍照积累 → 自动填卷）"
+end
+
+function M.autoFlowStop()
+    M.auto.on = false
+    M.safePhotoStop()
+    M.fill.on = false
+end
 --==== 直接发查询请求（不按键，直接 FireServer），可调节奏 ====
 M.req = { on = false, n = 0, max = 8, base = 2, jit = 2, preset = 1 }
 
@@ -9062,6 +9148,18 @@ end)
 M.addButton(pTool, "关闭 答题 Hub 窗口", function()
     M.exam.open = false
     notify("答题 Hub 已关闭（雷达仍可单独用）", "info", 3)
+end)
+M.addButton(pTool, "一键全流程（安全拍照积累 → 自动填卷）", function()
+    local ok, msg = M.autoFlowStart(60)
+    notify(tostring(msg), ok and "ok" or "warn", 6)
+end)
+M.addButton(pTool, "停止一键全流程", function()
+    M.autoFlowStop()
+    notify("全流程已停止", "info", 3)
+end)
+M.addButton(pTool, "全量 dump（查客户端有没有题库）", function()
+    local txt = M.dumpAllNames()
+    notify("已打印并复制 " .. #txt .. " 字，发我", "info", 6)
 end)
 M.addSlider(pTool, "直发间隔（秒）", 1, 15, 2, function(v) M.req.base = v end)
 M.addSlider(pTool, "直发抖动（秒）", 0, 8, 2, function(v) M.req.jit = v end)
