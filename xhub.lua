@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.42"
-local BUILD   = "2026-11-08 08:00"
+local VERSION = "v19.43"
+local BUILD   = "2026-11-08 09:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6035,6 +6035,27 @@ M.addButton(pMain, "隐藏菜单", function() setVisible(false) end)
 
 print("[XHub][ui] build pVisual")
 task.wait()
+M.addSection(pVisual, "2D 雷达 / 答案窗")
+M.addToggle(pVisual, "2D 雷达（圆形·可拖动）", false, function(v)
+    M.radar.on = v
+    notify(v and "雷达已开：拖动标题栏可移动" or "雷达已关", "info", 2.5)
+end)
+M.addSlider(pVisual, "雷达显示距离", 40, 400, 140, function(v) M.radar.dist = v end)
+M.addSlider(pVisual, "雷达直径 px", 120, 320, 200, function(v) M.radar.size = v end)
+M.addToggle(pVisual, "雷达显示玩家", true, function(v) M.radar.showP = v end)
+M.addToggle(pVisual, "雷达显示 NPC/老师", true, function(v) M.radar.showN = v end)
+M.addToggle(pVisual, "显示老师视野锥", true, function(v) M.radar.cone = v end)
+M.addSlider(pVisual, "视野锥角度", 30, 160, 90, function(v) M.radar.coneFov = v end)
+M.addSlider(pVisual, "视野锥长度", 20, 200, 70, function(v) M.radar.coneRange = v end)
+M.addToggle(pVisual, "答案窗（镜像题目/答案文本）", false, function(v)
+    M.ans.on = v
+    notify(v and "答案窗已开：会自动抓 phone/question/answer 界面" or "答案窗已关", "info", 3)
+end)
+M.addButton(pVisual, "重扫答案（清缓存）", function()
+    M.ans.lastKey = ""
+    task.spawn(function() pcall(M.ansTick) end)
+    notify("已重新扫描", "info", 2)
+end)
 M.addSection(pVisual, "准星 / 画面")
 M.addToggle(pVisual, "自定义准星（十字）", false, function(v)
     S.crossOn = v
@@ -6865,6 +6886,278 @@ function M.runDirect(urls)
     return true, "直接模式已执行"
 end
 
+--==== 答案窗（把游戏里"题目/答案"文本框镜像到可拖动窗口）====
+M.ans = { on = false, pat = "phone,question,answer,test,quiz", lines = {} }
+function M.ansBuild()
+    if M.ans.gui and M.ans.gui.Parent then return end
+    local g = mk("ScreenGui", { Name = "XHubAns", ResetOnSpawn = false,
+        IgnoreGuiInset = true, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 994 }, CoreGui)
+    local root = mk("Frame", { Name = "Root", Size = UDim2.fromOffset(300, 380),
+        Position = UDim2.new(0, 60, 0, 120), BackgroundColor3 = Color3.fromRGB(20, 16, 28),
+        BackgroundTransparency = 0.12, BorderSizePixel = 0 }, g)
+    pcall(function()
+        local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 10); c.Parent = root
+    end)
+    local title = mk("TextLabel", { Size = UDim2.new(1, 0, 0, 24), BackgroundTransparency = 1,
+        Text = "答案窗（拖动我）", TextColor3 = Color3.fromRGB(200, 190, 255), TextSize = 14,
+        Font = Enum.Font.GothamMedium }, root)
+    local sf = mk("ScrollingFrame", { Size = UDim2.new(1, -12, 1, -32), Position = UDim2.new(0, 6, 0, 28),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4,
+        CanvasSize = UDim2.new(0, 0, 0, 0) }, root)
+    local lbl = mk("TextLabel", { Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1,
+        TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+        TextColor3 = Color3.fromRGB(230, 230, 240), TextSize = 14,
+        Font = Enum.Font.Code, Text = "", RichText = true }, sf)
+    lbl.AutomaticSize = Enum.AutomaticSize.Y
+    M.ans.gui, M.ans.root, M.ans.lbl = g, root, lbl
+    do
+        local dragging, dragStart, startPos = false, nil, nil
+        title.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging, dragStart, startPos = true, i.Position, root.Position
+            end
+        end)
+        UIS.InputChanged:Connect(function(i)
+            if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+                local d = i.Position - dragStart
+                root.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
+                                          startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            end
+        end)
+        UIS.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+        end)
+    end
+end
+
+function M.ansCollect()
+    local out = {}
+    local root = lp:FindFirstChildOfClass("PlayerGui")
+    if not root then return out end
+    local pats = {}
+    for p in tostring(M.ans.pat):gmatch("[^,]+") do
+        if p ~= "" then pats[#pats + 1] = p:lower() end
+    end
+    for _, g in ipairs(root:GetChildren()) do
+        local gname = tostring(g.Name):lower()
+        local hit = false
+        for _, p in ipairs(pats) do
+            if gname:find(p, 1, true) then hit = true end
+        end
+        if hit then
+            for _, d in ipairs(g:GetDescendants()) do
+                if (d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox")) and d.Visible then
+                    local t = tostring(d.Text or "")
+                    if #t > 0 and #t < 200 then
+                        out[#out + 1] = t
+                    end
+                end
+            end
+        end
+    end
+    return out
+end
+
+function M.ansTick()
+    if not M.ans.on then
+        if M.ans.gui then M.ans.gui.Enabled = false end
+        return
+    end
+    pcall(M.ansBuild)
+    if not (M.ans.gui and M.ans.lbl) then return end
+    M.ans.gui.Enabled = true
+    local lines = M.ansCollect()
+    local key = table.concat(lines, "|")
+    if key == (M.ans.lastKey or "") then return end
+    M.ans.lastKey = key
+    local buf = {}
+    for i = 1, math.min(#lines, 60) do
+        buf[#buf + 1] = lines[i]
+    end
+    M.ans.lbl.Text = (#buf == 0) and "（没找到含 phone/question/answer 的界面，可在视觉页改关键词）"
+        or table.concat(buf, "\n")
+end
+
+pcall(function()
+    task.spawn(function()
+        while RUNNING do
+            task.wait(0.5)
+            pcall(M.ansTick)
+        end
+    end)
+end)
+--==== 2D 雷达（可拖动圆形雷达：玩家/NPC + 目标视野锥）====
+M.radar = { on = false, size = 200, dist = 140, showP = true, showN = true, cone = true,
+            coneFov = 90, coneRange = 70, teacherPat = "teacher,prof,guard,monitor,npc" }
+
+function M.radarBuild()
+    if M.radar.gui and M.radar.gui.Parent then return end
+    local g = mk("ScreenGui", { Name = "XHubRadar", ResetOnSpawn = false,
+        IgnoreGuiInset = true, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 995 }, CoreGui)
+    local root = mk("Frame", { Name = "Root", Size = UDim2.fromOffset(240, 268),
+        Position = UDim2.new(1, -260, 0, 120), BackgroundColor3 = Color3.fromRGB(20, 16, 28),
+        BackgroundTransparency = 0.15, BorderSizePixel = 0 }, g)
+    pcall(function()
+        local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 10); c.Parent = root
+    end)
+    local title = mk("TextLabel", { Name = "Title", Size = UDim2.new(1, 0, 0, 24),
+        BackgroundTransparency = 1, Text = "2D 雷达（拖动我）",
+        TextColor3 = Color3.fromRGB(200, 190, 255), TextSize = 14,
+        Font = Enum.Font.GothamMedium, ZIndex = 5 }, root)
+    local circle = mk("Frame", { Name = "Circle", Size = UDim2.fromOffset(200, 200),
+        Position = UDim2.new(0.5, -100, 0, 34), BackgroundColor3 = Color3.fromRGB(10, 8, 14),
+        BackgroundTransparency = 0.25, BorderSizePixel = 0 }, root)
+    pcall(function()
+        local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1, 0); c.Parent = circle
+        local st = Instance.new("UIStroke"); st.Color = Color3.fromRGB(120, 90, 200)
+        st.Thickness = 1.5; st.Parent = circle
+    end)
+    local blips = mk("Frame", { Name = "Blips", Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1 }, circle)
+    local fovTxt = mk("TextLabel", { Name = "Info", Size = UDim2.new(1, 0, 0, 20),
+        Position = UDim2.new(0, 0, 1, 4), BackgroundTransparency = 1, Text = "",
+        TextColor3 = Color3.fromRGB(160, 150, 200), TextSize = 12, Font = Enum.Font.Gotham }, root)
+    M.radar.gui, M.radar.root, M.radar.circle, M.radar.blips, M.radar.info = g, root, circle, blips, fovTxt
+    -- 拖动
+    do
+        local dragging, dragStart, startPos = false, nil, nil
+        title.InputBegan:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = true
+                dragStart = i.Position
+                startPos = root.Position
+            end
+        end)
+        UIS.InputChanged:Connect(function(i)
+            if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+                local d = i.Position - dragStart
+                root.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
+                                          startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            end
+        end)
+        UIS.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+        end)
+    end
+end
+
+function M.radarBlip(parent, color, size)
+    local b = Instance.new("Frame")
+    b.Size = UDim2.fromOffset(size or 6, size or 6)
+    b.AnchorPoint = Vector2.new(0.5, 0.5)
+    b.BackgroundColor3 = color
+    b.BorderSizePixel = 0
+    b.Parent = parent
+    pcall(function()
+        local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1, 0); c.Parent = b
+    end)
+    return b
+end
+
+function M.radarIsTeacher(m)
+    local nm = tostring(m.Name):lower()
+    for pat in tostring(M.radar.teacherPat):gmatch("[^,]+") do
+        if pat ~= "" and nm:find(pat:lower(), 1, true) then return true end
+    end
+    return false
+end
+
+function M.radarTick()
+    if not M.radar.on then
+        if M.radar.gui then M.radar.gui.Enabled = false end
+        return
+    end
+    pcall(M.radarBuild)
+    if not (M.radar.gui and M.radar.blips) then return end
+    M.radar.gui.Enabled = true
+    local me = M.charOf(lp)
+    local myHrp = me and me:FindFirstChild("HumanoidRootPart")
+    if not myHrp then return end
+    local base = myHrp.Position
+    local yaw = math.atan2(cam.CFrame.LookVector.X, cam.CFrame.LookVector.Z)
+    local R = M.radar.size
+    local maxD = M.radar.dist
+    local childs = M.radar.blips:GetChildren()
+    for i = #childs, 1, -1 do
+        if childs[i]:IsA("Frame") or childs[i]:IsA("TextLabel") then childs[i]:Destroy() end
+    end
+    local function place(pos, col, sz)
+        local rel = pos - base
+        -- 以相机朝向为"上"
+        local x = rel.X * math.cos(-yaw) - rel.Z * math.sin(-yaw)
+        local z = rel.X * math.sin(-yaw) + rel.Z * math.cos(-yaw)
+        local nx = math.clamp(x / maxD, -1, 1)
+        local nz = math.clamp(-z / maxD, -1, 1)
+        if (nx * nx + nz * nz) > 1 then return end
+        local b = M.radarBlip(M.radar.blips, col, sz)
+        b.Position = UDim2.new(0.5, nx * (R / 2), 0.5, nz * (R / 2))
+    end
+    -- 玩家
+    if M.radar.showP then
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= lp and p.Character then
+                local h = p.Character:FindFirstChild("HumanoidRootPart")
+                if h then place(h.Position, Color3.fromRGB(90, 200, 255), 7) end
+            end
+        end
+    end
+    -- NPC / 老师 + 视野锥
+    if M.radar.showN then
+        local bestT, bestD = nil, math.huge
+        for _, m in ipairs(workspace:GetChildren()) do
+            local hum = m:FindFirstChildOfClass("Humanoid")
+            if hum and not Players:GetPlayerFromCharacter(m) then
+                local hrp = m:FindFirstChild("HumanoidRootPart") or m:FindFirstChild("Torso")
+                if hrp then
+                    local isT = M.radarIsTeacher(m)
+                    place(hrp.Position, isT and Color3.fromRGB(255, 90, 90) or Color3.fromRGB(255, 190, 80),
+                          isT and 9 or 6)
+                    local d = (hrp.Position - base).Magnitude
+                    if isT and d < bestD then bestD, bestT = d, m end
+                end
+            end
+        end
+        -- 视野锥：从老师位置朝其朝向画两条射线 + 一段弧
+        if M.radar.cone and bestT then
+            local hrp = bestT:FindFirstChild("HumanoidRootPart") or bestT:FindFirstChild("Torso")
+            if hrp then
+                local dir = hrp.CFrame.LookVector
+                local ang = math.atan2(dir.X, dir.Z) - yaw
+                local half = math.rad(M.radar.coneFov or 90) / 2
+                local rng = M.radar.coneRange or 70
+                for i = -1, 1, 1 do
+                    local a = ang + i * half
+                    local ex = base + Vector3.new(math.sin(a) * rng, 0, math.cos(a) * rng)
+                    local rel = ex - base
+                    local x = rel.X * math.cos(-yaw) - rel.Z * math.sin(-yaw)
+                    local z = rel.X * math.sin(-yaw) + rel.Z * math.cos(-yaw)
+                    local nx = math.clamp(x / maxD, -1, 1)
+                    local nz = math.clamp(-z / maxD, -1, 1)
+                    local ln = Instance.new("Frame")
+                    ln.BackgroundColor3 = Color3.fromRGB(255, 140, 60)
+                    ln.BackgroundTransparency = 0.55
+                    ln.BorderSizePixel = 0
+                    ln.AnchorPoint = Vector2.new(0.5, 0.5)
+                    ln.Size = UDim2.fromOffset(2, math.clamp((rng / maxD) * (R / 2), 6, R / 2))
+                    ln.Position = UDim2.new(0.5, nx * (R / 4), 0.5, nz * (R / 4))
+                    ln.Rotation = math.deg(math.atan2(nx, nz))
+                    ln.Parent = M.radar.blips
+                end
+                M.radar.info.Text = ("老师 %s · 距离 %d"):format(bestT.Name, math.floor(bestD))
+            end
+        end
+    end
+    -- 中心点
+    local c0 = M.radarBlip(M.radar.blips, Color3.fromRGB(120, 255, 140), 8)
+    c0.Position = UDim2.fromScale(0.5, 0.5)
+end
+
+pcall(function()
+    RS.Heartbeat:Connect(function()
+        if not RUNNING then return end
+        pcall(M.radarTick)
+    end)
+end)
 --==== 鼠标静默自瞄（mousemoverel，来自 pf_lite 思路）====
 M.mouseAim = { last = 0 }
 function M.mouseAimTick()
