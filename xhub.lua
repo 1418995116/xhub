@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.26"
-local BUILD   = "2026-11-07 06:30"
+local VERSION = "v19.27"
+local BUILD   = "2026-11-07 20:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6695,6 +6695,156 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
 
 -- 菜单打开/关闭时只设置一次鼠标状态；不再每帧抢（坐着+第一人称游戏会抖动）
 
+--==== Rendex 汉化层：运行时把它的英文 UI 文本换成中文（不改它源码）====
+M.cnMap = {
+    -- 页签
+    ["Home"]="主页", ["Main"]="主要", ["Player"]="玩家", ["Floors"]="楼层",
+    ["Visuals"]="视觉", ["Miscellaneous"]="杂项", ["Settings"]="设置", ["Misc"]="杂项",
+    -- Main 反实体
+    ["Anti Eyes"]="防眼睛", ["Anti Halt"]="防定身", ["Anti Dupe"]="防复制",
+    ["Anti Screech"]="防尖叫", ["Bypass Seeking Wall"]="穿 Seek 墙",
+    ["Bypass Seek Obstructions"]="穿 Seek 障碍", ["Anti Figure Hearing"]="防 Figure 听觉",
+    ["Anti Dread"]="防恐惧", ["Anti Giggle"]="防咯咯笑", ["Anti Gloom Egg"]="防幽暗蛋",
+    ["Anti Surge"]="防电涌", ["Anti Snare"]="防捕兽夹", ["Anti Drones"]="防无人机",
+    ["Anti Ransom"]="防勒索", ["Anti Alma"]="防 Alma", ["Anti Scribbles"]="防涂鸦",
+    ["Anti Stampede"]="防踩踏", ["Anti Electric Puddle"]="防电水坑",
+    ["Forget Me Not Skipper"]="跳过忘忧草", ["Anti Noise"]="防噪音",
+    ["Anti Crusher"]="防压碎机", ["Creak Anger Meter"]="Creak 怒气条",
+    ["Auto Look at Creak"]="自动看 Creak", ["Bring Dropped Items"]="吸取掉落物",
+    ["TP to Next Door"]="传送到下一门", ["Anti Lookman"]="防 Lookman",
+    ["Anti Banana"]="防香蕉", ["Anti Jeff"]="防 Jeff",
+    ["Anticheat Bypass"]="反作弊绕过", ["Position Spoof"]="位置欺骗",
+    ["Crouch Spoof"]="蹲姿欺骗", ["Noclip Manipulation"]="穿墙增强",
+    ["Infinite Items"]="无限道具", ["Item List"]="道具列表",
+    ["Infinite Crucifix"]="无限十字架", ["Mode"]="模式",
+    ["Auto Solve Anchors"]="自动解锚链", ["Auto Breaker Box"]="自动电闸",
+    ["Auto Unlock Padlock"]="自动开锁", ["Bruteforce Code"]="暴力破解密码",
+    ["Padlock Distance"]="密码锁距离", ["Auto Minecart"]="自动矿车",
+    -- Player
+    ["Enable Jump"]="允许跳跃", ["Infinite Jump"]="无限跳", ["Enable Slide"]="允许滑铲",
+    ["Instant Interact"]="秒交互", ["Remove Closet Delay"]="柜子无冷却", ["Noclip"]="穿墙",
+    ["Speed Value"]="速度数值", ["Flight Speed"]="飞行速度", ["Speed"]="速度",
+    ["Flight"]="飞行", ["Speed Bypass"]="速度绕过", ["No Acceleration"]="无惯性",
+    ["Jump Power"]="跳跃力", ["Jump Power Value"]="跳跃力数值",
+    ["Slide Power"]="滑铲力", ["Slide Power Value"]="滑铲力数值",
+    ["Suicide"]="自杀", ["Revive"]="复活", ["Play Again"]="重新开始",
+    ["Auto Interact"]="自动交互", ["Interact Reach"]="交互距离",
+    ["Ignore Interactions"]="忽略交互", ["Door Reach"]="门距离",
+    ["Prompt Reach"]="提示距离", ["Prompt Multiplier"]="提示倍率",
+    -- Floors
+    ["Seek Path"]="Seek 路线", ["Eyestalk Path"]="眼柄路线",
+    ["Show Vault Combination"]="显示保险箱密码", ["Auto Crack Vault"]="自动开保险箱",
+    ["Auto Abstain Terminal"]="自动戒断终端",
+    -- Visuals
+    ["Player ESP"]="玩家透视", ["Entity ESP"]="实体透视", ["ESP Entities"]="实体透视开关",
+    ["Closet ESP"]="柜子透视", ["Objective ESP"]="目标透视", ["Door ESP"]="门透视",
+    ["Electric Puddle ESP"]="电坑透视", ["Forget Me Not ESP"]="忘忧草透视",
+    ["Item ESP"]="物品透视", ["Ladder ESP"]="梯子透视",
+    ["Transparent Closets"]="柜子透明", ["Closet Transparency"]="柜子透明度",
+    ["Tracers"]="指向线", ["Max Distance"]="最大距离",
+    ["Entity Notifier"]="实体预警", ["Notify Entities"]="实体通知",
+    ["Spawn Text"]="生成文字", ["Notify in Chat"]="聊天通知",
+    ["Third Person"]="第三人称", ["X Offset"]="X 偏移", ["Y Offset"]="Y 偏移",
+    ["Z Offset"]="Z 偏移", ["Fullbright"]="全亮",
+    ["No Camera Bob"]="去镜头摇晃", ["No Camera Shake"]="去镜头抖动",
+    ["FOV Changer"]="FOV 修改", ["FOV Value"]="FOV 数值",
+    -- 其它
+    ["Anti Lag"]="防卡顿", ["Menu Bind"]="菜单键", ["Open Keybind Menu"]="打开改键",
+    ["Execute on Serverhop"]="换服自动执行", ["DPI Scale"]="界面缩放",
+    ["Unload"]="卸载", ["Discord"]="Discord",
+    ["Enabled"]="开", ["Disabled"]="关", ["On"]="开", ["Off"]="关",
+    ["Toggle"]="开关", ["Value"]="数值", ["Distance"]="距离", ["Speed"]="速度",
+}
+
+M.cnOn = false
+M.cnSeen = setmetatable({}, { __mode = "k" })
+function M.cnApply(inst)
+    if not M.cnOn then return end
+    pcall(function()
+        if inst.ClassName ~= "TextLabel" and inst.ClassName ~= "TextButton"
+           and inst.ClassName ~= "TextBox" and inst.ClassName ~= "Text" then return end
+        local t = inst.Text or inst.TextStrokeTransparency ~= nil and inst.Text or nil
+        t = inst.Text
+        if type(t) ~= "string" or t == "" then return end
+        if M.cnSeen[t] then return end
+        local cn = M.cnMap[t]
+        if not cn then
+            -- 复合文本（"Anti Screech  [ON]"）逐词替换
+            local changed = false
+            for en, zh in pairs(M.cnMap) do
+                if #en >= 4 and t:find(en, 1, true) then
+                    t = t:gsub(en:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1"), zh)
+                    changed = true
+                end
+            end
+            if changed then inst.Text = t end
+        else
+            inst.Text = cn
+        end
+        M.cnSeen[t] = true
+    end)
+end
+
+function M.cnStart()
+    M.cnOn = true
+    -- 1) 先扫一遍现有 GUI
+    local function scan()
+        for _, root in ipairs({ CoreGui, lp:FindFirstChildOfClass("PlayerGui") }) do
+            if root then
+                pcall(function()
+                    for _, d in ipairs(root:GetDescendants()) do
+                        if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
+                            M.cnApply(d)
+                        end
+                    end
+                end)
+            end
+        end
+    end
+    scan()
+    -- 2) 监听后续新增/变化
+    if not M._cnConn then
+        M._cnConn = true
+        task.spawn(function()
+            while RUNNING do
+                task.wait(0.4)
+                if M.cnOn then pcall(scan) end
+            end
+        end)
+        pcall(function()
+            game.DescendantAdded:Connect(function(d)
+                if M.cnOn then M.cnApply(d) end
+            end)
+        end)
+    end
+end
+
+function M.cnStop()
+    M.cnOn = false
+end
+
+-- Rendex 快捷启动（先装汉化层，再加载）
+M.RENDEX_URLS = {
+    "https://raw.githubusercontent.com/ImNotWhyLclc/Rendex/refs/heads/main/Loader.luau",
+    "https://ghproxy.net/https://raw.githubusercontent.com/ImNotWhyLclc/Rendex/refs/heads/main/Loader.luau",
+}
+function M.rendexLaunch()
+    local src
+    for _, u in ipairs(M.RENDEX_URLS) do
+        local ok, r = pcall(function() return game:HttpGet(u, true) end)
+        if ok and type(r) == "string" and #r > 100 then src = r break end
+    end
+    if not src then return false, "下载失败（网络被拦）" end
+    pcall(function() writefile("xhub_rendex.lua", src) end)
+    M.cnStart()
+    local ok, err = pcall(function()
+        local fn = loadstring(src)
+        if not fn then error("loadstring 失败") end
+        fn()
+    end)
+    if ok then return true, "已启动（UI 已汉化）" end
+    return false, tostring(err)
+end
 --==== 射线后视（软件渲染）：不克隆世界，直接对背后打射线阵，画"像素级"真实画面 ====
 M.rv = { on = false, mode = "cols", gw = 40, gh = 24, cols = 260, fov = 95, range = 400, pixels = {}, pivots = {}, last = 0, last2 = 0, fps = 14, fps2 = 20 }
 
@@ -7266,6 +7416,17 @@ M.addButton(pTool, "清除 Dex 缓存", function()
         end
     end
     notify("已清空 Dex 缓存（" .. okc .. " 个文件）", "info", 3)
+end)
+M.addButton(pTool, "启动 Rendex（DOORS · UI 已汉化）", function()
+    notify("正在启动 Rendex…", "info", 2)
+    task.spawn(function()
+        local ok, info = M.rendexLaunch()
+        notify(ok and ("Rendex: " .. tostring(info)) or ("Rendex 失败: " .. tostring(info)), ok and "ok" or "err", 5)
+    end)
+end)
+M.addToggle(pTool, "Rendex 界面汉化（接管所有英文文本）", false, function(v)
+    if v then pcall(M.cnStart) else pcall(M.cnStop) end
+    notify(v and "汉化层已开：第三方 UI 的英文会尽量翻成中文" or "汉化层已关", "info", 3)
 end)
 M.addButton(pTool, "内置中文资源管理器（离线·不用 Dex）", function()
     pcall(M.miniExplorer)
