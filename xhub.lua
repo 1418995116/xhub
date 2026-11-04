@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.44"
-local BUILD   = "2026-11-08 10:00"
+local VERSION = "v19.45"
+local BUILD   = "2026-11-08 11:20"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6044,6 +6044,7 @@ M.addSlider(pVisual, "雷达显示距离", 40, 400, 140, function(v) M.radar.dis
 M.addSlider(pVisual, "雷达直径 px", 120, 320, 200, function(v) M.radar.size = v end)
 M.addToggle(pVisual, "雷达显示玩家", true, function(v) M.radar.showP = v end)
 M.addToggle(pVisual, "雷达显示 NPC/老师", true, function(v) M.radar.showN = v end)
+M.addToggle(pVisual, "雷达显示课桌/椅子", true, function(v) M.radar.showDesk = v end)
 M.addToggle(pVisual, "显示老师视野锥", true, function(v) M.radar.cone = v end)
 M.addSlider(pVisual, "视野锥角度", 30, 160, 90, function(v) M.radar.coneFov = v end)
 M.addSlider(pVisual, "视野锥长度", 20, 200, 70, function(v) M.radar.coneRange = v end)
@@ -6891,15 +6892,25 @@ M.exam = { open = false, answers = {}, auto = false, lastTick = 0, sig = "" }
 
 function M.examScan()
     local out, seen = {}, {}
-    local gui = lp:FindFirstChildOfClass("PlayerGui")
-    if not gui then return out end
     local texts = {}
-    for _, d in ipairs(gui:GetDescendants()) do
-        if (d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox")) and d.Visible then
-            local t = tostring(d.Text or "")
-            if #t >= 1 and #t <= 80 then texts[#texts + 1] = t end
-        end
+    local function harvest(root)
+        if not root then return end
+        pcall(function()
+            for _, d in ipairs(root:GetDescendants()) do
+                if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
+                    local t = tostring(d.Text or "")
+                    if #t > 0 and #t <= 200 then texts[#texts + 1] = t end
+                end
+            end
+        end)
     end
+    harvest(lp:FindFirstChildOfClass("PlayerGui"))
+    harvest(lp.Character)
+    pcall(function()
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if d:IsA("SurfaceGui") or d:IsA("BillboardGui") then harvest(d) end
+        end
+    end)
     local function add(n, l)
         n = tonumber(n)
         if not n or n < 1 or n > 200 then return end
@@ -6909,12 +6920,14 @@ function M.examScan()
         seen[n] = true
         out[n] = l
     end
-    for _, t in ipairs(texts) do
-        -- 形如 "6. D" / "Q6 D" / "6:D" / "6 D"
-        local n, l = t:match("^%s*[Qq]?%s*(%d+)%s*[:%.%)%-]?%s*([ABCDabcd])%s*$")
-        if n then add(n, l) end
-        local n2, l2 = t:match("[Qq]%s*(%d+)%D+([ABCDabcd])")
-        if n2 then add(n2, l2) end
+    for _, t0 in ipairs(texts) do
+        for line in tostring(t0):gmatch("[^\r\n]+") do
+            local n, l = line:match("^%s*[Qq]?%s*(%d+)%s*[:%.%)%-]?%s*([ABCDabcd])%s*$")
+            if n then add(n, l) end
+            for n2, l2 in line:gmatch("(%d+)%s*[:%.%)%-]%s*([ABCDabcd])") do add(n2, l2) end
+            for n3, l3 in line:gmatch("(%d+)%s+([ABCDabcd])%f[%W]") do add(n3, l3) end
+            for n4, l4 in line:gmatch("[Qq]%s*(%d+)%D+([ABCDabcd])") do add(n4, l4) end
+        end
     end
     return out
 end
@@ -7114,7 +7127,7 @@ pcall(function()
     end)
 end)
 --==== 2D 雷达（可拖动圆形雷达：玩家/NPC + 目标视野锥）====
-M.radar = { on = false, size = 200, dist = 140, showP = true, showN = true, cone = true,
+M.radar = { on = false, size = 200, dist = 140, showP = true, showN = true, showDesk = true, cone = true,
             coneFov = 90, coneRange = 70, teacherPat = "teacher,prof,guard,monitor,npc" }
 
 function M.radarBuild()
@@ -7228,6 +7241,24 @@ function M.radarTick()
             end
         end
     end
+    -- 课桌 / 椅子（黄点）
+    if M.radar.showDesk then
+        pcall(function()
+            for _, m in ipairs(workspace:GetDescendants()) do
+                local nm = tostring(m.Name):lower()
+                if (nm:find("desk", 1, true) or nm:find("table", 1, true) or nm:find("chair", 1, true)) then
+                    local pos
+                    if m:IsA("BasePart") then
+                        pos = m.Position
+                    elseif m:IsA("Model") then
+                        local p0 = m.PrimaryPart or m:FindFirstChildWhichIsA("BasePart")
+                        pos = p0 and p0.Position
+                    end
+                    if pos then place(pos, Color3.fromRGB(215, 175, 95), 5) end
+                end
+            end
+        end)
+    end
     -- NPC / 老师 + 视野锥
     if M.radar.showN then
         local bestT, bestD = nil, math.huge
@@ -7248,7 +7279,8 @@ function M.radarTick()
         if M.radar.cone and bestT then
             local hrp = bestT:FindFirstChild("HumanoidRootPart") or bestT:FindFirstChild("Torso")
             if hrp then
-                local dir = hrp.CFrame.LookVector
+                local hd = bestT:FindFirstChild("Head")
+                local dir = (hd and hd.CFrame.LookVector) or hrp.CFrame.LookVector
                 local ang = math.atan2(dir.X, dir.Z) - yaw
                 local half = math.rad(M.radar.coneFov or 90) / 2
                 local rng = M.radar.coneRange or 70
