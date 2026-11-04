@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.62"
-local BUILD   = "2026-11-09 02:00"
+local VERSION = "v19.63"
+local BUILD   = "2026-11-09 03:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7062,6 +7062,104 @@ function M.photoAutoStop()
     M.photoAuto.on = false
 end
 
+--==== 正规交答案：走 AnswerTable:InvokeServer(q, letter)（游戏自己的接口）=====
+M.sub = { on = false, mine = {}, correct = {}, failed = {}, n = 0, ok = 0, bad = 0 }
+
+function M.answerTable()
+    local RS2 = game:GetService("ReplicatedStorage")
+    local rf = RS2:FindFirstChild("PlayerAnswerTable")
+    if rf and rf:IsA("RemoteFunction") then return rf end
+    for _, d in ipairs(RS2:GetDescendants()) do
+        if tostring(d.Name) == "PlayerAnswerTable" and d:IsA("RemoteFunction") then return d end
+    end
+    return nil
+end
+
+function M.submittable()
+    if workspace:GetAttribute("GameStatus") ~= "Assessment In Progress" then return false, "不在考试中" end
+    local c = lp.Character
+    if not c then return false, "无角色" end
+    if c:GetAttribute("DeathSequenceActive") == true then return false, "死亡中" end
+    local h = c:FindFirstChildOfClass("Humanoid")
+    if not h then return false, "无 Humanoid" end
+    if not h.Sit then return false, "没坐下（要坐在座位上）" end
+    return true, "ok"
+end
+
+function M.examReadMine()
+    local rf = M.answerTable()
+    if not rf then return false, "找不到 PlayerAnswerTable" end
+    local ok, answers, correct = pcall(function() return rf:InvokeServer() end)
+    if not ok then return false, tostring(answers) end
+    if type(answers) ~= "table" then
+        return false, "返回 " .. tostring(answers)
+    end
+    local cnt = 0
+    for k, v in pairs(answers) do
+        local kn = tonumber(k) or k
+        if v ~= "UNANSWERED" then
+            M.sub.mine[kn] = v
+            cnt = cnt + 1
+        end
+    end
+    if type(correct) == "table" then
+        for k, v in pairs(correct) do M.sub.correct[tonumber(k) or k] = v end
+    end
+    print(("[XHub][sub] 已读过你的答卷：%d 题已答"):format(cnt))
+    return true, ("服务器上有 %d 题已答"):format(cnt)
+end
+
+function M.submitAnswer(q, letter)
+    local rf = M.answerTable()
+    if not rf then return false end
+    local ok, res, correct = pcall(function() return rf:InvokeServer(q, letter) end)
+    if ok and res then
+        M.sub.mine[q] = letter
+        M.sub.ok = M.sub.ok + 1
+        print(("[XHub][sub] Q%d -> %s 已提交%s"):format(q, letter, correct and "（正确）" or ""))
+        return true, correct
+    end
+    M.sub.bad = M.sub.bad + 1
+    print(("[XHub][sub] Q%d -> %s 被拒（%s）"):format(q, letter, tostring(res)))
+    return false
+end
+
+function M.autoSubmitAll()
+    if M.sub.on then return false, "已在运行" end
+    local okS, why = M.submittable()
+    if not okS then return false, "现在不能交：" .. tostring(why) end
+    pcall(M.examReadMine)
+    M.sub.on = true
+    M.sub.n, M.sub.ok, M.sub.bad = 0, 0, 0
+    task.spawn(function()
+        local nums = {}
+        for n in pairs(M.exam.answers) do nums[#nums + 1] = n end
+        table.sort(nums)
+        print(("[XHub][sub] 可提交 %d 题"):format(#nums))
+        for _, q in ipairs(nums) do
+            if not M.sub.on or not RUNNING then break end
+            local sk, why2 = M.submittable()
+            if not sk then
+                print("[XHub][sub] 停止：" .. tostring(why2))
+                break
+            end
+            local letter = M.exam.answers[q]
+            if letter and M.sub.mine[q] == nil and (M.sub.failed[q] or 0) < 3 then
+                local good = M.submitAnswer(q, letter)
+                M.sub.n = M.sub.n + 1
+                if not good then M.sub.failed[q] = (M.sub.failed[q] or 0) + 1 end
+                task.wait(0.12)
+            end
+        end
+        M.sub.on = false
+        print(("[XHub][sub] 结束：提交 %d 次，成功 %d，被拒 %d"):format(M.sub.n, M.sub.ok, M.sub.bad))
+    end)
+    return true, ("开始自动交答案（%d 题）"):format(#M.exam.answers)
+end
+
+function M.autoSubmitStop()
+    M.sub.on = false
+end
 --==== 全量 dump：找出客户端里是否存着题库/答案表 ====
 function M.dumpAllNames()
     local RS2 = game:GetService("ReplicatedStorage")
@@ -9264,6 +9362,18 @@ end)
 M.addButton(pTool, "关闭 答题 Hub 窗口", function()
     M.exam.open = false
     notify("答题 Hub 已关闭（雷达仍可单独用）", "info", 3)
+end)
+M.addButton(pTool, "读取我已答的题（服务器视角）", function()
+    local ok, msg = M.examReadMine()
+    notify(tostring(msg), ok and "ok" or "warn", 6)
+end)
+M.addButton(pTool, "自动交答案（走游戏接口，不是点按钮）", function()
+    local ok, msg = M.autoSubmitAll()
+    notify(tostring(msg), ok and "ok" or "warn", 6)
+end)
+M.addButton(pTool, "停止自动交答案", function()
+    M.autoSubmitStop()
+    notify(("已停止（成功 %d / 被拒 %d）"):format(M.sub.ok, M.sub.bad), "info", 4)
 end)
 M.addButton(pTool, "一键全流程（安全拍照积累 → 自动填卷）", function()
     local ok, msg = M.autoFlowStart(60)
