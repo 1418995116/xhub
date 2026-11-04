@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.59"
-local BUILD   = "2026-11-08 23:10"
+local VERSION = "v19.60"
+local BUILD   = "2026-11-09 00:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7293,6 +7293,27 @@ end
 function M.safePhotoStop()
     M.safe.on = false
 end
+--==== 直接触发按钮回调（getconnections，不伪造鼠标坐标，不会被 267）=====
+function M.clickButtonSmart(btn)
+    local fired = 0
+    if type(getconnections) ~= "function" then return 0 end
+    local evts = { "MouseButton1Click", "Activated", "MouseButton1Down" }
+    for _, en in ipairs(evts) do
+        local ok, conns = pcall(function() return getconnections(btn[en]) end)
+        if ok and type(conns) == "table" then
+            for _, c in ipairs(conns) do
+                if c.Enabled then
+                    local ok2 = pcall(function()
+                        if type(c.Fire) == "function" then c:Fire()
+                        elseif type(c.Function) == "function" then c.Function() end
+                    end)
+                    if ok2 then fired = fired + 1 end
+                end
+            end
+        end
+    end
+    return fired
+end
 --==== 自动填答题纸（点 GUI 按钮，等价手点）=====
 M.fill = { on = false, done = 0 }
 
@@ -7326,15 +7347,20 @@ function M.findPaperFrames()
 end
 
 function M.clickGuiButton(btn)
+    local n = M.clickButtonSmart(btn)
+    if n > 0 then return true, n end
+    -- 最后兜底：虚拟鼠标（坐标可能对不上 SurfaceGui，仅作尝试）
     local vim = game:GetService("VirtualInputManager")
     local ap, as = btn.AbsolutePosition, btn.AbsoluteSize
-    if as.X <= 0 or as.Y <= 0 then return false end
-    pcall(function()
-        vim:SendMouseButtonEvent(ap.X + as.X / 2, ap.Y + as.Y / 2, 0, true, game, 1)
-        task.wait(0.05)
-        vim:SendMouseButtonEvent(ap.X + as.X / 2, ap.Y + as.Y / 2, 0, false, game, 1)
-    end)
-    return true
+    if as.X > 0 and as.Y > 0 then
+        pcall(function()
+            vim:SendMouseButtonEvent(ap.X + as.X / 2, ap.Y + as.Y / 2, 0, true, game, 1)
+            task.wait(0.05)
+            vim:SendMouseButtonEvent(ap.X + as.X / 2, ap.Y + as.Y / 2, 0, false, game, 1)
+        end)
+        return true, 0
+    end
+    return false, 0
 end
 
 function M.fillAnswers()
@@ -7356,11 +7382,14 @@ function M.fillAnswers()
             local f = frames[n]
             local letter = M.exam.answers[n]
             if f and f[letter] then
-                if M.clickGuiButton(f[letter]) then
+                local okc, cnt = M.clickGuiButton(f[letter])
+                if okc then
                     M.fill.done = M.fill.done + 1
-                    print(("[XHub][fill] Q%d -> %s 已点"):format(n, letter))
+                    print(("[XHub][fill] Q%d -> %s 触发回调 %s 个"):format(n, letter, tostring(cnt)))
+                else
+                    print(("[XHub][fill] Q%d -> %s 找不到可触发事件"):format(n, letter))
                 end
-                task.wait(0.18)
+                task.wait(0.22)
             end
         end
         M.fill.on = false
@@ -9210,6 +9239,17 @@ M.addButton(pTool, "停止拟人拍照", function()
     local n = 0
     for _ in pairs(M.exam.answers) do n = n + 1 end
     notify(("已停止，答案 %d 条"):format(n), "info", 4)
+end)
+M.addButton(pTool, "测试单题（只填 Q1）", function()
+    local frames = M.findPaperFrames()
+    local f = frames[1]
+    if not (f and M.exam.answers[1]) then
+        notify("Q1 答案或题框缺失", "warn", 4)
+        return
+    end
+    local letter = M.exam.answers[1]
+    local okc, cnt = M.clickGuiButton(f[letter])
+    notify(("Q1 -> %s ：%s（回调 %s 个）"):format(letter, okc and "已触发" or "失败", tostring(cnt)), okc and "ok" or "warn", 6)
 end)
 M.addButton(pTool, "自动填答题纸（按已记录答案点选）", function()
     local ok, msg = M.fillAnswers()
