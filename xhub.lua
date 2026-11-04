@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.67"
-local BUILD   = "2026-11-09 07:00"
+local VERSION = "v19.68"
+local BUILD   = "2026-11-09 08:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7892,7 +7892,7 @@ pcall(function()
     end)
 end)
 --==== 自动答题（自己的实现：监听手机答案 + 走游戏接口提交）=====
-M.ans = { key = {}, mine = {}, on = false, stop = false, submitted = 0, rejected = 0 }
+M.ans = { key = {}, mine = {}, on = false, stop = false, submitted = 0, rejected = 0, force = false }
 
 function M.ansTable()
     local RS2 = game:GetService("ReplicatedStorage")
@@ -7931,6 +7931,9 @@ function M.ansListen()
     M.ans.listening = true
     ev.OnClientEvent:Connect(function(...)
         local a = { ... }
+        local parts = {}
+        for i = 1, math.min(#a, 6) do parts[#parts + 1] = tostring(a[i]) end
+        print("[XHub][ans] PhoneDisplay <- " .. table.concat(parts, " | "))
         for i = 1, #a do
             if type(a[i]) == "string" then M.ansParse(a[i]) end
         end
@@ -7940,6 +7943,7 @@ function M.ansListen()
 end
 
 function M.ansCanSubmit()
+    if M.ans.force then return true, "force" end
     if workspace:GetAttribute("GameStatus") ~= "Assessment In Progress" then return false, "不在考试中" end
     local c = lp.Character
     if not c then return false, "无角色" end
@@ -7967,6 +7971,49 @@ function M.ansReadMine()
     return false, 0
 end
 
+-- 诊断：把每道门槛的真实值打出来
+function M.ansDiag()
+    local out = {}
+    local function add(s) out[#out + 1] = s end
+    add("=== 自动答题诊断 ===")
+    -- 1) Remote 在哪
+    local rf = M.ansTable()
+    add("PlayerAnswerTable: " .. tostring(rf and (rf:GetFullName()) or "找不到"))
+    local ev
+    for _, d in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do
+        if tostring(d.Name) == "PhoneDisplay" then ev = d break end
+    end
+    add("PhoneDisplay: " .. tostring(ev and ev:GetFullName() or "找不到") .. "  listening=" .. tostring(M.ans.listening))
+    -- 2) 门槛
+    add("workspace.GameStatus = " .. tostring(workspace:GetAttribute("GameStatus")))
+    local attrs = {}
+    pcall(function()
+        for k, v in pairs(workspace:GetAttributes()) do attrs[#attrs + 1] = tostring(k) .. "=" .. tostring(v) end
+    end)
+    add("workspace 全部属性: " .. table.concat(attrs, ", "))
+    local ch = lp.Character
+    add("角色: " .. tostring(ch and ch.Name or "nil"))
+    if ch then
+        local h = ch:FindFirstChildOfClass("Humanoid")
+        add("Humanoid.Sit = " .. tostring(h and h.Sit))
+        add("SeatPart = " .. tostring(h and h.SeatPart and h.SeatPart.Name))
+        add("DeathSequenceActive = " .. tostring(ch:GetAttribute("DeathSequenceActive")))
+    end
+    -- 3) 答案收集
+    local kc, mc = 0, 0
+    for _ in pairs(M.ans.key) do kc = kc + 1 end
+    for _ in pairs(M.ans.mine) do mc = mc + 1 end
+    add(("已记录答案 %d 条，服务器已答 %d 题"):format(kc, mc))
+    -- 4) 试 InvokeServer()
+    if rf then
+        local ok, a = pcall(function() return rf:InvokeServer() end)
+        add("InvokeServer() -> " .. tostring(ok) .. " / " .. typeof(a) .. " / " .. tostring(type(a) == "table" and "table" or a))
+    end
+    local txt = table.concat(out, "\n")
+    print(txt)
+    if type(setclipboard) == "function" then pcall(setclipboard, txt) end
+    return txt
+end
 function M.ansStart()
     if M.ans.on then return false, "已在运行" end
     if not M.ansTable() then return false, "找不到 PlayerAnswerTable" end
@@ -8118,6 +8165,14 @@ end)
 M.addButton(pTool, "自动答题 开（拍照拿答案 → 自动提交）", function()
     local ok, msg = M.ansStart()
     notify(tostring(msg), ok and "ok" or "warn", 6)
+end)
+M.addButton(pTool, "自动答题 诊断（打印门槛真实值）", function()
+    local txt = M.ansDiag()
+    notify("已打印并复制，发我", "info", 6)
+end)
+M.addToggle(pTool, "自动答题 强制模式（忽略考试/坐下判定）", false, function(v)
+    M.ans.force = v
+    notify(v and "强制模式已开：会无视门槛直接提交（可能被拒）" or "强制模式已关", v and "warn" or "info", 5)
 end)
 M.addButton(pTool, "自动答题 关", function()
     M.ansStop()
