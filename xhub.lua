@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.50"
-local BUILD   = "2026-11-08 15:40"
+local VERSION = "v19.51"
+local BUILD   = "2026-11-08 16:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6989,6 +6989,138 @@ function M.examBuild()
     end
 end
 
+--==== 答案捕获器：监听所有可疑 Remote，抓到就记录；并能回放请求 ====
+M.spy = { on = false, log = {}, remotes = {} }
+
+function M.spyCandidates()
+    local RS2 = game:GetService("ReplicatedStorage")
+    local pats = { "answer", "phone", "test", "quiz", "question", "paper", "exam", "grade", "sheet", "check" }
+    local list = {}
+    local function scan(root)
+        if not root then return end
+        pcall(function()
+            for _, d in ipairs(root:GetDescendants()) do
+                if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then
+                    local nm = tostring(d.Name):lower()
+                    for _, p in ipairs(pats) do
+                        if nm:find(p, 1, true) then
+                            list[#list + 1] = d
+                            break
+                        end
+                    end
+                end
+            end
+        end)
+    end
+    scan(RS2)
+    scan(game:GetService("ReplicatedFirst"))
+    return list
+end
+
+function M.spyDescribe(v, depth)
+    depth = depth or 1
+    local t = type(v)
+    if t == "table" then
+        local buf = {}
+        local n = 0
+        for k, val in pairs(v) do
+            n = n + 1
+            if n > 15 then break end
+            if type(val) == "table" and depth < 3 then
+                buf[#buf + 1] = tostring(k) .. "=" .. M.spyDescribe(val, depth + 1)
+            else
+                buf[#buf + 1] = tostring(k) .. "=" .. tostring(val)
+            end
+        end
+        return "{" .. table.concat(buf, ",") .. "}"
+    end
+    return tostring(v)
+end
+
+function M.spyStart()
+    if M.spy.on then return true end
+    M.spy.on = true
+    local list = M.spyCandidates()
+    local n = 0
+    for _, r in ipairs(list) do
+        M.spy.remotes[#M.spy.remotes + 1] = r
+        if r:IsA("RemoteEvent") then
+            pcall(function()
+                r.OnClientEvent:Connect(function(...)
+                    local a = { ... }
+                    local parts = {}
+                    for i = 1, math.min(#a, 6) do parts[#parts + 1] = M.spyDescribe(a[i]) end
+                    local line = r.Name .. " <- " .. table.concat(parts, " | ")
+                    M.spy.log[#M.spy.log + 1] = line
+                    print("[XHub][spy] " .. line)
+                    M.spyMerge(a)
+                end)
+            end)
+            n = n + 1
+        end
+    end
+    print(("[XHub][spy] 已监听 %d 个 RemoteEvent（候选 %d 个）"):format(n, #list))
+    return n > 0
+end
+
+-- 从任何捕获参数里尝试抽取 题号->答案
+function M.spyMerge(args)
+    local function try(t)
+        if type(t) ~= "table" then return end
+        local got = 0
+        for k, v in pairs(t) do
+            local kn = tonumber(k)
+            if kn and type(v) == "string" then
+                local l = v:upper():sub(1, 1)
+                if l:match("[ABCD]") then
+                    M.exam.answers[kn] = l
+                    got = got + 1
+                end
+            end
+        end
+        if got > 0 then
+            print(("[XHub][spy] 从捕获数据解析到 %d 条答案！"):format(got))
+            M.exam.lastTick = 0
+        end
+    end
+    for i = 1, #args do
+        try(args[i])
+        if type(args[i]) == "table" then
+            for _, v in pairs(args[i]) do
+                if type(v) == "table" then try(v) end
+            end
+        end
+    end
+end
+
+-- 对所有可疑 RemoteFunction 回放调用（试 1..60）
+function M.spyReplay(maxN)
+    maxN = maxN or 60
+    local list = M.spyCandidates()
+    local hits = 0
+    for _, r in ipairs(list) do
+        if r:IsA("RemoteFunction") then
+            for i = 1, maxN do
+                local ok, res = pcall(function() return r:InvokeServer(i) end)
+                if ok and res ~= nil and res ~= false then
+                    print(("[XHub][spy] %s(%d) -> %s"):format(r.Name, i, M.spyDescribe(res)))
+                    hits = hits + 1
+                    M.spyMerge({ res })
+                    if hits > 40 then break end
+                end
+            end
+        end
+    end
+    return hits
+end
+
+function M.spyDump()
+    local txt = table.concat(M.spy.log, "\n")
+    print("=== [XHub][spy] 捕获 " .. #M.spy.log .. " 条 ===")
+    print(txt)
+    if type(setclipboard) == "function" then pcall(setclipboard, txt) end
+    return txt
+end
 --==== 深度探测答题纸（找每题的正确答案藏在哪：属性/按钮名/子对象）====
 function M.probeAnswerAssets()
     local RS2 = game:GetService("ReplicatedStorage")
@@ -8617,6 +8749,21 @@ end)
 M.addButton(pTool, "关闭 答题 Hub 窗口", function()
     M.exam.open = false
     notify("答题 Hub 已关闭（雷达仍可单独用）", "info", 3)
+end)
+M.addButton(pTool, "开始监听答案（QueryAnswer/Phone 等 Remote）", function()
+    local ok = M.spyStart()
+    notify(ok and "已监听：请你拿手机查一次答案，我会捕获服务器的回复" or "没找到可疑 Remote", ok and "ok" or "warn", 6)
+end)
+M.addButton(pTool, "回放请求：向所有可疑 Remote 试 1~60", function()
+    notify("正在回放调用…（可能被服务器限流）", "info", 3)
+    task.spawn(function()
+        local hits = M.spyReplay(60)
+        notify(("回放完成，有返回的调用 %d 次"):format(hits), hits > 0 and "ok" or "warn", 6)
+    end)
+end)
+M.addButton(pTool, "导出捕获到的答案数据", function()
+    local txt = M.spyDump()
+    notify("已打印并复制 " .. #txt .. " 字", "info", 5)
 end)
 M.addButton(pTool, "深度探测答题纸（找正确答案藏哪）", function()
     local txt = M.probeAnswerAssets()
