@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.27"
-local BUILD   = "2026-11-07 20:30"
+local VERSION = "v19.28"
+local BUILD   = "2026-11-07 21:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6754,6 +6754,30 @@ M.cnMap = {
     ["Unload"]="卸载", ["Discord"]="Discord",
     ["Enabled"]="开", ["Disabled"]="关", ["On"]="开", ["Off"]="关",
     ["Toggle"]="开关", ["Value"]="数值", ["Distance"]="距离", ["Speed"]="速度",
+    -- Lobby 页（大厅才有）
+    ["Lobby"]="大厅", ["Elevator Creation"]="电梯创建", ["Elevator Sniper"]="电梯狙击",
+    ["Destination"]="目的地", ["Max Players"]="最大玩家数", ["Friends Only"]="仅好友",
+    ["Select Modifiers"]="选择修改器", ["Create Elevator"]="创建电梯",
+    ["Select Player"]="选择玩家", ["Refresh List"]="刷新列表",
+    ["Snipe Elevator"]="狙击电梯", ["Auto Snipe"]="自动狙击",
+    ["Execute on serverhop"]="换服自动执行", ["UI Scale"]="界面缩放",
+    ["Unload"]="卸载", ["Join Our Discord"]="加入 Discord",
+    ["Copy Discord Invite Link"]="复制邀请链接",
+    ["Notification Style"]="通知样式", ["Test Notification"]="测试通知",
+    ["Configuration"]="配置", ["Config name"]="配置名", ["Create config"]="创建配置",
+    ["Config list"]="配置列表", ["Load config"]="加载配置", ["Overwrite config"]="覆盖配置",
+    ["Delete config"]="删除配置", ["Set as autoload"]="设为自动加载",
+    ["Reset autoload"]="重置自动加载", ["Current autoload config"]="当前自动加载配置",
+    ["Import config"]="导入配置", ["Export current config"]="导出当前配置",
+    ["Themes"]="主题", ["Background color"]="背景色", ["Main color"]="主色",
+    ["Accent color"]="强调色", ["Outline color"]="描边色", ["Font color"]="字体色",
+    ["Custom theme name"]="自定义主题名", ["Create theme"]="创建主题",
+    ["Custom themes"]="自定义主题", ["Load theme"]="加载主题",
+    ["Overwrite theme"]="覆盖主题", ["Delete theme"]="删除主题",
+    ["Refresh list"]="刷新列表", ["Set as default"]="设为默认",
+    ["Reset default"]="重置默认", ["Theme JSON"]="主题 JSON",
+    ["Import theme"]="导入主题", ["Export current theme"]="导出当前主题",
+    ["Search"]="搜索", ["搜索"]="搜索", ["---"]="—",
 }
 
 M.cnOn = false
