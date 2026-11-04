@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.45"
-local BUILD   = "2026-11-08 11:20"
+local VERSION = "v19.46"
+local BUILD   = "2026-11-08 12:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6983,6 +6983,60 @@ function M.examBuild()
     end
 end
 
+-- 探测答案到底存在哪：打印手机/纸张/工具里的文本与图片，以及可能的答案模块
+function M.examDump()
+    local lines = {}
+    local function add(...) lines[#lines + 1] = table.concat({ ... }, " ") end
+    add("=== [exam] 角色工具 ===")
+    local ch = lp.Character
+    if ch then
+        for _, t in ipairs(ch:GetChildren()) do
+            if t:IsA("Tool") then
+                add("Tool:", t.Name)
+                for _, d in ipairs(t:GetDescendants()) do
+                    local cls = d.ClassName
+                    local extra = ""
+                    if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
+                        extra = " text=" .. tostring(d.Text)
+                    elseif d:IsA("SurfaceGui") or d:IsA("BillboardGui") then
+                        extra = " (gui)"
+                    elseif d:IsA("Decal") or d:IsA("Texture") then
+                        extra = " img=" .. tostring(d.Texture)
+                    elseif d:IsA("ImageLabel") or d:IsA("ImageButton") then
+                        extra = " img=" .. tostring(d.Image)
+                    end
+                    add("  ", cls, d.Name, extra)
+                end
+            end
+        end
+    end
+    add("=== [exam] workspace 里的 SurfaceGui/BillboardGui ===")
+    local n = 0
+    for _, d in ipairs(workspace:GetDescendants()) do
+        if (d:IsA("SurfaceGui") or d:IsA("BillboardGui")) and n < 40 then
+            n = n + 1
+            local parent = d.Parent
+            add("GUI", d.ClassName, "in", tostring(parent and parent.Name), "adornee=" .. tostring(d.Adornee and d.Adornee.Name))
+            for _, t in ipairs(d:GetDescendants()) do
+                if t:IsA("TextLabel") then add("   text:", tostring(t.Text)) end
+                if t:IsA("ImageLabel") then add("   img:", tostring(t.Image)) end
+            end
+        end
+    end
+    add("=== [exam] ReplicatedStorage 里名字可疑的东西 ===")
+    pcall(function()
+        for _, d in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do
+            local nm = tostring(d.Name):lower()
+            if nm:find("answer") or nm:find("question") or nm:find("test") or nm:find("exam") or nm:find("quiz") then
+                add("  ", d.ClassName, d.Name, "(" .. tostring(d.Parent and d.Parent.Name) .. ")")
+            end
+        end
+    end)
+    local txt = table.concat(lines, "\n")
+    print(txt)
+    if type(setclipboard) == "function" then pcall(setclipboard, txt) end
+    return txt
+end
 function M.examRefresh()
     local ans = M.examScan()
     M.exam.answers = ans
@@ -7224,8 +7278,9 @@ function M.radarTick()
     local function place(pos, col, sz)
         local rel = pos - base
         -- 以相机朝向为"上"
-        local x = rel.X * math.cos(-yaw) - rel.Z * math.sin(-yaw)
-        local z = rel.X * math.sin(-yaw) + rel.Z * math.cos(-yaw)
+        local ca, sa = math.cos(yaw), math.sin(yaw)
+        local x = rel.X * ca - rel.Z * sa
+        local z = rel.X * sa + rel.Z * ca
         local nx = math.clamp(x / maxD, -1, 1)
         local nz = math.clamp(-z / maxD, -1, 1)
         if (nx * nx + nz * nz) > 1 then return end
@@ -7288,8 +7343,9 @@ function M.radarTick()
                     local a = ang + i * half
                     local ex = base + Vector3.new(math.sin(a) * rng, 0, math.cos(a) * rng)
                     local rel = ex - base
-                    local x = rel.X * math.cos(-yaw) - rel.Z * math.sin(-yaw)
-                    local z = rel.X * math.sin(-yaw) + rel.Z * math.cos(-yaw)
+                    local ca, sa = math.cos(yaw), math.sin(yaw)
+                    local x = rel.X * ca - rel.Z * sa
+                    local z = rel.X * sa + rel.Z * ca
                     local nx = math.clamp(x / maxD, -1, 1)
                     local nz = math.clamp(-z / maxD, -1, 1)
                     local ln = Instance.new("Frame")
@@ -8378,6 +8434,10 @@ M.addButton(pTool, "重新扫描答案", function()
     M.exam.lastTick = 0
     task.spawn(function() pcall(M.examRefresh) end)
     notify("已重新扫描", "info", 2)
+end)
+M.addButton(pTool, "探测答案存哪了（手机/纸张/ReplicatedStorage）", function()
+    local txt = M.examDump()
+    notify("已打印并复制 " .. #txt .. " 字，发我即可定位答案来源", "info", 6)
 end)
 M.addButton(pTool, "列出游戏所有 GUI 名字（排查用）", function()
     local gui = lp:FindFirstChildOfClass("PlayerGui")
