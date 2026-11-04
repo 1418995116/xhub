@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.36"
-local BUILD   = "2026-11-08 03:20"
+local VERSION = "v19.37"
+local BUILD   = "2026-11-08 04:10"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6766,8 +6766,38 @@ mk("TextLabel", { Text = "白名单: 车辆/输入/疾跑/相机 永不触碰\n�
 
 -- 菜单打开/关闭时只设置一次鼠标状态；不再每帧抢（坐着+第一人称游戏会抖动）
 
+-- 监视"卡密错误"提示，判断是本地校验还是在线校验
+M.keyUiWatch = function()
+    if M._keyUiWatching then return end
+    M._keyUiWatching = true
+    local bad = { "incorrect", "invalid", "wrong", "expired", "not found", "错误", "无效" }
+    task.spawn(function()
+        while RUNNING do
+            task.wait(0.6)
+            if M.key.on then
+            pcall(function()
+                local root = lp:FindFirstChildOfClass("PlayerGui")
+                if not root then return end
+                for _, d in ipairs(root:GetDescendants()) do
+                    if d:IsA("TextLabel") or d:IsA("TextButton") then
+                        local t = tostring(d.Text or ""):lower()
+                        for _, k in ipairs(bad) do
+                            if t:find(k, 1, true) and not M._keyBadSeen[t] then
+                                M._keyBadSeen[t] = true
+                                print("[XHub][key] UI 拒绝提示: " .. tostring(d.Text))
+                                M.key.uiRefused = true
+                            end
+                        end
+                    end
+                end
+            end)
+            end
+        end
+    end)
+end
 --==== 卡密绕过（Access Portal / key system）====
-M.key = { on = false, fakeMode = "auto", log = {} }
+M.key = { on = false, fakeMode = "auto", log = {}, uiRefused = false }
+M._keyBadSeen = M._keyBadSeen or {}
 M.KEY_PATTERNS = {
     "link-hub", "linkvertise", "keyguardian", "key-guardian", "platobo", "luarmor",
     "whitelist", "keyauth", "key_system", "keysystem", "access%20portal", "accessportal",
@@ -6793,6 +6823,43 @@ function M.keyFakeBody()
         '"expires":%d,"expiry":%d,"expiresAt":%d,"expire":%d,"days":365}', exp, exp, exp, exp)
 end
 
+-- 扩展：拦截执行器的 request 家族（很多卡密用这个而不是 game:HttpGet）
+function M.keyHookRequestFamily()
+    local names = { "request", "http_request", "http_request_async", "syn", "http", "krnl", "fluxus", "secure" }
+    local n = 0
+    local function wrap(fn, label)
+        if type(fn) ~= "function" or not hookfunction then return end
+        pcall(function()
+            hookfunction(fn, newcclosure(function(t)
+                local url = ""
+                if type(t) == "table" then url = tostring(t.Url or t.url or t.URL or "") end
+                if M.key.on and url ~= "" and M.keyIsKeyURL(url) then
+                    M.key.log[#M.key.log + 1] = label .. "(fake) " .. url
+                    print("[XHub][key] 伪造 " .. label .. ": " .. url)
+                    return { Success = true, StatusCode = 200, StatusMessage = "OK",
+                             Body = M.keyFakeBody(), Headers = {} }
+                end
+                if url ~= "" then
+                    M.key.log[#M.key.log + 1] = label .. " " .. url
+                    print("[XHub][key] 请求 " .. label .. ": " .. url)
+                end
+                return fn(t)
+            end))
+            n = n + 1
+        end)
+    end
+    for _, nm in ipairs({ "request", "http_request", "http_request_async" }) do
+        local fn = rawget(getfenv(), nm)
+        if type(fn) == "function" then wrap(fn, nm) end
+    end
+    for _, lib in ipairs({ "syn", "http", "krnl", "fluxus" }) do
+        local t = rawget(getfenv(), lib)
+        if type(t) == "table" and type(t.request) == "function" then
+            wrap(t.request, lib .. ".request")
+        end
+    end
+    return n
+end
 function M.keyBypassStart()
     if M.key.on then return true end
     M.key.on = true
@@ -6833,6 +6900,9 @@ function M.keyBypassStart()
             end))
         end
     end)
+    pcall(M.keyUiWatch)
+    local nReq = M.keyHookRequestFamily()
+    if nReq > 0 then okAny = true end
     return okAny
 end
 
@@ -7952,6 +8022,18 @@ end)
 M.addButton(pTool, "关闭卡密绕过", function()
     M.keyBypassStop()
     notify("卡密绕过已关闭", "info", 3)
+end)
+M.addButton(pTool, "卡密诊断（看它是联网校验还是本地比对）", function()
+    if #M.key.log == 0 then
+        notify("没有任何请求被记录 → 说明是【本地哈希比对】，伪造响应无效", "warn", 6)
+        print("[XHub][key] 结论：本地校验（无 HTTP）。需要拿到一个真 key 才能逆出算法。")
+    else
+        local txt = table.concat(M.key.log, "\n")
+        print("=== [XHub][key] 记录 ===")
+        print(txt)
+        if type(setclipboard) == "function" then pcall(setclipboard, txt) end
+        notify("已记录 " .. #M.key.log .. " 条请求（已复制），发我即可精确伪造", "info", 6)
+    end
 end)
 M.addButton(pTool, "切换伪造返回值（auto / true / valid）", function()
     if M.key.fakeMode == "auto" then M.key.fakeMode = "true"
