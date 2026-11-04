@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.30"
-local BUILD   = "2026-11-07 23:00"
+local VERSION = "v19.31"
+local BUILD   = "2026-11-07 23:30"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6906,6 +6906,20 @@ M.cnMap = {
     ["Reset default"]="重置默认", ["Theme JSON"]="主题 JSON",
     ["Import theme"]="导入主题", ["Export current theme"]="导出当前主题",
     ["Search"]="搜索", ["搜索"]="搜索", ["---"]="—",
+    -- Amethyst（FPS 脚本）
+    ["Combat"]="战斗", ["Visuals"]="视觉", ["Movement"]="移动",
+    ["Aimbot"]="自瞄", ["Triggerbot"]="自动开火", ["Team Check"]="队伍检查",
+    ["Wall Check"]="隔墙检查", ["Show FOV Circle"]="显示 FOV 圈",
+    ["FOV"]="视场范围", ["Smoothness"]="平滑度", ["Trigger FOV"]="开火范围",
+    ["Trigger Delay"]="开火延迟", ["Fire Delay (Rate)"]="射击间隔",
+    ["ESP"]="透视", ["Box ESP"]="方框透视", ["Name ESP"]="名字透视",
+    ["Distance ESP"]="距离透视",
+    ["Spinbot"]="自旋", ["Spin Speed"]="自旋速度", ["Bunnyhop"]="自动连跳",
+    ["Bhop Power"]="连跳力度", ["Autokill (Lock-On)"]="自动击杀（锁定）",
+    ["Fly (Space/Shift)"]="飞行（空格/Shift）", ["Fly Speed"]="飞行速度",
+    ["Noclip"]="穿墙", ["Infinite Jump"]="无限跳", ["Speed Changer"]="速度修改",
+    ["Walk Speed"]="移动速度", ["Keybind"]="按键绑定",
+    ["Copy Robloxscripts Page"]="复制脚本页链接",
 }
 
 M.cnOn = false
