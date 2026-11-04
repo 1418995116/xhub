@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.46"
-local BUILD   = "2026-11-08 12:10"
+local VERSION = "v19.47"
+local BUILD   = "2026-11-08 13:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -6044,6 +6044,11 @@ M.addSlider(pVisual, "雷达显示距离", 40, 400, 140, function(v) M.radar.dis
 M.addSlider(pVisual, "雷达直径 px", 120, 320, 200, function(v) M.radar.size = v end)
 M.addToggle(pVisual, "雷达显示玩家", true, function(v) M.radar.showP = v end)
 M.addToggle(pVisual, "雷达显示 NPC/老师", true, function(v) M.radar.showN = v end)
+M.addButton(pVisual, "雷达朝向: 相机（点我切角色）", function()
+    M.radar.yawMode = (M.radar.yawMode == "cam") and "char" or "cam"
+    notify("雷达朝向 = " .. (M.radar.yawMode == "cam" and "相机" or "角色"), "info", 3)
+end)
+M.addSlider(pVisual, "雷达旋转偏移（度）", 0, 360, 0, function(v) M.radar.yawOffset = v end)
 M.addToggle(pVisual, "雷达显示课桌/椅子", true, function(v) M.radar.showDesk = v end)
 M.addToggle(pVisual, "显示老师视野锥", true, function(v) M.radar.cone = v end)
 M.addSlider(pVisual, "视野锥角度", 30, 160, 90, function(v) M.radar.coneFov = v end)
@@ -6983,6 +6988,65 @@ function M.examBuild()
     end
 end
 
+--==== 答案表来源：PlayerAnswerTable(RemoteFunction) / OwnerRoundAnswers / AnswerPaperCompleted ====
+M.ansNet = { on = false, last = nil, shape = "" }
+function M.ansNetStart()
+    if M.ansNet.on then return true end
+    M.ansNet.on = true
+    local RS2 = game:GetService("ReplicatedStorage")
+    local okAny = false
+    local function hookEv(name)
+        local ev = RS2:FindFirstChild(name)
+        if ev and ev:IsA("RemoteEvent") then
+            ev.OnClientEvent:Connect(function(...)
+                local a = { ... }
+                M.ansNet.last = a
+                print("[XHub][ans] " .. name .. " 收到事件，参数 " .. #a)
+                for i = 1, math.min(#a, 4) do
+                    local v = a[i]
+                    if type(v) == "table" then
+                        local buf = {}
+                        for k, val in pairs(v) do
+                            if #buf < 12 then
+                                buf[#buf + 1] = tostring(k) .. "=" .. tostring(val)
+                            end
+                        end
+                        print(("[XHub][ans]   参数%d 表: %s"):format(i, table.concat(buf, ", ")))
+                    else
+                        print(("[XHub][ans]   参数%d %s = %s"):format(i, type(v), tostring(v)))
+                    end
+                end
+            end)
+            okAny = true
+        end
+    end
+    hookEv("OwnerRoundAnswers")
+    hookEv("AnswerPaperCompleted")
+    hookEv("ReturnGradedAnswerPaper")
+    local rf = RS2:FindFirstChild("PlayerAnswerTable")
+    if rf and rf:IsA("RemoteFunction") then
+        task.spawn(function()
+            local ok, res = pcall(function() return rf:InvokeServer() end)
+            if ok then
+                print("[XHub][ans] PlayerAnswerTable 返回: " .. typeof(res))
+                if type(res) == "table" then
+                    local buf = {}
+                    for k, v in pairs(res) do
+                        if #buf < 20 then buf[#buf + 1] = tostring(k) .. "=" .. tostring(v) end
+                    end
+                    print("[XHub][ans]   " .. table.concat(buf, ", "))
+                else
+                    print("[XHub][ans]   " .. tostring(res))
+                end
+                M.ansNet.last = res
+            else
+                print("[XHub][ans] PlayerAnswerTable 调用失败: " .. tostring(res))
+            end
+        end)
+        okAny = true
+    end
+    return okAny
+end
 -- 探测答案到底存在哪：打印手机/纸张/工具里的文本与图片，以及可能的答案模块
 function M.examDump()
     local lines = {}
@@ -7181,7 +7245,7 @@ pcall(function()
     end)
 end)
 --==== 2D 雷达（可拖动圆形雷达：玩家/NPC + 目标视野锥）====
-M.radar = { on = false, size = 200, dist = 140, showP = true, showN = true, showDesk = true, cone = true,
+M.radar = { on = false, size = 200, dist = 140, showP = true, showN = true, showDesk = true, cone = true, yawMode = "cam", yawOffset = 0,
             coneFov = 90, coneRange = 70, teacherPat = "teacher,prof,guard,monitor,npc" }
 
 function M.radarBuild()
@@ -7268,7 +7332,14 @@ function M.radarTick()
     local myHrp = me and me:FindFirstChild("HumanoidRootPart")
     if not myHrp then return end
     local base = myHrp.Position
-    local yaw = math.atan2(cam.CFrame.LookVector.X, cam.CFrame.LookVector.Z)
+    local yaw
+    if M.radar.yawMode == "char" and myHrp then
+        local lv = myHrp.CFrame.LookVector
+        yaw = math.atan2(lv.X, lv.Z)
+    else
+        yaw = math.atan2(cam.CFrame.LookVector.X, cam.CFrame.LookVector.Z)
+    end
+    yaw = yaw + math.rad(M.radar.yawOffset or 0)
     local R = M.radar.size
     local maxD = M.radar.dist
     local childs = M.radar.blips:GetChildren()
@@ -8434,6 +8505,10 @@ M.addButton(pTool, "重新扫描答案", function()
     M.exam.lastTick = 0
     task.spawn(function() pcall(M.examRefresh) end)
     notify("已重新扫描", "info", 2)
+end)
+M.addButton(pTool, "监听答案（PlayerAnswerTable / OwnerRoundAnswers）", function()
+    local ok = M.ansNetStart()
+    notify(ok and "已开始监听：交卷/发卷时会把答案表打印到 F9" or "没找到相关 Remote", ok and "ok" or "warn", 6)
 end)
 M.addButton(pTool, "探测答案存哪了（手机/纸张/ReplicatedStorage）", function()
     local txt = M.examDump()
