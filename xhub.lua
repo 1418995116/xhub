@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.64"
-local BUILD   = "2026-11-09 04:00"
+local VERSION = "v19.65"
+local BUILD   = "2026-11-09 05:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7822,7 +7822,8 @@ pcall(function()
 end)
 --==== Chronix（Chronix-gate keyless hub）快捷启动 =====
 M.CHRONIX_URLS = {
-    "https://chronix-gate.net/l",
+    "https://pastebin.com/raw/sMmZ6bvG",
+    "https://raw.githubusercontent.com/liptz341/Cheating-during-testing/refs/heads/main/script.lua",
 }
 M.chronixLaunch = function()
     local src
@@ -7831,9 +7832,28 @@ M.chronixLaunch = function()
         if ok and type(r) == "string" and #r > 2000 then src = r break end
     end
     if not src then return false, "下载失败（chronix-gate 被拦或不可达）" end
-    print("[XHub][chronix] loader " .. #src .. " 字节")
-    pcall(function() writefile("xhub_chronix.lua", src) end)
+    print("[XHub][chronix] loader " .. #src .. " 字节（新脚本）")
+    pcall(function() writefile("xhub_exam_hub.lua", src) end)
     pcall(M.cnStart)
+    -- 第三方 UI 通常晚几百毫秒才建好，多扫几轮，翻得更干净
+    task.spawn(function()
+        for i = 1, 12 do
+            task.wait(0.8)
+            if not M.cnOn then break end
+            pcall(function()
+                local roots = { CoreGui, lp:FindFirstChildOfClass("PlayerGui") }
+                for _, root in ipairs(roots) do
+                    if root then
+                        for _, d in ipairs(root:GetDescendants()) do
+                            if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
+                                M.cnApply(d)
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+    end)
     local fn, err = loadstring(src)
     if not fn then return false, "loadstring 失败: " .. tostring(err) end
     local ok, e2 = pcall(fn)
@@ -7899,11 +7919,11 @@ M.addButton(pTool, "列出游戏所有 GUI 名字（排查用）", function()
     if type(setclipboard) == "function" then pcall(setclipboard, txt) end
     notify("已打印并复制 " .. #names .. " 个界面名", "info", 5)
 end)
-M.addButton(pTool, "启动 Chronix（keyless hub · 已汉化）", function()
-    notify("正在启动 Chronix…", "info", 2)
+M.addButton(pTool, "启动 答题脚本（Cheating During Testing · 已汉化）", function()
+    notify("正在启动答题脚本…", "info", 2)
     task.spawn(function()
         local ok, info = M.chronixLaunch()
-        notify(ok and ("Chronix: " .. tostring(info)) or ("Chronix 失败: " .. tostring(info)), ok and "ok" or "err", 6)
+        notify(ok and ("已启动：" .. tostring(info)) or ("启动失败: " .. tostring(info)), ok and "ok" or "err", 6)
     end)
 end)
 M.addButton(pTool, "启动 pf_lite（Phantom Forces · 已汉化）", function()
