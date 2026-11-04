@@ -3,8 +3,8 @@
 --  菜单键 RightShift/Insert/F2 · V 飞行 · Q 瞄准 · 右上角通知
 --  v4.1: 检测层改为“只动 AC 自己的渲染/心跳回调”,不再全量挂钩,并带输入自动回滚
 --=====================================================================
-local VERSION = "v19.41"
-local BUILD   = "2026-11-08 07:20"
+local VERSION = "v19.42"
+local BUILD   = "2026-11-08 08:00"
 
 local CONFIG = {
     MenuKeys = { Enum.KeyCode.RightShift, Enum.KeyCode.Insert, Enum.KeyCode.F2 },
@@ -7895,20 +7895,6 @@ M.addButton(pTool, "清除 Dex 缓存", function()
         end
     end
     notify("已清空 Dex 缓存（" .. okc .. " 个文件）", "info", 3)
-end)
-M.addButton(pTool, "启动 新脚本（直接模式·不经封装）", function()
-    notify("直接模式启动中…", "info", 2)
-    task.spawn(function()
-        local ok, info = M.runDirect(M.NEWSCRIPT_URLS)
-        notify(ok and tostring(info) or ("直接模式失败: " .. tostring(info)), ok and "ok" or "err", 6)
-    end)
-end)
-M.addButton(pTool, "启动 新脚本 EbDEcDWp（汉化）", function()
-    notify("正在启动（已开汉化）…", "info", 2)
-    task.spawn(function()
-        local ok, info = M.runExternal("newscript", M.NEWSCRIPT_URLS)
-        notify(ok and tostring(info) or ("失败: " .. tostring(info)), ok and "ok" or "err", 5)
-    end)
 end)
 M.addButton(pTool, "查看脚本请求了哪些网址（探针汇总）", function()
     local t = M.probeDump()
